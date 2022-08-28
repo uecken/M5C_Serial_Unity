@@ -38,6 +38,7 @@ public class M5C_Serial : MonoBehaviour
         if(!serialPort.IsOpen){
             //int portName = int.Parse(InputField.text);
             string portName = InputField.text;
+            if(portName.IndexOf("COM")<=0) portName = "COM"+portName;
             Debug.Log (portName);
             serialPort = new SerialPort(portName, baudRate, Parity.None, 8, StopBits.One);
             serialPort.Open();                    
