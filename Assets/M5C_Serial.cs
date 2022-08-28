@@ -1,12 +1,13 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
 using System.IO.Ports;
 
 public class M5C_Serial : MonoBehaviour
 {
     public Transform m5stickC1,m5stickC2;
-    //public Button button;
+    public InputField InputField;
     private SerialPort serialPort;
     public string portName = "COM22";
     public int baudRate = 115200;
@@ -21,13 +22,28 @@ public class M5C_Serial : MonoBehaviour
         serialPort = new SerialPort(portName, baudRate, Parity.None, 8, StopBits.One);
         //serialPort = new SerialPort("/dev/cu.usbmode...", 115200); // ここを自分の設定したシリアルポート名に変えること
         serialPort.Open();
-
+        //inputField = GameObject.Find("InputField").GetComponent<InputField>();
     }
 
-  public void ButtonOnClick(){
-    Debug.Log ("You have clicked the button!");
+    public void ButtonBaseOffset(){
+        Debug.Log ("You have clicked the button!");
         base_q = q;
-  }
+    }
+
+    public void ButtonSerialConnect(){
+        if(serialPort.IsOpen){
+            serialPort.Close();
+            
+        }
+        if(!serialPort.IsOpen){
+            //int portName = int.Parse(InputField.text);
+            string portName = InputField.text;
+            Debug.Log (portName);
+            serialPort = new SerialPort(portName, baudRate, Parity.None, 8, StopBits.One);
+            serialPort.Open();                    
+        }
+            
+    }
 
     // Update is called once per frame
     void Update()

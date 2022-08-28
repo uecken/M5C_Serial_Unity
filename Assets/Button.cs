@@ -4,9 +4,9 @@ using UnityEngine;
 
 public class Button : MonoBehaviour
 {
-    public M5C_Serial M5C;
+    public M5C_Serial M5C_Serial;
     public void OnClick(){
         Debug.Log("Button Pushed");
-        M5C.ButtonOnClick();
+        //M5C_Serial.ButtonOnClick();
     }
 }
