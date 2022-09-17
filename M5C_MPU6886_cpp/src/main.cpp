@@ -13,7 +13,7 @@
 #define TASK_NAME_WRITE_SESSION "WriteSessionTask"
 #define TASK_NAME_READ_SESSION "ReadSessionTask"
 #define TASK_NAME_BUTTON "ButtonTask"
-#define TASK_SLEEP_IMU 5 // = 1000[ms] / 200[Hz]
+#define TASK_SLEEP_IMU 10 // = 1000[ms] / 100[Hz]
 #define TASK_SLEEP_WRITE_SESSION 40 // = 1000[ms] / 25[Hz]
 #define TASK_SLEEP_READ_SESSION 100 // = 1000[ms] / 10[Hz]
 #define TASK_SLEEP_BUTTON 100 // = 1000[ms] / 10[Hz]
@@ -25,6 +25,11 @@ static void ButtonLoop(void* arg);
 static SemaphoreHandle_t imuDataMutex = NULL;
 static SemaphoreHandle_t btnDataMutex = NULL;
 
+uint8_t event=0;
+#define NO_EVENT 0
+#define INPUT_EVENT 1
+#define xxxxx_EVENT 2
+
 
 const uint8_t Fs = 50;
 const long Ts = (1000/Fs);
@@ -33,25 +38,24 @@ const boolean left_axis_trans = true; //Unityは左手系、M5Stackは右手系
 
 void calibrateMPU6886();
 
-float accX = 0.0F;
-float accY = 0.0F;
-float accZ = 0.0F;
-
-float gyroX = 0.0F;
-float gyroY = 0.0F;
-float gyroZ = 0.0F;
-
-float pitch = 0.0F;
-float roll  = 0.0F;
-float yaw   = 0.0F;
-
+float accX = 0.0F,accY = 0.0F,accZ = 0.0F;
+float gyroX = 0.0F,gyroY = 0.0F,gyroZ = 0.0F;
+float pitch = 0.0F,roll  = 0.0F,yaw   = 0.0F;
 float* q_array = new float[4]; //quatanion
-
 float aOX = 0.00, aOY = +0.01, aOZ =  0.07 ;  //-0.00   0.01   0.07 
 float gOX = 3.36, gOY = 9.66 , gOZ = 4.11;  //3.36   9.66   4.11
 float pO=0 , rO=0 , yO=-8.5, yO2=0;
 
-unsigned long Tcur,Tpre;
+struct pk{
+  char rpy;
+  uint16_t angle;
+  char input;
+};
+pk pk1 = {'r',45,'1'};
+pk pk2 = {'p',45,'2'};
+
+
+//unsigned long Tcur,Tpre;
 
 void setup() {
   M5.begin();  //Init M5StickC Plus.  初始化 M5StickC Plus
@@ -67,10 +71,6 @@ void setup() {
   M5.Lcd.setCursor(30, 70);
   M5.Lcd.println("  Pitch   Roll    Yaw");
 
-
-  Tpre = 0;
-  //Serial.printf("%f %f %f",Tpre,Tcur,Ts);
-  //calibrateMPU6886();
   #ifdef BTSerial
    bts.begin("M5C_BTSerial");
   #endif
@@ -88,24 +88,15 @@ void setup() {
 }
 
 void loop() {
+  /*
   delay(1);
   Tcur = millis();
   if ((Tcur - Tpre) >= Ts) {
     Tpre = millis();
     //Serial.println(String(accX)+","+String(accY)+","+String(accZ));   // \r\n
+  */
   }
 
-  /*
-  M5.update();
-  if(M5.BtnA.pressedFor(1000)){
-    calibrateMPU6886();
-  }
-  else if(M5.BtnA.wasPressed()){
-    Serial.println("button pressed"); 
-    yO2 = yaw; //yaw軸の手動補正
-  }
-  */
-}
 
 static void ImuLoop(void* arg) {
   while (1) {
@@ -130,16 +121,25 @@ static void WriteSessionLoop(void* arg) {
   while (1) {
     uint32_t entryTime = millis();
 
-    if(left_axis_trans){//左手系
-      Serial.printf("%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, -(yaw-yO2),q_array[0],q_array[1],q_array[2],q_array[3]);
-      bts.printf("%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, -(yaw-yO2),q_array[0],q_array[1],q_array[2],q_array[3]);
-    }else{//右手系
-      Serial.printf("%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, yaw-yO2);
+    if(event==NO_EVENT){
+      if(left_axis_trans){//左手系
+        Serial.printf("%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, -(yaw-yO2),q_array[0],q_array[1],q_array[2],q_array[3]);
+        bts.printf("%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, -(yaw-yO2),q_array[0],q_array[1],q_array[2],q_array[3]);
+      }else{//右手系
+        Serial.printf("%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, yaw-yO2);
+      }
+      M5.Lcd.setCursor(30, 90);
+      M5.Lcd.println(String(pitch) + " " + String(roll) + " " + String(yaw-yO2));    
+      }
+    //姿勢入力判定
+    else if(event==INPUT_EVENT){
+      if(pk1.angle > roll) Serial.println(String("In,")+String(pk1.input)); // NG "In,"+pk1.input. Buffer Over
+      else if(pk2.angle > pitch) Serial.println(String("In,")+String(pk2.input));
+      M5.Lcd.setCursor(30, 120);
+      M5.Lcd.println(pk1.input);
+      event = NO_EVENT;
     }
 
-    M5.Lcd.setCursor(30, 90);
-    M5.Lcd.println(String(pitch) + " " + String(roll) + " " + String(yaw-yO2));    
-    
     // idle
     int32_t sleep = TASK_SLEEP_WRITE_SESSION - (millis() - entryTime);
     vTaskDelay((sleep > 0) ? sleep : 0);
@@ -154,7 +154,7 @@ static void ReadSessionLoop(void* arg){
       //M5.Lcd.println(Serial.read()); //Byte受信
       M5.Lcd.println(Serial.readStringUntil('/0'));
     }      
-    if(bts.available()){//受信データ確認
+    if(bts.available()){
       M5.Lcd.setCursor(10, 0);
       //M5.Lcd.println(bts.read());　//Byte受信
       M5.Lcd.println(bts.readStringUntil('/0'));
@@ -183,6 +183,11 @@ static void ButtonLoop(void* arg) {
       yO2 = yaw; //yaw軸の手動補正
     }
 
+    if(M5.BtnB.wasPressed()){
+      event = INPUT_EVENT;
+    }
+    else{          
+    }
     // idle
     int32_t sleep = TASK_SLEEP_BUTTON - (millis() - entryTime);
     vTaskDelay((sleep > 0) ? sleep : 0);
@@ -230,3 +235,5 @@ void calibrateMPU6886(){
   */
   digitalWrite(10, HIGH);
 }
+
+//void AllSerialOut()
