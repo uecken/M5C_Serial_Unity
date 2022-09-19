@@ -45,6 +45,7 @@ const float CONVERT_G_TO_MS2 = 9.80665f;
 const boolean left_axis_trans = true; //Unityは左手系、M5Stackは右手系
 
 void calibrateMPU6886();
+int split(String,char,String*);
 
 float accX = 0.0F,accY = 0.0F,accZ = 0.0F;
 float gyroX = 0.0F,gyroY = 0.0F,gyroZ = 0.0F;
@@ -76,23 +77,34 @@ pk pk5 = {'p',45,90,'5'};
 std::vector<pk> pk_vector{};
 std::vector<pk> pk_vector_preset1{pk1,pk2,pk3,pk4,pk5};
 std::vector<pk> pk_vector_preset_FEZ{pk5};
+std::vector<pk> pk_vector_preset_Action{pk5};
 
 //std::vector<pk> pk_vector;
 //void flushPKarray(pk*);
 //void readPKarray();
 const uint16_t EEPROM_SIZE=800;
-//EEPROMClass TEST_ER('eeprom1');
-/*
+const uint16_t EEPROM_TEST_START = 0;
+const uint16_t EEPROM_TEST_SIZE = 162;
+const uint16_t EEPROM_PRES1_START = 162;
+const uint16_t EEPROM_PRES1_SIZE = 162;
+const uint16_t EEPROM_PRES2_START = 324;
+const uint16_t EEPROM_PRES2_SIZE = 162;
+
+//==== Cannot Use EEPROMClass. =====
+/*==== The error is [E][EEPROM.cpp:199] commit(): error in write ====
+  ==== Use Only EEPROM ==== 
+EEPROMClass TEST_ER('eeprom1');
 EEPROMClass USER1_ER('eeprom2');
 EEPROMClass USER2_ER('eeprom3');
 EEPROMClass PRES1_ER('eeprom4');
 EEPROMClass PRES2_ER('eeprom5');
 */
 
-void flushPKvector(std::vector<pk>);
-void readPKvector();
-void deleteEEPROM();
+void flushPKvector(std::vector<pk>,String);
+void readPKvector(String);
+void deleteEEPROM(String);
 void remove_crlf(std::string&);
+void serialprint_pkvector(std::vector<pk>&);
 
 char input_serial_char=NULL;
 uint8_t num_powerbtn_click=1;
@@ -269,6 +281,7 @@ static void WriteSessionLoop(void* arg) {
   }
 }
 
+String inputs[10] = {"\0"};
 static void ReadSessionLoop(void* arg){
   while (1) {
     uint32_t entryTime = millis();
@@ -277,18 +290,35 @@ static void ReadSessionLoop(void* arg){
       
       String input_serial = Serial.readStringUntil('/0');
       input_serial.trim(); //remove (" ","\t","\v","\f","\r","\n")
-
+      input_serial_char = input_serial[0];
       Serial.println(input_serial);
       M5.Lcd.println(input_serial);
-      
-      input_serial_char = input_serial[0];
-      if(input_serial == "FLUSH") flushPKvector(pk_vector);
-      else if(input_serial == String("READ_EEPROM")){
-        Serial.println("READEEPROOO");
-        readPKvector();
-      }
-      else if(input_serial == "DELETE_EEPROM") deleteEEPROM();
 
+      int num_length ;
+      if(input_serial.indexOf(',')>0){
+        num_length = split(input_serial,',',inputs);
+        String command = String(inputs[0]);
+        String value = String(inputs[1]);
+        Serial.println("split:" + command + "," + value);
+        if(command == "FLUSH") flushPKvector(pk_vector,value);
+        else if(command == "READ") readPKvector(value);
+        else if(command == "DELETE") deleteEEPROM(value);
+      }else{
+        if(input_serial == "FLUSH") flushPKvector(pk_vector,"TEST");
+        else if(input_serial == "READ")readPKvector("TEST");
+        else if(input_serial == "DELETE") deleteEEPROM("TEST");        
+        else if(input_serial == "SHOW") serialprint_pkvector(pk_vector);
+      }
+
+
+      /*
+      if(input_serial == "FLUSH") flushPKvector(pk_vector,"TEST");
+      else if(input_serial == String("READ")){
+        Serial.println("READEEPROOO");
+        readPKvector("TEST");
+      }
+      else if(input_serial == "DELETE") deleteEEPROM("TEST");
+      */
     }      
     if(bts.available()){
       M5.Lcd.setCursor(10, 0);
@@ -354,29 +384,48 @@ static void ButtonLoop(void* arg) {
 
 
 
-void flushPKvector(std::vector<pk> pk_vector){
+void flushPKvector(std::vector<pk> pk_vector,String preset_name){
+  uint16_t n = 0; uint16_t size=0; 
+  if(preset_name=="TEST") n = EEPROM_TEST_START; //size = EEPROM_TEST_SIZE;
+  else if(preset_name=="PRES1") n = EEPROM_PRES1_START; //size = EEPROM_PRES1_SIZE;
+  else if(preset_name=="PRES2") n = EEPROM_PRES2_START; //size = EEPROM_PRES2_SIZE;
+
   //==First, write num of element
-  int n = 0;
   uint8_t num_element = pk_vector.size();
   EEPROM.put(n,num_element);
-  n = sizeof(uint8_t);
+  Serial.println("write:index_byte"+String(n)+",num_element"+String(num_element));
+  n += sizeof(uint8_t) * 2;
 
   //==Second, write pk array;
   for (int i=0 ; i < pk_vector.size(); i++){
     EEPROM.put(n,pk_vector[i]);
+    if(DEBUG_EEPROM)Serial.println("write:"+String(n)+","+String(pk_vector[i].hid_input) +","+String(pk_vector[i].rpy_selected));
     n += sizeof(pk);
-    if(DEBUG_EEPROM)Serial.println("write:"+String(pk_vector[i].hid_input) +""+String(pk_vector[i].rpy_selected));
   }
   EEPROM.commit();
 }
 
-void readPKvector(){
+void readPKvector(String preset_name){
+  uint16_t n = 0; uint16_t size=0; 
+  if(preset_name=="TEST") n = EEPROM_TEST_START; //size = EEPROM_TEST_SIZE;
+  else if(preset_name=="PRES1") n = EEPROM_PRES1_START; //size = EEPROM_PRES1_SIZE;
+  else if(preset_name=="PRES2") n = EEPROM_PRES2_START; //size = EEPROM_PRES2_SIZE;
+  else if(preset_name=="ACTION") {pk_vector = pk_vector_preset_Action; return;}
+
   //==First, read num of element
-  int n =0;
+  //int n = 0;
   uint8_t num_element;
+  EEPROM.get(n-2,num_element);
+  Serial.println("read:index_byte"+String(n-2)+",num_element"+String(num_element));
+  EEPROM.get(n-1,num_element);
+  Serial.println("read:index_byte"+String(n-1)+",num_element"+String(num_element));
   EEPROM.get(n,num_element);
-  Serial.println("num_element:"+String(num_element));
-  n = sizeof(uint8_t);
+  Serial.println("read:index_byte"+String(n)+",num_element"+String(num_element));
+  EEPROM.get(n+1,num_element);
+  Serial.println("read:index_byte"+String(n+1)+",num_element"+String(num_element));
+  EEPROM.get(n+2,num_element);
+  Serial.println("read:index_byte"+String(n+2)+",num_element"+String(num_element));
+  n += sizeof(uint8_t)*2;
   
   //==Second, read pk array.
   pk pk;
@@ -384,20 +433,26 @@ void readPKvector(){
   for (int i=0; i < num_element; i++){
     EEPROM.get(n,pk);
     pk_vector.push_back(pk);
-    n += sizeof(pk);
     //if(pk_vector[i].rpy_selected=='0')break;
-    if(DEBUG_EEPROM)Serial.println("read:"+String(pk_vector[i].hid_input) +","+String(pk_vector[i].rpy_selected));
+    if(DEBUG_EEPROM)Serial.println("read:"+String(n)+","+String(pk_vector[i].hid_input) +","+String(pk_vector[i].rpy_selected));
+    n += sizeof(pk);
   }
 }
 
-void deleteEEPROM(){
-  EEPROM.put(0,0);
+void deleteEEPROM(String preset_name){
+  EEPROM.put(0,0);// Set num_element.
   int n = sizeof(uint8_t);
 
-  Serial.println(String(EEPROM.length()));
-  Serial.println(String(EEPROM.length()/sizeof(pk)));
+  //Serial.println(String(EEPROM.length())); 0
+  //Serial.println(String(EEPROM.length()/sizeof(pk))); 0
+
+  uint16_t size=0; 
+  if(preset_name=="TEST") {n = n + EEPROM_TEST_START; size = EEPROM_TEST_SIZE;}
+  else if(preset_name=="PRES1"){ n = n + EEPROM_PRES1_START; size = EEPROM_PRES1_SIZE;}
+  else if(preset_name=="PRES2"){ n = n + EEPROM_PRES2_START; size = EEPROM_PRES2_SIZE;}
+
   pk pk_v = {'0',0,0,'0'};
-  for (int i=0 ; i < EEPROM.length()/sizeof(pk); i++){
+  for (int i=0 ; i < size/sizeof(pk) ; i++){
     EEPROM.put(n,pk_v);
     n += sizeof(pk);
   }
@@ -428,8 +483,11 @@ void readPKarray(){
 }
 */
 
-void serialprint_pk(pk pk){
-  Serial.println("serial-out:"+String(pk.rpy_selected)+","+String(pk.min_angle)+","+String(pk.max_angle)+","+String(pk.hid_input));
+
+void serialprint_pkvector(std::vector<pk>& pk_vector){
+  for (int i=0 ; i < pk_vector.size(); i++){
+    if(DEBUG_EEPROM)Serial.println(String(pk_vector[i].hid_input) +","+String(pk_vector[i].min_angle) + "," + String(pk_vector[i].max_angle)+","+ String(pk_vector[i].rpy_selected));
+  }
 }
 
 void calibrateMPU6886(){
@@ -485,4 +543,29 @@ void remove_crlf(std::string& s)
         }
     }
     s.resize(j);
+}
+
+
+// Thanks to https://algorithm.joho.info/arduino/string-split-delimiter/
+int split(String data, char delimiter, String *dst){
+    //文字列配列の初期化
+    for (int j=0; j< sizeof(dst); j++){
+      //Serial.println(dst(j));
+      dst[j] = {""}; 
+    }
+    //msgs[3] = {"\0"};
+  
+    int index = 0;
+    int arraySize = (sizeof(data)/sizeof((data)[0]));  
+    int datalength = data.length();
+    for (int i = 0; i < datalength; i++) {
+        char tmp = data.charAt(i);
+        if ( tmp == delimiter ) {
+            index++;
+            if ( index > (arraySize - 1)) return -1;
+        }
+        else dst[index] += tmp; //区切り文字が来るまで1Byteづつ連結
+        //Serial.print("dbg: "+dst[index]);
+    }
+    return (index + 1);
 }
