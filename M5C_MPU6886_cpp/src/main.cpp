@@ -55,9 +55,9 @@ float gOX = 3.36, gOY = 9.66 , gOZ = 4.11;  //3.36   9.66   4.11
 float pO=0 , rO=0 , yO=-8.5, yO2=0;
 
 
+boolean DEBUG_EEPROM = true;
 
-
-struct pk{ //6byte
+struct pk{ //8byte (padding 2Byte)
   char rpy_selected;  //rpy 1byte
   short min_angle;    // 2byte
   short max_angle;    // 2byte
@@ -68,12 +68,31 @@ pk pk1 = {'r',0,45,'1'};
 pk pk2 = {'r',45,90,'2'};
 pk pk3 = {'p',0,45,'3'};
 pk pk4 = {'p',45,90,'4'};
-pk pk_array[4] = {pk1,pk2,pk3,pk4}; //Cannot use vector
+pk pk5 = {'p',45,90,'5'};
+//pk pk_end = {'0',0,0,'0'}; //Do not use banpei
+//pk pk_array[100] = {pk1,pk2,pk3,pk4,pk_end}; //Cannot use vector
+//7pk pk_array2[100];
 //uint8_t pk_size = sizeof(pk_array)/sizeof(pk_array[0]);
-std::vector<pk> pk_vector{pk1,pk2};
+std::vector<pk> pk_vector{};
+std::vector<pk> pk_vector_preset1{pk1,pk2,pk3,pk4,pk5};
+std::vector<pk> pk_vector_preset_FEZ{pk5};
+
 //std::vector<pk> pk_vector;
+//void flushPKarray(pk*);
+//void readPKarray();
+const uint16_t EEPROM_SIZE=800;
+//EEPROMClass TEST_ER('eeprom1');
+/*
+EEPROMClass USER1_ER('eeprom2');
+EEPROMClass USER2_ER('eeprom3');
+EEPROMClass PRES1_ER('eeprom4');
+EEPROMClass PRES2_ER('eeprom5');
+*/
 
-
+void flushPKvector(std::vector<pk>);
+void readPKvector();
+void deleteEEPROM();
+void remove_crlf(std::string&);
 
 char input_serial_char=NULL;
 uint8_t num_powerbtn_click=1;
@@ -112,6 +131,21 @@ void setup() {
     NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
   xTaskCreatePinnedToCore(hidSessionLoop, TASK_NAME_HID, TASK_STACK_DEPTH, 
     NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
+
+
+  EEPROM.begin(EEPROM_SIZE/5);
+  //TEST_ER.begin(EEPROM_SIZE/5); //8Byte * 100/20;
+  /*
+  USER1_ER.begin(EEPROM_SIZE/5);
+  USER2_ER.begin(EEPROM_SIZE/5); 
+  PRES1_ER.begin(EEPROM_SIZE/5); 
+  PRES2_ER.begin(EEPROM_SIZE/5); 
+  */
+  //flushPKarray(pk_array);
+  //readPKarray();
+  
+  //flushPKvector(pk_vector);
+  //readPKvector();
 
 /*
 EEPROM.put(0,pk_array);
@@ -186,7 +220,7 @@ static void hidSessionLoop(void* arg) {
         
         pk pk_reg = {'r',roll-22.5,roll+22.5,input_key};
         pk_vector.push_back(pk_reg);
-          
+
         M5.Lcd.println(Serial.readStringUntil('/0'));
         for(uint8_t i = 0; i < pk_vector.size(); i++){
           M5.Lcd.setCursor(10,80+i*7);
@@ -240,15 +274,26 @@ static void ReadSessionLoop(void* arg){
     uint32_t entryTime = millis();
     if(Serial.available()){//受信データ確認
       M5.Lcd.setCursor(10, 110);
-      //M5.Lcd.println(Serial.read()); //Byte受信
+      
       String input_serial = Serial.readStringUntil('/0');
+      input_serial.trim(); //remove (" ","\t","\v","\f","\r","\n")
+
+      Serial.println(input_serial);
       M5.Lcd.println(input_serial);
+      
       input_serial_char = input_serial[0];
+      if(input_serial == "FLUSH") flushPKvector(pk_vector);
+      else if(input_serial == String("READ_EEPROM")){
+        Serial.println("READEEPROOO");
+        readPKvector();
+      }
+      else if(input_serial == "DELETE_EEPROM") deleteEEPROM();
 
     }      
     if(bts.available()){
       M5.Lcd.setCursor(10, 0);
       //M5.Lcd.println(bts.read());　//Byte受信
+      
       M5.Lcd.println(bts.readStringUntil('/0'));
     }
     // idle
@@ -291,7 +336,13 @@ static void ButtonLoop(void* arg) {
     }
 
 /*
-    if(M5.Axp.GetBtnPress()==2){ //Instanious Click   // Unexpected "emptyRxFifo(): RxEmpty(2) call on TxBuffer? dq=0" outputs.
+    if(M5.Axp.GetBtnPress()==2)  //First, read num of element
+  int n =0;
+  uint8_t num_element;
+  EEPROM.get(n,num_element);
+  n = sizeof(uint8_t);
+
+  //{ //Instanious Click   // Unexpected "emptyRxFifo(): RxEmpty(2) call on TxBuffer? dq=0" outputs.
       num_powerbtn_click +=1;
     }
 */
@@ -303,6 +354,83 @@ static void ButtonLoop(void* arg) {
 
 
 
+void flushPKvector(std::vector<pk> pk_vector){
+  //==First, write num of element
+  int n = 0;
+  uint8_t num_element = pk_vector.size();
+  EEPROM.put(n,num_element);
+  n = sizeof(uint8_t);
+
+  //==Second, write pk array;
+  for (int i=0 ; i < pk_vector.size(); i++){
+    EEPROM.put(n,pk_vector[i]);
+    n += sizeof(pk);
+    if(DEBUG_EEPROM)Serial.println("write:"+String(pk_vector[i].hid_input) +""+String(pk_vector[i].rpy_selected));
+  }
+  EEPROM.commit();
+}
+
+void readPKvector(){
+  //==First, read num of element
+  int n =0;
+  uint8_t num_element;
+  EEPROM.get(n,num_element);
+  Serial.println("num_element:"+String(num_element));
+  n = sizeof(uint8_t);
+  
+  //==Second, read pk array.
+  pk pk;
+  pk_vector = {};
+  for (int i=0; i < num_element; i++){
+    EEPROM.get(n,pk);
+    pk_vector.push_back(pk);
+    n += sizeof(pk);
+    //if(pk_vector[i].rpy_selected=='0')break;
+    if(DEBUG_EEPROM)Serial.println("read:"+String(pk_vector[i].hid_input) +","+String(pk_vector[i].rpy_selected));
+  }
+}
+
+void deleteEEPROM(){
+  EEPROM.put(0,0);
+  int n = sizeof(uint8_t);
+
+  Serial.println(String(EEPROM.length()));
+  Serial.println(String(EEPROM.length()/sizeof(pk)));
+  pk pk_v = {'0',0,0,'0'};
+  for (int i=0 ; i < EEPROM.length()/sizeof(pk); i++){
+    EEPROM.put(n,pk_v);
+    n += sizeof(pk);
+  }
+  EEPROM.commit();
+  pk_vector = {};
+}
+
+
+/* == Flush and Read by array == 
+void flushPKarray(pk *a){
+  int n = 0;
+  for (int i=0 ; i < SIZE_PK_array; i++){
+    EEPROM.put(n,a[i]);
+    n += sizeof(pk);
+    if(a[i].rpy_selected=='0')break;
+  }
+  EEPROM.commit();
+}
+
+void readPKarray(){
+  int n = 0;
+  for (int i=0; i <  SIZE_PK_array; i++){
+    EEPROM.get(n,pk_array2[i]);
+    n += sizeof(pk);
+    if(pk_array2[i].rpy_selected=='0')break;
+    if(DEBUG_EEPROM)Serial.println("read:"+String(sizeof(pk))+","+String(pk_array2[i].hid_input) +""+String(pk_array2[i].rpy_selected));
+  }
+}
+*/
+
+void serialprint_pk(pk pk){
+  Serial.println("serial-out:"+String(pk.rpy_selected)+","+String(pk.min_angle)+","+String(pk.max_angle)+","+String(pk.hid_input));
+}
 
 void calibrateMPU6886(){
   float gyroSumX,gyroSumY,gyroSumZ;
@@ -346,3 +474,15 @@ void calibrateMPU6886(){
 }
 
 //void AllSerialOut()
+
+void remove_crlf(std::string& s)
+{
+    size_t i, j;
+    for( i = 0, j = 0; i < s.size(); i++ ){
+        if( s[i] != '\r' && s[i] != '\n' ){
+            s[j] = s[i];
+            j++;
+        }
+    }
+    s.resize(j);
+}
