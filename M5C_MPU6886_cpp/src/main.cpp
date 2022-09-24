@@ -29,7 +29,7 @@ static void ImuLoop(void* arg);
 static void ReadSessionLoop(void* arg);
 static void WriteSessionLoop(void* arg);
 static void ButtonLoop(void* arg);
-static void MCSessionLoop(void* arg);
+static void hidSessionLoop(void* arg);
 static SemaphoreHandle_t serWriteMutex = NULL;
 static SemaphoreHandle_t imuDataMutex = NULL;
 static SemaphoreHandle_t btnDataMutex = NULL;
@@ -51,8 +51,7 @@ const boolean left_axis_trans = true; //Unityは左手系、M5Stackは右手系
 void calibrateMPU6886();
 int split(String,char,String*);
 
-float accX = 0.0F,accY = 0.0F,accZ = 0.0F;pk pk8 = {'p',0,0,90,0,'8'};
-
+float accX = 0.0F,accY = 0.0F,accZ = 0.0F;
 float gyroX = 0.0F,gyroY = 0.0F,gyroZ = 0.0F;
 float pitch = 0.0F,roll  = 0.0F,yaw   = 0.0F;
 float* q_array = new float[4]; //quatanion
@@ -72,15 +71,6 @@ boolean G36SwitchPrevious = 0;
 boolean skillReset = 0;
 boolean G0viewSwitch = 0;
 boolean G0viewSwitchPrevious = 0;
-
-/*
-struct pk{ //8byte (padding 2Byte)
-  char rpy_selected;  //rpy 1byte
-  short min_angle;    // 2byte
-  short max_angle;    // 2byte
-  char hid_input;   // 1byte
-};
-*/
 
 struct pk{ //12byte (padding 2Byte)
   char rpy_selected;  //rpy 1byte
@@ -119,6 +109,7 @@ std::vector<pk> pk_vector_preset_Action{pk5};
 //std::vector<pk> pk_vector;
 //void flushPKarray(pk*);
 //void readPKarray();
+
 const uint16_t EEPROM_SIZE=800; //Max4KByte
 const uint16_t EEPROM_ONE_SIZE = 162;
 const uint16_t EEPROM_TEST_START = 0;
@@ -181,32 +172,10 @@ void setup() {
     NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
   xTaskCreatePinnedToCore(ButtonLoop, TASK_NAME_BUTTON, TASK_STACK_DEPTH, 
     NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
-  xTaskCreatePinnedToCore(MCSessionLoop, TASK_NAME_HID, TASK_STACK_DEPTH, 
+  xTaskCreatePinnedToCore(hidSessionLoop, TASK_NAME_HID, TASK_STACK_DEPTH, 
     NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
 
   EEPROM.begin(EEPROM_SIZE); //Max4Kbytes
-  //TEST_ER.begin(EEPROM_SIZE/5); //8Byte * 100/20;
-  /*
-  USER1_ER.begin(EEPROM_SIZE/5);
-  USER2_ER.begin(EEPROM_SIZE/5); 
-  PRES1_ER.begin(EEPROM_SIZE/5); 
-  PRES2_ER.begin(EEPROM_SIZE/5); 
-  */
-  //flushPKarray(pk_array);
-  //readPKarray();
-  
-  //flushPKvector(pk_vector);
-  //readPKvector();
-
-/*
-EEPROM.put(0,pk_array);
-EEPROM.commit();
-pk pk_array;
-
-EEPROM.get(1,pk_array);
-int i =0;
-Serial.println(String(pk_array[i].rpy_selected) +"," +String(pk_array[i].min_angle) + "," + String(pk_array[i].max_angle) + "," +String(pk_array[i].hid_input));
-*/
 
     //pinMode(10,   OUTPUT); //LED
     pinMode(26,   INPUT_PULLUP); //半PD 電圧が1V程にプルダウン？されている。Pin36を ONにするとノイズが発生し、GNDとの判定で誤判定となる。3.3Vとのショート判定する必要がある。
@@ -327,14 +296,38 @@ static void ImuLoop(void* arg) {
   }
 }
 
-static void MCSessionLoop(void* arg) {
+static void hidSessionLoop(void* arg) {
   while (1) {
     uint32_t entryTime = millis();
 
     if (xSemaphoreTake(serWriteMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) { // Only for 1 line serial Input
+
       if(event==INPUT_EVENT){
         pk pk_selected = motionDecision(roll,pitch); 
         mc.inputKey(pk_selected.hid_input);
+
+      }
+      else if(event==REGISTRATION_ROLL_EVENT){
+        char input_key;
+        if(input_serial_char!=NULL) input_key = input_serial_char;
+        else input_key = num_powerbtn_click;
+        
+        pk pk_reg = {'r',roll-22.5,roll+22.5,roll,pitch,input_key};
+        pk_vector.push_back(pk_reg);
+
+        //M5.Lcd.println(Serial.readStringUntil('/0'));
+        for(uint8_t i = 0; i < pk_vector.size(); i++){
+          M5.Lcd.setCursor(10,80+i*7);
+          M5.Lcd.println(String(pk_vector[i].rpy_selected) +"," +String(pk_vector[i].min_angle) + "," + String(pk_vector[i].max_angle) + "," +String(pk_vector[i].hid_input));
+        }
+
+        input_serial_char = NULL;
+        num_powerbtn_click = 1;
+      }
+      else if(event==REGISTRATION_PITCH_EVENT){
+        char input_key = 'p';
+        pk pk_reg = {'p',pitch-22.5,pitch+22.5,input_key};
+        pk_vector.push_back(pk_reg);
       }
       else if(event==REGISTRATION_EVENT){
         char input_key;
@@ -414,7 +407,6 @@ static void ReadSessionLoop(void* arg){
           flushPKvector(pk_vector_preset_FEZ,"PRES_FEZ");
         }
       }
-
     }      
     #ifdef BTSerial
     if(bts.available()){
@@ -514,7 +506,6 @@ void readPKvector(String preset_name){
   else if(preset_name=="PRES2") n = EEPROM_PRES2_START; //size = EEPROM_PRES2_SIZE;
   else if(preset_name=="PRES_FEZ") n = EEPROM_PRES_FEZ_START; //size = EEPROM_PRES2_SIZE;
 
-  //==First, read num of element
   uint8_t num_element;
   EEPROM.get(n,num_element);
   Serial.println("read:index_byte"+String(n)+",num_element"+String(num_element));
@@ -630,6 +621,7 @@ void calibrateMPU6886(){
   digitalWrite(10, HIGH);
 }
 
+//void AllSerialOut()
 
 void remove_crlf(std::string& s)
 {
@@ -642,6 +634,7 @@ void remove_crlf(std::string& s)
     }
     s.resize(j);
 }
+
 
 // Thanks to https://algorithm.joho.info/arduino/string-split-delimiter/
 int split(String data, char delimiter, String *dst){
