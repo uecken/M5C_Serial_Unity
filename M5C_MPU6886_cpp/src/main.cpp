@@ -29,7 +29,7 @@ static void ImuLoop(void* arg);
 static void ReadSessionLoop(void* arg);
 static void WriteSessionLoop(void* arg);
 static void ButtonLoop(void* arg);
-static void hidSessionLoop(void* arg);
+static void MCSessionLoop(void* arg);
 static SemaphoreHandle_t serWriteMutex = NULL;
 static SemaphoreHandle_t imuDataMutex = NULL;
 static SemaphoreHandle_t btnDataMutex = NULL;
@@ -51,7 +51,8 @@ const boolean left_axis_trans = true; //Unityは左手系、M5Stackは右手系
 void calibrateMPU6886();
 int split(String,char,String*);
 
-float accX = 0.0F,accY = 0.0F,accZ = 0.0F;
+float accX = 0.0F,accY = 0.0F,accZ = 0.0F;pk pk8 = {'p',0,0,90,0,'8'};
+
 float gyroX = 0.0F,gyroY = 0.0F,gyroZ = 0.0F;
 float pitch = 0.0F,roll  = 0.0F,yaw   = 0.0F;
 float* q_array = new float[4]; //quatanion
@@ -180,7 +181,7 @@ void setup() {
     NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
   xTaskCreatePinnedToCore(ButtonLoop, TASK_NAME_BUTTON, TASK_STACK_DEPTH, 
     NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
-  xTaskCreatePinnedToCore(hidSessionLoop, TASK_NAME_HID, TASK_STACK_DEPTH, 
+  xTaskCreatePinnedToCore(MCSessionLoop, TASK_NAME_HID, TASK_STACK_DEPTH, 
     NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
 
   EEPROM.begin(EEPROM_SIZE); //Max4Kbytes
@@ -326,62 +327,14 @@ static void ImuLoop(void* arg) {
   }
 }
 
-static void hidSessionLoop(void* arg) {
+static void MCSessionLoop(void* arg) {
   while (1) {
     uint32_t entryTime = millis();
 
     if (xSemaphoreTake(serWriteMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) { // Only for 1 line serial Input
-      //姿勢入力判定
-      /*
-      if(event==INPUT_EVENT){
-        if(pk1.min_angle < roll && roll < pk1.max_angle) Serial.println(String("In,")+String(pk1.hid_input)); // NG "In,"+pk1.input. Buffer Over
-        else if(pk2.min_angle < pitch && pitch < pk2.max_angle) Serial.println(String("In,")+String(pk2.hid_input));
-        M5.Lcd.setCursor(30, 120);
-        M5.Lcd.println(pk1.hid_input);
-        event = NO_EVENT;
-      }*/
       if(event==INPUT_EVENT){
         pk pk_selected = motionDecision(roll,pitch); 
         mc.inputKey(pk_selected.hid_input);
-
-        /*
-        for(uint8_t i = 0; i < pk_vector.size(); i++){
-          int angle = -999;
-          switch(pk_vector[i].rpy_selected){
-            case 'r' : angle = roll; break;
-            case 'p' : angle = pitch; break;
-          }
-          if(pk_vector[i].min_angle < angle && angle < pk_vector[i].max_angle){
-            Serial.println(String("In,")+String(pk_vector[i].hid_input) + ","+String(pk_vector[i].rpy_selected) + "," + String(angle)); // NG "In,"+pk1.input. Buffer Over
-            M5.Lcd.setCursor(10,70);
-            M5.Lcd.println(String("In,")+String(pk_vector[i].hid_input) + ","+String(pk_vector[i].rpy_selected) + "," + String(angle)); // NG "In,"+pk1.input. Buffer Over
-
-            break;
-          }
-        }
-        */
-      }
-      else if(event==REGISTRATION_ROLL_EVENT){
-        char input_key;
-        if(input_serial_char!=NULL) input_key = input_serial_char;
-        else input_key = num_powerbtn_click;
-        
-        pk pk_reg = {'r',roll-22.5,roll+22.5,roll,pitch,input_key};
-        pk_vector.push_back(pk_reg);
-
-        //M5.Lcd.println(Serial.readStringUntil('/0'));
-        for(uint8_t i = 0; i < pk_vector.size(); i++){
-          M5.Lcd.setCursor(10,80+i*7);
-          M5.Lcd.println(String(pk_vector[i].rpy_selected) +"," +String(pk_vector[i].min_angle) + "," + String(pk_vector[i].max_angle) + "," +String(pk_vector[i].hid_input));
-        }
-
-        input_serial_char = NULL;
-        num_powerbtn_click = 1;
-      }
-      else if(event==REGISTRATION_PITCH_EVENT){
-        char input_key = 'p';
-        pk pk_reg = {'p',pitch-22.5,pitch+22.5,input_key};
-        pk_vector.push_back(pk_reg);
       }
       else if(event==REGISTRATION_EVENT){
         char input_key;
@@ -462,15 +415,6 @@ static void ReadSessionLoop(void* arg){
         }
       }
 
-
-      /*
-      if(input_serial == "FLUSH") flushPKvector(pk_vector,"TEST");
-      else if(input_serial == String("READ")){
-        Serial.println("READEEPROOO");
-        readPKvector("TEST");
-      }
-      else if(input_serial == "DELETE") deleteEEPROM("TEST");
-      */
     }      
     #ifdef BTSerial
     if(bts.available()){
@@ -532,29 +476,6 @@ static void ButtonLoop(void* arg) {
     G0viewSwitchPrevious = G0viewSwitch;
     G0viewSwitch = !digitalRead(0);
 
-
-/*
-    if(M5.Axp.GetBtnPress()==2)  //First, read num of element
-  int n =0;
-  uint8_t num_element;
-  EEPROM.get(n,num_element);
-  n = sizeof(uint8_t);
-
-  //{ //Instanious Click   // Unexpected "emptyRxFifo(): RxEmpty(2) call on TxBuffer? dq=0" outputs.
-      num_powerbtn_click +=1;
-    }
-*/
-
-
-      /*
-      if(skillSwitch || G36Switch){
-        digitalWrite(10, LOW);
-      }else{
-         digitalWrite(10, HIGH);       
-      }
-      */
-
-
     // idle
     int32_t sleep = TASK_SLEEP_BUTTON - (millis() - entryTime);
     vTaskDelay((sleep > 0) ? sleep : 0);
@@ -592,26 +513,11 @@ void readPKvector(String preset_name){
   else if(preset_name=="PRES1") n = EEPROM_PRES1_START; //size = EEPROM_PRES1_SIZE;
   else if(preset_name=="PRES2") n = EEPROM_PRES2_START; //size = EEPROM_PRES2_SIZE;
   else if(preset_name=="PRES_FEZ") n = EEPROM_PRES_FEZ_START; //size = EEPROM_PRES2_SIZE;
-  //else if(preset_name=="ACTION") {pk_vector = pk_vector_preset_Action; return;}
 
   //==First, read num of element
-  //int n = 0;
   uint8_t num_element;
-  /*
-  EEPROM.get(n-2,num_element);
-  Serial.println("read:index_byte"+String(n-2)+",num_element"+String(num_element));
-  EEPROM.get(n-1,num_element);
-  Serial.println("read:index_byte"+String(n-1)+",num_element"+String(num_element));
-  */
   EEPROM.get(n,num_element);
   Serial.println("read:index_byte"+String(n)+",num_element"+String(num_element));
-  
-  /*
-  EEPROM.get(n+1,num_element);
-  Serial.println("read:index_byte"+String(n+1)+",num_element"+String(num_element));
-  EEPROM.get(n+2,num_element);
-  Serial.println("read:index_byte"+String(n+2)+",num_element"+String(num_element));
-  */
   n += sizeof(uint8_t)*2;
   
   //==Second, read pk array.
@@ -724,7 +630,6 @@ void calibrateMPU6886(){
   digitalWrite(10, HIGH);
 }
 
-//void AllSerialOut()
 
 void remove_crlf(std::string& s)
 {
@@ -737,7 +642,6 @@ void remove_crlf(std::string& s)
     }
     s.resize(j);
 }
-
 
 // Thanks to https://algorithm.joho.info/arduino/string-split-delimiter/
 int split(String data, char delimiter, String *dst){
