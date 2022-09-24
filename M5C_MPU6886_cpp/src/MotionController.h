@@ -7,6 +7,7 @@ namespace MC{
             MotionController();
             ~MotionController();
             void inputKey(char key);
+            void moveMouse(int x, int y);
     };
 }    
 #endif

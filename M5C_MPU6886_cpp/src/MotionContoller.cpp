@@ -18,4 +18,8 @@ namespace MC{
             Keyboard.println(key);
         }
     }
+
+    void MotionController::moveMouse(int x, int y){
+        Mouse.move(x,y);
+    }
 };

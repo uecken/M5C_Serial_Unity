@@ -3,6 +3,7 @@
 #include <EEPROM.h>
 #include "MotionController.h"
 MC::MotionController mc;
+#include "IMUReader.h"
 
 #ifndef ESP32_BLE_COMBO_H //define by MotionController.h
   #define BTSerial
@@ -29,12 +30,15 @@ static void ImuLoop(void* arg);
 static void ReadSessionLoop(void* arg);
 static void WriteSessionLoop(void* arg);
 static void ButtonLoop(void* arg);
-static void hidSessionLoop(void* arg);
+static void MCSessionLoop(void* arg);
 static SemaphoreHandle_t serWriteMutex = NULL;
 static SemaphoreHandle_t imuDataMutex = NULL;
 static SemaphoreHandle_t btnDataMutex = NULL;
+static SemaphoreHandle_t btComboWriteMutex = NULL;
 
 
+
+//======== ReadSession ========
 uint8_t event=0;
 #define NO_EVENT 0
 #define INPUT_EVENT 1
@@ -42,14 +46,30 @@ uint8_t event=0;
 #define REGISTRATION_PITCH_EVENT 3
 #define REGISTRATION_EVENT 4 
 #define xxxxx_EVENT 5
+int split(String,char,String*);
+char input_serial_char=NULL;
+boolean serial_ON = false;
+//========ReadSession::END========
 
+//======== WeiteSession ========
+//======== WeiteSession::END ========
+
+
+//======== Button ========
+uint8_t num_powerbtn_click=1;
+//======== Button::END ========
+
+
+//======== IMU ========
+imur::IMUReader IMUr;
 const uint8_t Fs = 50;
 const long Ts = (1000/Fs);
 const float CONVERT_G_TO_MS2 = 9.80665f;
 const boolean left_axis_trans = true; //Unityは左手系、M5Stackは右手系
 
+float wrappingYaw(float yaw);
+float wrappingRoll(float roll);
 void calibrateMPU6886();
-int split(String,char,String*);
 
 float accX = 0.0F,accY = 0.0F,accZ = 0.0F;
 float gyroX = 0.0F,gyroY = 0.0F,gyroZ = 0.0F;
@@ -59,10 +79,10 @@ float aOX = 0.00, aOY = +0.01, aOZ =  0.07 ;  //-0.00   0.01   0.07
 float gOX = 3.36, gOY = 9.66 , gOZ = 4.11;  //3.36   9.66   4.11
 float pO=0 , rO=0 , yO=-8.5, yO2=0;
 float unwrapRoll,unwrapYaw;
+//========IMU::END ========
 
-boolean DEBUG_EEPROM = true;
 
-
+//=======MotionController=======
 boolean G26skillSwitch = 0;
 boolean G26skillSwitchPrevious = 0;
 int skillSelectWait = 30; //BLEゲームパッドが繋がっていない場合50ms必要
@@ -94,8 +114,6 @@ pk pk9 = {'p',0,0,90,70,'9'};
 pk pk10 = {'r',0,0,-45,0,'a'};
 pk pk11 = {'r',0,0,-90,0,'c'};
 pk pk12 = {'r',0,0,-135,0,'c'};
-
-
 //pk pk_end = {'0',0,0,'0'}; //Do not use banpei
 //pk pk_array[100] = {pk1,pk2,pk3,pk4,pk_end}; //Cannot use vector
 //7pk pk_array2[100];
@@ -109,39 +127,37 @@ std::vector<pk> pk_vector_preset_Action{pk5};
 //std::vector<pk> pk_vector;
 //void flushPKarray(pk*);
 //void readPKarray();
+//=======MotionController::END=======
 
-const uint16_t EEPROM_SIZE=800; //Max4KByte
-const uint16_t EEPROM_ONE_SIZE = 162;
+//=======EEPROM=======
+//***** Now, MAX ONE SIZE is 255Byte for using uint8_t ******
+boolean DEBUG_EEPROM = true;
+const uint16_t EEPROM_SIZE=900; //Max4KByte //1000Byte NG????
+const uint16_t EEPROM_ONE_SIZE = 242; //Data(12Byte x 20) + NumElement(2Byte)
 const uint16_t EEPROM_TEST_START = 0;
 const uint16_t EEPROM_TEST_SIZE = EEPROM_ONE_SIZE;
-const uint16_t EEPROM_PRES1_START = 162;
+const uint16_t EEPROM_PRES1_START = 242;
 const uint16_t EEPROM_PRES1_SIZE = EEPROM_ONE_SIZE;
-const uint16_t EEPROM_PRES2_START = 324;
+const uint16_t EEPROM_PRES2_START = 484;
 const uint16_t EEPROM_PRES2_SIZE = EEPROM_ONE_SIZE;
-const uint16_t EEPROM_PRES_FEZ_START = 486;
+const uint16_t EEPROM_PRES_FEZ_START = 726;
 const uint16_t EEPROM_PRES_FEZ_SIZE = EEPROM_ONE_SIZE;
-
-//==== Cannot Use EEPROMClass. =====
-/*==== The error is [E][EEPROM.cpp:199] commit(): error in write ====
-  ==== Use Only EEPROM ==== 
-EEPROMClass TEST_ER('eeprom1');
-EEPROMClass USER1_ER('eeprom2');
-EEPROMClass USER2_ER('eeprom3');
-EEPROMClass PRES1_ER('eeprom4');
-EEPROMClass PRES2_ER('eeprom5');
-*/
-
 void flushPKvector(std::vector<pk>,String);
 void readPKvector(String);
 void deleteEEPROM(String);
 void remove_crlf(std::string&);
 void serialprint_pkvector(std::vector<pk>&);
+boolean updatePKvector(pk pk,char);
+//==== Cannot Use EEPROMClass. =====
+/*==== The error is [E][EEPROM.cpp:199] commit(): error in write ====
+  ==== Use Only EEPROM ==== 
+EEPROMClass TEST_ER('eeprom1');
+EEPROMClass USER1_ER('eeprom2');
+*/
+//====EEPROM::END====
 
-char input_serial_char=NULL;
-uint8_t num_powerbtn_click=1;
-boolean serial_ON = false;
 
-//unsigned long Tcur,Tpre;
+
 
 void setup() {
   M5.begin();  //Init M5StickC Plus.  初始化 M5StickC Plus
@@ -164,6 +180,8 @@ void setup() {
   serWriteMutex = xSemaphoreCreateMutex();
   imuDataMutex = xSemaphoreCreateMutex();
   btnDataMutex = xSemaphoreCreateMutex();
+  btComboWriteMutex = xSemaphoreCreateMutex();
+
   xTaskCreatePinnedToCore(ImuLoop, TASK_NAME_IMU, TASK_STACK_DEPTH, 
     NULL, 2, NULL, TASK_DEFAULT_CORE_ID);
   xTaskCreatePinnedToCore(WriteSessionLoop, TASK_NAME_WRITE_SESSION, TASK_STACK_DEPTH, 
@@ -172,63 +190,20 @@ void setup() {
     NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
   xTaskCreatePinnedToCore(ButtonLoop, TASK_NAME_BUTTON, TASK_STACK_DEPTH, 
     NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
-  xTaskCreatePinnedToCore(hidSessionLoop, TASK_NAME_HID, TASK_STACK_DEPTH, 
+  xTaskCreatePinnedToCore(MCSessionLoop, TASK_NAME_HID, TASK_STACK_DEPTH, 
     NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
 
   EEPROM.begin(EEPROM_SIZE); //Max4Kbytes
 
-    //pinMode(10,   OUTPUT); //LED
-    pinMode(26,   INPUT_PULLUP); //半PD 電圧が1V程にプルダウン？されている。Pin36を ONにするとノイズが発生し、GNDとの判定で誤判定となる。3.3Vとのショート判定する必要がある。
-    pinMode(0,   INPUT_PULLUP); //PU 起動モード設定のためか、常にプルアップされており、ソフト制御できない。スイッチでGNDに落として判定する必要あり。
-    pinMode(36,   INPUT); //3.3V入力をスイッチとして利用可能
+  //pinMode(10,   OUTPUT); //LED
+  pinMode(26,   INPUT_PULLUP); //半PD 電圧が1V程にプルダウン？されている。Pin36を ONにするとノイズが発生し、GNDとの判定で誤判定となる。3.3Vとのショート判定する必要がある。
+  pinMode(0,   INPUT_PULLUP); //PU 起動モード設定のためか、常にプルアップされており、ソフト制御できない。スイッチでGNDに落として判定する必要あり。
+  pinMode(36,   INPUT); //3.3V入力をスイッチとして利用可能
 }
 
 void loop() {
   delay(1);
   }
-
-
-float wrappingYaw() { // Determines if a phase wrap/unwrap occured and accounts for it
-  static uint8_t Nwrap;
-  static float preYaw = 9999;
-  float unwrapYaw;
-
-  if(preYaw == 9999) Nwrap = 0;
-  else if ((preYaw  >= 0) && (yaw <= -90)) {
-    // Compare the previous theat to the current yaw to see if a wrap occured.
-    Nwrap = Nwrap + 1; // If so, add 1 to the number of wraps.
-  }
-  else if ((preYaw < 0) && (yaw >= 90)) {
-    // If an unwrap occured (a phase wrap in the other direction)...
-    Nwrap = Nwrap - 1; // ...then subtract 1 from the number of wraps.
-  }
-  preYaw = yaw; // Store the current yaw for the next cycle
-  unwrapYaw = yaw + (float)Nwrap*360.0;
-  return unwrapYaw;
-}
-
-
-float wrappingRoll() {
-  static uint8_t Nwrap_roll ;
-  static float preRoll = 9999;
-  float unwrapRoll;
-  
-  if(preRoll == 9999) Nwrap_roll = 0; //preRoll = roll;
-  if(abs(pitch)<60){ // pitch±90度付近でRollが180度回転する。この時はwrappingしない。
-                     //pitch -60度付近でもRollがジャンプしてしまう
-    if ((preRoll < -90) && (roll > 90)) {
-      Nwrap_roll = Nwrap_roll - 1; 
-    }
-    else if ((preRoll > 90) && (roll < -90)) {
-      Nwrap_roll = Nwrap_roll + 1; 
-    }
-  }
-
-  preRoll = roll; // Store the current yaw for the next cycle
-  unwrapRoll = roll + (float)Nwrap_roll*360.0;
-  //Serial.println("unwwapRoll:"+String(unwrapRoll)+","+String(Nwrap_roll));
-  return unwrapRoll;
-}
 
 
 pk motionDecision(float roll, float pitch){
@@ -287,7 +262,8 @@ static void ImuLoop(void* arg) {
       gyroX -=gOX; gyroY -=gOY; gyroZ -=gOZ;       
       pitch -=pO;  roll -= rO;  yaw -= yO;//★最小値-188.5。原因はgyroZの補正ができていないからか？一時的に+8.5して補正する。
       q_array = M5.IMU.getAhrsData(&pitch,&roll,&yaw,aOX,aOY,aOZ,gOX,gOY,gOZ);
-      unwrapRoll = wrappingRoll(); unwrapYaw = wrappingYaw();
+      unwrapRoll = IMUr.wrappingRoll(roll,pitch); 
+      unwrapYaw = IMUr.wrappingYaw(yaw);
     }
     xSemaphoreGive(imuDataMutex);
     
@@ -296,17 +272,17 @@ static void ImuLoop(void* arg) {
   }
 }
 
-static void hidSessionLoop(void* arg) {
+static void MCSessionLoop(void* arg) {
   while (1) {
     uint32_t entryTime = millis();
-
-    if (xSemaphoreTake(serWriteMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) { // Only for 1 line serial Input
+    if (xSemaphoreTake(btComboWriteMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) { // Only for 1 line serial Input
 
       if(event==INPUT_EVENT){
         pk pk_selected = motionDecision(roll,pitch); 
         mc.inputKey(pk_selected.hid_input);
 
       }
+      /*
       else if(event==REGISTRATION_ROLL_EVENT){
         char input_key;
         if(input_serial_char!=NULL) input_key = input_serial_char;
@@ -329,17 +305,18 @@ static void hidSessionLoop(void* arg) {
         pk pk_reg = {'p',pitch-22.5,pitch+22.5,input_key};
         pk_vector.push_back(pk_reg);
       }
+      */
       else if(event==REGISTRATION_EVENT){
         char input_key;
         if(input_serial_char!=NULL) input_key = input_serial_char;
         else input_key = num_powerbtn_click;
 
-        pk pk_reg = {'x',pitch,roll,input_key};
-        pk_vector.push_back(pk_reg);
+        pk pk_reg = {'x',0,0,roll,pitch,input_key};
+        if(!updatePKvector(pk_reg,input_key)) pk_vector.push_back(pk_reg);
       }
       event = NO_EVENT;
     }
-    xSemaphoreGive(serWriteMutex);
+    xSemaphoreGive(btComboWriteMutex);
 
     // idle
     int32_t sleep = TASK_SLEEP_WRITE_SESSION - (millis() - entryTime);
@@ -443,13 +420,13 @@ static void ButtonLoop(void* arg) {
       yO2 = yaw; //yaw軸の手動補正
     }
 
-    if (M5.BtnB.wasReleasefor(2000)){
+    /*if (M5.BtnB.wasReleasefor(2000)){
       event = REGISTRATION_ROLL_EVENT;
     }
     else if (M5.BtnB.wasReleasefor(1000)){
       event = REGISTRATION_PITCH_EVENT;
-    }
-    else if (M5.BtnB.wasReleasefor(500)){
+    }*/
+    if (M5.BtnB.wasReleasefor(1000)){
       event = REGISTRATION_EVENT;
     }
     else if(M5.BtnB.wasPressed()){
@@ -474,6 +451,17 @@ static void ButtonLoop(void* arg) {
   }
 }
 
+
+boolean updatePKvector(pk new_pk,char key){
+  for (int i=0 ; i < pk_vector.size(); i++){
+    if(pk_vector[i].hid_input == key) {
+      pk_vector[i] = new_pk;
+      Serial.println("update PK");
+      return true;
+    }
+  }
+  return false;
+}
 
 
 void flushPKvector(std::vector<pk> pk_vector,String preset_name){
