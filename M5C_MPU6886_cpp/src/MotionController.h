@@ -4,10 +4,14 @@
 namespace MC{
     class MotionController{
         public:
+            float mouse_speed;
             MotionController();
             ~MotionController();
+            void reConnect();
             void inputKey(char key);
-            void moveMouse(int x, int y);
+            void pressKey(char key);
+            void keyboardReleaseAll();
+            void moveMouse(float x,float y);
     };
 }    
 #endif

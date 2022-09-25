@@ -1,10 +1,17 @@
 #include <M5StickCPlus.h>
 #include <vector>
 #include <EEPROM.h>
-#include "MotionController.h"
-MC::MotionController mc;
+//#include "MotionController.h"
+//MC::MotionController mc;
 #include "IMUReader.h"
 
+#ifndef MotionController_H
+#include <BleCombo.h>
+#endif
+
+#ifndef ESP32_BLE_COMBO_H
+  #define ESP32_BLE_COMBO_H
+#endif
 #ifndef ESP32_BLE_COMBO_H //define by MotionController.h
   #define BTSerial
   #ifdef BTSerial
@@ -13,8 +20,10 @@ MC::MotionController mc;
   #endif
 #endif
 
+
 //Refered to AxisOrange https://github.com/naninunenoy/AxisOrange
-#define TASK_DEFAULT_CORE_ID 1
+#define TASK_DEFAULT_CORE_ID 1 //0は無線系が利用するため利用不可.利用するとBluetooth頻繁に送受信停止
+#define TASK_BT_CORE_ID 0 //0はBLEタスクのみが利用する
 #define TASK_STACK_DEPTH 4096UL
 #define TASK_NAME_IMU "IMUTask"
 #define TASK_NAME_WRITE_SESSION "WriteSessionTask"
@@ -23,8 +32,9 @@ MC::MotionController mc;
 #define TASK_NAME_HID "HIDTask"
 #define TASK_SLEEP_IMU 10 // = 1000[ms] / 100[Hz]
 #define TASK_SLEEP_WRITE_SESSION 40 // = 1000[ms] / 25[Hz]
-#define TASK_SLEEP_READ_SESSION 100 // = 1000[ms] / 10[Hz]
-#define TASK_SLEEP_BUTTON 100 // = 1000[ms] / 10[Hz]
+#define TASK_SLEEP_READ_SESSION 200 // = 1000[ms] / 5[Hz]
+#define TASK_SLEEP_BUTTON 40 // = 1000[ms] / 25[Hz]
+#define TASK_SLEEP_MC_SESSION 15 // = 1000[ms] / 100[Hz]. BT Minimum Interavl is 7.5ms
 #define MUTEX_DEFAULT_WAIT 10000UL
 static void ImuLoop(void* arg);
 static void ReadSessionLoop(void* arg);
@@ -44,8 +54,11 @@ uint8_t event=0;
 #define INPUT_EVENT 1
 #define REGISTRATION_ROLL_EVENT 2
 #define REGISTRATION_PITCH_EVENT 3
-#define REGISTRATION_EVENT 4 
-#define xxxxx_EVENT 5
+#define REGISTRATION_EVENT 4
+#define WAITING_EVENT 5 
+#define MOUSE_CLICK_EVENT 6 
+#define MOUSE_RELEASE_EVENT 7 
+#define xxxxx_EVENT 10
 int split(String,char,String*);
 char input_serial_char=NULL;
 boolean serial_ON = false;
@@ -62,8 +75,8 @@ uint8_t num_powerbtn_click=1;
 
 //======== IMU ========
 imur::IMUReader IMUr;
-const uint8_t Fs = 50;
-const long Ts = (1000/Fs);
+//const uint8_t Fs = 50;
+//const long Ts = (1000/Fs);
 const float CONVERT_G_TO_MS2 = 9.80665f;
 const boolean left_axis_trans = true; //Unityは左手系、M5Stackは右手系
 
@@ -79,25 +92,26 @@ float aOX = 0.00, aOY = +0.01, aOZ =  0.07 ;  //-0.00   0.01   0.07
 float gOX = 3.36, gOY = 9.66 , gOZ = 4.11;  //3.36   9.66   4.11
 float pO=0 , rO=0 , yO=-8.5, yO2=0;
 float unwrapRoll,unwrapYaw;
+float pre_pitch,pre_yaw;
 //========IMU::END ========
 
 
 //=======MotionController=======
-boolean G26skillSwitch = 0;
-boolean G26skillSwitchPrevious = 0;
+boolean G26skillSwitch = false;
+boolean G26skillSwitchPrevious = false;
 int skillSelectWait = 30; //BLEゲームパッドが繋がっていない場合50ms必要
-boolean G36Switch = 0;
-boolean G36SwitchPrevious = 0;
-boolean skillReset = 0;
-boolean G0viewSwitch = 0;
-boolean G0viewSwitchPrevious = 0;
+boolean G36Switch = false;
+boolean G36SwitchPrevious = false;
+boolean skillReset = false;
+boolean G0viewSwitch = false;
+boolean G0viewSwitchPrevious = false;
 
 struct pk{ //12byte (padding 2Byte)
   char rpy_selected;  //rpy 1byte
   short min_angle;    // 2byte
   short max_angle;    // 2byte
   short roll;    // 2byte
-  short pitch;    // 2byte
+  short pitch;    // 2byte  
   char hid_input;   // 1byte
 };
 
@@ -119,10 +133,10 @@ pk pk12 = {'r',0,0,-135,0,'c'};
 //7pk pk_array2[100];
 //uint8_t pk_size = sizeof(pk_array)/sizeof(pk_array[0]);
 std::vector<pk> pk_vector{pk1,pk2,pk3,pk4,pk5,pk6,pk7,pk8,pk9,pk10,pk11,pk12};
-std::vector<pk> pk_vector_preset1{pk1,pk2,pk3,pk4,pk5};
-std::vector<pk> pk_vector_preset2{pk1,pk2,pk3,pk4,pk5};
-std::vector<pk> pk_vector_preset_FEZ{pk5};
-std::vector<pk> pk_vector_preset_Action{pk5};
+std::vector<pk> pk_vector_preset1{};
+std::vector<pk> pk_vector_preset2{};
+std::vector<pk> pk_vector_preset_FEZ{};
+std::vector<pk> pk_vector_preset_Action{};
 
 //std::vector<pk> pk_vector;
 //void flushPKarray(pk*);
@@ -157,7 +171,7 @@ EEPROMClass USER1_ER('eeprom2');
 //====EEPROM::END====
 
 
-
+boolean DEBUG_TIME = true;
 
 void setup() {
   M5.begin();  //Init M5StickC Plus.  初始化 M5StickC Plus
@@ -182,16 +196,11 @@ void setup() {
   btnDataMutex = xSemaphoreCreateMutex();
   btComboWriteMutex = xSemaphoreCreateMutex();
 
-  xTaskCreatePinnedToCore(ImuLoop, TASK_NAME_IMU, TASK_STACK_DEPTH, 
-    NULL, 2, NULL, TASK_DEFAULT_CORE_ID);
-  xTaskCreatePinnedToCore(WriteSessionLoop, TASK_NAME_WRITE_SESSION, TASK_STACK_DEPTH, 
-    NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
-  xTaskCreatePinnedToCore(ReadSessionLoop, TASK_NAME_READ_SESSION, TASK_STACK_DEPTH, 
-    NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
-  xTaskCreatePinnedToCore(ButtonLoop, TASK_NAME_BUTTON, TASK_STACK_DEPTH, 
-    NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
-  xTaskCreatePinnedToCore(MCSessionLoop, TASK_NAME_HID, TASK_STACK_DEPTH, 
-    NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
+  xTaskCreatePinnedToCore(ImuLoop, TASK_NAME_IMU, TASK_STACK_DEPTH, NULL, 2, NULL, TASK_DEFAULT_CORE_ID);
+  xTaskCreatePinnedToCore(WriteSessionLoop, TASK_NAME_WRITE_SESSION, TASK_STACK_DEPTH, NULL, 2, NULL, TASK_DEFAULT_CORE_ID);
+  xTaskCreatePinnedToCore(ReadSessionLoop, TASK_NAME_READ_SESSION, TASK_STACK_DEPTH, NULL, 2, NULL, TASK_DEFAULT_CORE_ID);
+  xTaskCreatePinnedToCore(ButtonLoop, TASK_NAME_BUTTON, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
+  xTaskCreatePinnedToCore(MCSessionLoop, TASK_NAME_HID, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_BT_CORE_ID); //BlueTooth利用のためCore0を利用すべきか？
 
   EEPROM.begin(EEPROM_SIZE); //Max4Kbytes
 
@@ -199,6 +208,11 @@ void setup() {
   pinMode(26,   INPUT_PULLUP); //半PD 電圧が1V程にプルダウン？されている。Pin36を ONにするとノイズが発生し、GNDとの判定で誤判定となる。3.3Vとのショート判定する必要がある。
   pinMode(0,   INPUT_PULLUP); //PU 起動モード設定のためか、常にプルアップされており、ソフト制御できない。スイッチでGNDに落として判定する必要あり。
   pinMode(36,   INPUT); //3.3V入力をスイッチとして利用可能
+
+  #ifndef MotionController_H
+  Keyboard.begin();
+  Mouse.begin();
+  #endif
 }
 
 void loop() {
@@ -256,31 +270,69 @@ static void ImuLoop(void* arg) {
     uint32_t entryTime = millis();
     
     if (xSemaphoreTake(imuDataMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) {
+      pre_pitch = pitch; pre_yaw = unwrapYaw;
       M5.IMU.getGyroData(&gyroX,&gyroY,&gyroZ);
       M5.IMU.getAccelData(&accX,&accY,&accZ);
       accX -= aOX; accY -= aOY; accZ -= aOZ;
       gyroX -=gOX; gyroY -=gOY; gyroZ -=gOZ;       
-      pitch -=pO;  roll -= rO;  yaw -= yO;//★最小値-188.5。原因はgyroZの補正ができていないからか？一時的に+8.5して補正する。
       q_array = M5.IMU.getAhrsData(&pitch,&roll,&yaw,aOX,aOY,aOZ,gOX,gOY,gOZ);
+      //早い動きにあ
+      //pitch -=pO;  roll -= rO;  yaw -= yO;//★最小値-188.5。原因はgyroZの補正ができていないからか？一時的に+8.5して補正する。
+
       unwrapRoll = IMUr.wrappingRoll(roll,pitch); 
       unwrapYaw = IMUr.wrappingYaw(yaw);
     }
     xSemaphoreGive(imuDataMutex);
-    
+
+    //if(DEBUG_TIME)Serial.println("IMU:"+String(millis()));    
     int32_t sleep = TASK_SLEEP_IMU - (millis() - entryTime);
     vTaskDelay((sleep > 0) ? sleep : 0);
   }
 }
 
 static void MCSessionLoop(void* arg) {
+  static const uint8_t SELECTED = 1;
+  static const uint8_t ENDED = 2;
+  static const uint8_t WAITING= 3;
+  static uint8_t skillExecState = WAITING;
+
   while (1) {
     uint32_t entryTime = millis();
-    if (xSemaphoreTake(btComboWriteMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) { // Only for 1 line serial Input
-
-      if(event==INPUT_EVENT){
+    //if (xSemaphoreTake(btComboWriteMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) { // Only for 1 line serial Input
+    
+      if(skillExecState == WAITING && event==INPUT_EVENT){
         pk pk_selected = motionDecision(roll,pitch); 
-        mc.inputKey(pk_selected.hid_input);
+        #ifdef MotionController_H
+        mc.pressKey(pk_selected.hid_input); //SHIFT.Skill実行
+        #endif
+        #ifndef MotionController_H
+        Keyboard.press(pk_selected.hid_input);
+        #endif
+        skillExecState = SELECTED;
+      }
+      else if(event == WAITING_EVENT){//Button離すとスキル選択キャンセル
+        //mc.keyboardReleaseAll();
+        #ifdef MotionController_H
+        mc.keyboardReleaseAll();
+        #endif
+        #ifndef MotionController_H
+        Keyboard.releaseAll();
+        #endif
 
+        skillExecState = WAITING;
+      }
+      else if (skillExecState == SELECTED){
+        if(abs(accX) > 3 || abs(accY) > 3 || abs(accZ) > 3 ){
+          //mc.pressKey(0x85); //SHIFT.Skill実行
+          #ifdef MotionController_H
+          mc.pressKey(0x85); //SHIFT.Skill実行
+          #endif
+          #ifndef MotionController_H
+          Keyboard.press(0x85);
+          #endif
+          skillExecState = WAITING;
+          //vTaskDelay(200);
+        }
       }
       /*
       else if(event==REGISTRATION_ROLL_EVENT){
@@ -314,14 +366,42 @@ static void MCSessionLoop(void* arg) {
         pk pk_reg = {'x',0,0,roll,pitch,input_key};
         if(!updatePKvector(pk_reg,input_key)) pk_vector.push_back(pk_reg);
       }
-      event = NO_EVENT;
-    }
-    xSemaphoreGive(btComboWriteMutex);
+
+      else if(event==MOUSE_CLICK_EVENT){
+        Mouse.press(MOUSE_LEFT);
+      }
+      else if(event==MOUSE_RELEASE_EVENT){
+        Mouse.release(MOUSE_LEFT);
+      }
+      
+      if (G0viewSwitch){
+        static float mouse_speed = 15;
+        static float x_speed_weight = 1.5; 
+        static float y_speed_weight = 1; 
+        int x = int(-(unwrapYaw - pre_yaw)*mouse_speed) * x_speed_weight;
+        int y = int((pitch-pre_pitch)*mouse_speed) * y_speed_weight;
+        if(x > 127) x =127;
+        else if(x < -127) {x = -127;}
+        if(y > 127) y =127;
+        else if(y < -127) {y = -127;}
+
+        #ifdef MotionController_H
+        mc.moveMouse(x,y);
+        #endif
+        #ifndef MotionController_H
+        Mouse.move(x,y);
+        #endif
+
+        if(DEBUG_TIME)Serial.println("MC,"+String(millis()));
+      }
+    //xSemaphoreGive(btComboWriteMutex);
+    event = NO_EVENT;
 
     // idle
-    int32_t sleep = TASK_SLEEP_WRITE_SESSION - (millis() - entryTime);
+    int32_t sleep = TASK_SLEEP_MC_SESSION - (millis() - entryTime);
     vTaskDelay((sleep > 0) ? sleep : 0);
-  }
+    }
+  //} //semaphore
 }
 
 static void WriteSessionLoop(void* arg) {
@@ -404,8 +484,12 @@ static void ButtonLoop(void* arg) {
   while (1) {
     uint32_t entryTime = millis();
 
+
     M5.update();
-    if(M5.BtnA.wasReleasefor(1000)){
+    if(M5.BtnA.wasReleasefor(2000)){
+      //mc.reConnect();
+    }
+    else if(M5.BtnA.wasReleasefor(1000)){
       if (xSemaphoreTake(imuDataMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) {
         calibrateMPU6886();
         xSemaphoreGive(imuDataMutex);
@@ -418,6 +502,7 @@ static void ButtonLoop(void* arg) {
     else if(M5.BtnA.wasPressed()){
       Serial.println("button pressed"); 
       yO2 = yaw; //yaw軸の手動補正
+
     }
 
     /*if (M5.BtnB.wasReleasefor(2000)){
@@ -437,10 +522,13 @@ static void ButtonLoop(void* arg) {
 
     G26skillSwitchPrevious = G26skillSwitch;
     G26skillSwitch = !digitalRead(26);
-    if(G26skillSwitch)  event = INPUT_EVENT;
+    if(G26skillSwitch && !G26skillSwitchPrevious)  event = INPUT_EVENT;
+    else if(!G26skillSwitch && G26skillSwitchPrevious){ event = WAITING_EVENT;}
 
     G36SwitchPrevious = G36Switch;
     G36Switch = digitalRead(36);
+    if(G36Switch && !G36SwitchPrevious) event = MOUSE_CLICK_EVENT;
+    else if(!G36Switch && G36SwitchPrevious) event = MOUSE_RELEASE_EVENT;
 
     G0viewSwitchPrevious = G0viewSwitch;
     G0viewSwitch = !digitalRead(0);
