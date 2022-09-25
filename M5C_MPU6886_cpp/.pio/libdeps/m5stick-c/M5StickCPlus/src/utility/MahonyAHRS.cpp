@@ -229,7 +229,7 @@ float* MahonyAHRSupdateIMU(float gx, float gy, float gz, float ax, float ay, flo
     // Declination of SparkFun Electronics (40°05'26.6"N 105°11'05.9"W) is
     // 	8° 30' E  ± 0° 21' (or 8.5°) on 2016-07-19
     // - http://www.ngdc.noaa.gov/geomag-web/#declination
-    *yaw   -= 8.5;
+    //*yaw   -= 8.5;
     *roll  *= RAD_TO_DEG;
 
 	quatanion[0] = q0;
