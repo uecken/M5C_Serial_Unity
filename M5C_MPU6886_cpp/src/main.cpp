@@ -358,7 +358,15 @@ static void MCSessionLoop(void* arg) {
         pk_vector.push_back(pk_reg);
       }
       */
-      else if(event==REGISTRATION_EVENT){
+
+      else if(event==MOUSE_CLICK_EVENT){
+        Mouse.press(MOUSE_LEFT);
+      }
+      else if(event==MOUSE_RELEASE_EVENT){
+        Mouse.release(MOUSE_LEFT);
+      }
+
+      if(event==REGISTRATION_EVENT){
         char input_key;
         if(input_serial_char!=NULL) input_key = input_serial_char;
         else input_key = num_powerbtn_click;
@@ -367,13 +375,7 @@ static void MCSessionLoop(void* arg) {
         if(!updatePKvector(pk_reg,input_key)) pk_vector.push_back(pk_reg);
       }
 
-      else if(event==MOUSE_CLICK_EVENT){
-        Mouse.press(MOUSE_LEFT);
-      }
-      else if(event==MOUSE_RELEASE_EVENT){
-        Mouse.release(MOUSE_LEFT);
-      }
-      
+
       if (G0viewSwitch){
         static float mouse_speed = 15;
         static float x_speed_weight = 1.5; 
