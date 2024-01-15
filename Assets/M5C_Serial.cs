@@ -71,9 +71,30 @@ public class M5C_Serial : MonoBehaviour
             m5stickC1.transform.rotation = Quaternion.Inverse(base_q) * q;
             Debug.Log(q);
 
-            /***===Rotate M5StickC2 by Euler===***/
+
+            /***===Rotate M5StickC2 by Quaternion yaw offset===***/
+            
+
+
+
+            /***===Rotate M5StickC2 by Euler(Z-X-Y回転)===***/
+            /*
             Quaternion q_euler = Quaternion.Euler(new Vector3(-roll,yaw,-pitch)); //-roo,yaw,-pitchにより右手系から左手系へ変換
+            //回転順がZXYのため、roll方向の表示がおかしい。特にroll 70~90度以外の角度。
             m5stickC2.transform.rotation = q_euler;
+            */
+
+
+            /***===Rotate M5StickC2 by Euler(X-Y-Z回転)===***/
+            // 個々の軸の回転をクォータニオンとして生成
+            Quaternion rotationX = Quaternion.Euler(-roll, 0, 0);
+            Quaternion rotationY = Quaternion.Euler(0, pitch, 0);
+            //Quaternion rotationZ = Quaternion.Euler(0, 0, yaw);
+            // Quaternion totalRotation = rotationX * rotationY * rotationZ; // X-Y-Z順に回転を適用
+            Quaternion totalRotation = rotationX * rotationY;  // X-Y順に回転を適用 (Yawは正しくないため無視)
+            m5stickC2.transform.rotation = totalRotation; //Pitch 70-90度でジンバルロックによりrollが異常
+
+
 
 
 
