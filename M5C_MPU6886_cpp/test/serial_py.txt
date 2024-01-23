@@ -1,0 +1,31 @@
+import serial
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+
+# シリアルポートの設定（ポート名とボーレートを適切に設定）
+ser = serial.Serial('COMポート名', 9600)
+
+# データ格納用リスト
+pitch_data = []
+roll_data = []
+
+def update(frame):
+    if ser.in_waiting:
+        line = ser.readline().decode('utf-8').strip()
+        data = line.split(',')
+        try:
+            pitch = float(data[6]) # 7番目の要素がピッチ
+            roll = float(data[7])  # 8番目の要素がロール
+
+            pitch_data.append(pitch)
+            roll_data.append(roll)
+
+            plt.cla()
+            plt.plot(pitch_data, label='Pitch')
+            plt.plot(roll_data, label='Roll')
+            plt.legend()
+        except (IndexError, ValueError):
+            pass
+
+ani = FuncAnimation(plt.gcf(), update, interval=100)
+plt.show()
