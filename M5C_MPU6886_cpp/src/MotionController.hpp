@@ -14,6 +14,27 @@ const uint8_t P2_KEY_RIGHT_ARROW = 'l';
 const String MODE_SF_P1 = "SF_P1";
 const String MODE_SF_P2 = "SF_P2";
 
+boolean LEFT_DISPLAY = true;
+
+
+//Mode設定
+#define MODE_MOUSE 0
+#define MODE_KEYBOARD 1
+#define MODE_MOUSE_KEYBOARD 1
+#define MODE_STREET_FIGHTER 3
+#define MODE_XXXXX 9
+#define MODE_ROLL_PITCH_VALIDATION 10
+#define MODE_TEST_BUTTONB 20
+
+
+struct SensorData {
+    float accelX, accelY, accelZ;
+    float gyroX, gyroY, gyroZ;
+    float roll, pitch, yaw;
+};
+
+// ローパスフィルタの係数
+const float alpha = 0.9;
 
 //extern BleComboMouse Mouse;
 //extern BleComboKeyboard Keyboard;
@@ -23,26 +44,64 @@ class MotionController{
     private:
 
     public:
-        float mouse_speed = 10;
+        //float mouse_speed = 10;
         uint8_t button[3] = {0,36,26};
         //uint8_t button[3] = {0,26};s
         bool prev_button_state[3] = {false,false,false};
         uint8_t pin_LED = 10;
         String game_modes[2] = {MODE_SF_P1,MODE_SF_P2};
         String current_game_mode = game_modes[0];
+        uint8_t mode;
 
-        MotionController() {
+        SensorData* sensorDataArray;
+        int dataSize_;
+        int currentDataIndex_;
+        
+        uint8_t mouse_scale2 = 2;
+        float sampleFreq;
 
+    // インスタンス作成時に構造体配列を初期化
+        MotionController(int dataSize,float Fs) {
+            sensorDataArray = new SensorData[dataSize];
+            dataSize_ = dataSize;
+            currentDataIndex_ = 0;
+            sampleFreq = Fs;
         }
 
-        ~MotionController() {        
+        // デストラクタでメモリ解放
+        ~MotionController() {
+            delete[] sensorDataArray;
+        }
+
+        // ローパスフィルタを適用する関数
+        void applyLowPassFilter(float& filteredValue, float newValue) {
+            filteredValue = alpha * filteredValue + (1 - alpha) * newValue;
+        }
+
+        // 取得したセンサデータを構造体に追加する関数
+        void addSensorData(float accelX, float accelY, float accelZ, 
+                                            float gyroX, float gyroY, float gyroZ, 
+                                            float roll, float pitch, float yaw) {
+            // ローパスフィルタを適用してデータを更新
+            applyLowPassFilter(sensorDataArray[currentDataIndex_].accelX, accelX);
+            applyLowPassFilter(sensorDataArray[currentDataIndex_].accelY, accelY);
+            applyLowPassFilter(sensorDataArray[currentDataIndex_].accelZ, accelZ);
+            applyLowPassFilter(sensorDataArray[currentDataIndex_].gyroX, gyroX);
+            applyLowPassFilter(sensorDataArray[currentDataIndex_].gyroY, gyroY);
+            applyLowPassFilter(sensorDataArray[currentDataIndex_].gyroZ, gyroZ);
+            applyLowPassFilter(sensorDataArray[currentDataIndex_].roll, roll);
+            applyLowPassFilter(sensorDataArray[currentDataIndex_].pitch, pitch);
+            applyLowPassFilter(sensorDataArray[currentDataIndex_].yaw, yaw);
+
+            // インデックスを次に進める（ループする場合）
+            currentDataIndex_ = (currentDataIndex_ + 1) % dataSize_;
         }
 
 
         void begin() {
             M5.begin();  //Init M5StickC Plus.  初始化 M5StickC Plus
             delay(500);
-            M5.Imu.Init();  //Init IMU.  初始化IMU
+            M5.Imu.Init(sampleFreq);  //Init IMU.  初始化IMU
             M5.Lcd.setRotation(3);  //Rotate the screen. 将屏幕旋转
             M5.Lcd.fillScreen(BLACK);
             M5.Lcd.setTextSize(1);
@@ -54,10 +113,17 @@ class MotionController{
             M5.Lcd.println("  Pitch   Roll    Yaw");
 
             pinMode(pin_LED,   OUTPUT); //LED
+            digitalWrite(pin_LED, HIGH); //OFF
             pinMode(button[0],   INPUT_PULLUP); //PU 起動モード設定のためか、常にプルアップされており、ソフト制御できない。スイッチでGNDに落として判定する必要あり。
             pinMode(button[1],   INPUT); //3.3V入力をスイッチとして利用可能
             pinMode(button[2],   INPUT_PULLUP); //半PD 電圧が1V程にプルダウン？されている。Pin36を ONにするとノイズが発生し、GNDとの判定で誤判定となる。3.3Vとのショート判定する必要がある。
             //pinMode(button[1],   INPUT_PULLUP);//26
+
+            if(LEFT_DISPLAY){
+                uint8_t button_tmp = button[0   ];
+                button[0] = button[2];
+                button[2] = button_tmp;
+            }
 
             Keyboard.begin();
             Mouse.begin();
@@ -68,7 +134,6 @@ class MotionController{
                 M5.Lcd.print("BLE Connecting...");
             }
                 M5.Lcd.print("BLE Connected!    ");
-
         }
 
         void reConnect() {
@@ -118,9 +183,24 @@ class MotionController{
             return;
         }
 
+/*
+        void moveMouseSmoothly(float x, float y, float timeDelta){
+
+            float mouse_scale = 10; // 感度調整
+            int xMove = round(mouse_scale * yawDelta / timeDelta);
+            int yMove = round(mouse_scale * pitchDelta / timeDelta);
+            mc.moveMouse(xMove, yMove);
+
+            Mouse.move(x,y);
+            return;
+        }
+*/
+
+        /*
         void setMouseSpeed(float speed){
             mouse_speed = speed;
         }
+        */
 
         bool switchRead(uint8_t button){
             if(button==0){ //Normally pull-up
@@ -232,5 +312,8 @@ class MotionController{
             if(state==true){digitalWrite(pin_LED, LOW);} //ON
             else{digitalWrite(pin_LED, HIGH);} //OFF
         }
+
+
+
 };
 #endif

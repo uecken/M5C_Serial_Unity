@@ -16,7 +16,9 @@
   //#include <AccelRingBuffer.hpp>
   //copilotでRingBufferの加速度インスタンス作成
   #include <MotionController.hpp>
-  MotionController mc;
+  const uint8_t Fs = 75;
+  const float Ts = (1000/Fs);
+  MotionController mc(10,Fs);
   AccelRingBuffer acc_buffer(20);
 #endif
 
@@ -34,8 +36,8 @@ IMUReader imur;
 #define TASK_NAME_READ_SESSION "ReadSessionTask"
 #define TASK_NAME_BUTTON "ButtonTask"
 #define TASK_NAME_HID "HIDTask"
-#define TASK_SLEEP_IMU 20 // = 1000[ms] / 100[Hz
-#define TASK_SLEEP_HID_SESSION 50 // = 1000[ms] / 100[Hz]
+#define TASK_SLEEP_IMU Ts // = 1000[ms] / 100[Hz    //1000/13=76.9Hz
+#define TASK_SLEEP_HID_SESSION 33 // = 1000[ms] / 100[Hz]
 #define TASK_SLEEP_WRITE_SESSION 100 // = 1000[ms] / 100[Hz]
 #define TASK_SLEEP_READ_SESSION 200 // = 1000[ms] / 10[Hz]
 #define TASK_SLEEP_BUTTON 50 // = 1000[ms] / 20[Hz]
@@ -62,15 +64,11 @@ uint8_t event=0;
 #define xxxxx_EVENT 8
 bool events_bool[3]; //events[0] = INPUT1_EVENT, events[1] = INPUT2_EVENT, events[2] = INPUT3_EVENT
 
-//Mode設定
-#define MODE_MOUSE_KEY 0
-#define MODE_STREET_FIGHTER 1
-#define MODE_XXXXX 2
 
 
 
-const uint8_t Fs = 50;
-const long Ts = (1000/Fs);
+
+
 const float CONVERT_G_TO_MS2 = 9.80665f;
 const boolean left_axis_trans = true; //Unityは左手系、M5Stackは右手系
 
@@ -83,13 +81,16 @@ float pitch = 0.0F,roll  = 0.0F,yaw   = 0.0F;
 float unwrpRoll,unwrpYaw;
 float accABS;
 float* q_array = new float[4]; //quatanion
-float aOX = 0.00, aOY = +0.01, aOZ =  0.07 ;  //-0.00   0.01   0.07 
-float gOX = 3.36, gOY = 9.66 , gOZ = 4.11;  //3.36   9.66   4.11
+float aOX = -0.003, aOY = +0.018, aOZ =  0.085 ;  //-0.00   0.01   0.07 
+float gOX = 3.516, gOY = -6.023 , gOZ = -5.14;  //3.36   9.66   4.11
 float pO=0 , rO=0 , yO=-8.5, yO2=0;
+float roll_prev,pitch_prev,yaw_prev;
 
 
 boolean DEBUG_EEPROM = true;
 boolean DEBUG_HID = true;
+boolean BLEHID_ENABLE = true;
+
 
 //===========Player Key settings===========
 struct pk{ //44byte (padding 2Byte?)
@@ -178,6 +179,8 @@ const uint16_t EEPROM_PRES1_START = 400;
 const uint16_t EEPROM_PRES1_SIZE = 400;
 const uint16_t EEPROM_PRES2_START = 800;
 const uint16_t EEPROM_PRES2_SIZE = 400;
+const uint16_t EEPROM_CAL_SPACE_START = 1200;
+const uint16_t EEPROM_CAL_SPACE_SIZE = 30;
 //==============Player Key settings end==============
 
 //==== Cannot Use EEPROMClass. =====
@@ -209,6 +212,7 @@ void setup() {
   #ifdef BTSerial
    bts.begin("M5C_BTSerial");
   #elif defined(MotionCont)
+   mc.mode=MODE_MOUSE;
    mc.begin();
   #endif
 
@@ -223,10 +227,22 @@ void setup() {
 
 
   //calibrate
-  if (xSemaphoreTake(imuDataMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) {
-    calibrateMPU6886();
+  /*if (xSemaphoreTake(imuDataMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) {
+    //calibrateMPU6886();
     xSemaphoreGive(imuDataMutex);
-  }
+  }*/
+
+  //EEPROMから読んだCalibration値を格納
+  uint16_t n=EEPROM_CAL_SPACE_START;
+  EEPROM.get(n,aOX); n+=sizeof(aOX);
+  EEPROM.get(n,aOY); n+=sizeof(aOY);
+  EEPROM.get(n,aOZ); n+=sizeof(aOZ);
+  EEPROM.get(n,gOX); n+=sizeof(gOX);
+  EEPROM.get(n,gOY); n+=sizeof(gOY);
+  EEPROM.get(n,gOZ); n+=sizeof(gOZ);
+  
+
+    
 
   if(EEPROM_SIZE>EEPROM_MAX_SIZE){
     if(DEBUG_EEPROM)Serial.println("EEPROM_SIZE is over 4095(EEPROM_MAX_SIZE)");
@@ -234,6 +250,10 @@ void setup() {
   else{
     EEPROM.begin(EEPROM_SIZE); //EEPROM.begin(size)で確保できる最大サイズは通常、最大4095バイト（4KB未満）
     readPKvector("SF");
+  }
+
+  if(LEFT_DISPLAY){
+    Serial.println("LEFT_DISPLAY,");
   }
   //TEST_ER.begin(EEPROM_SIZE/5); //8Byte * 100/20;
   /*
@@ -268,7 +288,10 @@ void loop() {
 static void ImuLoop(void* arg) {
   while (1) {
     uint32_t entryTime = millis();
-    
+      roll_prev = roll;
+      pitch_prev = pitch;
+      yaw_prev = yaw;
+      
     //if (xSemaphoreTake(imuDataMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) {
       M5.IMU.getGyroData(&gyroX,&gyroY,&gyroZ);
       M5.IMU.getAccelData(&accX,&accY,&accZ);
@@ -278,6 +301,14 @@ static void ImuLoop(void* arg) {
       q_array = M5.IMU.getAhrsData(&pitch,&roll,&yaw,aOX,aOY,aOZ,gOX,gOY,gOZ);
       //q_array = M5.IMU.getAhrsData2(&pitch,&roll,&yaw,aOX,aOY,aOZ,gOX,gOY,gOZ);
       pitch -=pO;  roll -= rO;  yaw -= yO;//★最小値-188.5。原因はgyroZの補正ができていないからか？一時的に+8.5して補正する。
+      if(LEFT_DISPLAY){
+        pitch = -pitch;
+        roll = -roll;
+        yaw = -yaw;
+      }
+      
+
+      mc.addSensorData(accX,accY,accZ,gyroX,gyroY,gyroZ,roll,pitch,yaw);
 
     //}
     //xSemaphoreGive(imuDataMutex);
@@ -306,141 +337,192 @@ static void hidSessionLoop(void* arg) {
         M5.Lcd.println(pk1.hid_input);
         event = NO_EVENT;
       }*/
-      if(event==INPUT_EVENT){
-        //登録キーから判定
-        for(uint8_t i = 0; i < pk_vector.size(); i++){
-          /*
-          int angle = -999;
-          switch(pk_vector[i].rpy_priority){
-            case 'r' : angle = roll; break;
-            case 'p' : angle = pitch; break;
-          }
-          */
-          //Rollが180度をまたぐ場合
-          if(pk_vector[i].roll_min < 180 && pk_vector[i].roll_max > 180){
-          //例えばRoll 150 ~ 210の場合、150°以上または-150°以下の場合に入力を受け付ける
-            if((pk_vector[i].roll_min < roll) && (-1 *(180 - (180 - pk_vector[i].roll_max)) < roll )){
+      if(mc.mode==MODE_TEST_BUTTONB){
+        if(event==INPUT_EVENT){
+          //登録キーから判定
+          for(uint8_t i = 0; i < pk_vector.size(); i++){
+            /*
+            int angle = -999;
+            switch(pk_vector[i].rpy_priority){
+              case 'r' : angle = roll; break;
+              case 'p' : angle = pitch; break;
+            }
+            */
+            //Rollが180度をまたぐ場合
+            if(pk_vector[i].roll_min < 180 && pk_vector[i].roll_max > 180){
+            //例えばRoll 150 ~ 210の場合、150°以上または-150°以下の場合に入力を受け付ける
+              if((pk_vector[i].roll_min < roll) && (-1 *(180 - (180 - pk_vector[i].roll_max)) < roll )){
+                mc.execSF_HIDInputs(pk_vector[i].hid_inputs,(float)pk_vector[i].hid_input_acc_threshold,&acc_buffer);
+              }
+            } 
+            
+            //通常の場合
+            else if(pk_vector[i].roll_min < roll && roll < pk_vector[i].roll_max){
+              if(serial_ON)Serial.println(String("In,")+String(pk_vector[i].hid_input) + ","+String(pk_vector[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
+              M5.Lcd.setCursor(10,60);
+              M5.Lcd.println(String("In,")+String(pk_vector[i].hid_input) + ","+String(pk_vector[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
               mc.execSF_HIDInputs(pk_vector[i].hid_inputs,(float)pk_vector[i].hid_input_acc_threshold,&acc_buffer);
+              break;
             }
-          } 
-          
-          //通常の場合
-          else if(pk_vector[i].roll_min < roll && roll < pk_vector[i].roll_max){
-            if(serial_ON)Serial.println(String("In,")+String(pk_vector[i].hid_input) + ","+String(pk_vector[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
-            M5.Lcd.setCursor(10,60);
-            M5.Lcd.println(String("In,")+String(pk_vector[i].hid_input) + ","+String(pk_vector[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
-            mc.execSF_HIDInputs(pk_vector[i].hid_inputs,(float)pk_vector[i].hid_input_acc_threshold,&acc_buffer);
-            break;
           }
         }
       }
+      else if(mc.mode==MODE_ROLL_PITCH_VALIDATION){
+        pk pk_selected;
+        float roll_pitch_distance;
+        float roll_pitch_distance_prev=999;
+        if(events_bool[0]==true){
+          //if(mc.current_game_mode==MODE_SF_P1){ pks = pk_vector_sf_left;}
+          //else if(mc.current_game_mode==MODE_SF_P2) { pks = p2_pk_vector_sf_left;}
+
+          for(uint8_t i = 0; i < pk_references.size(); i++){
+
+            short roll_ref = pk_references[i].rpy[0];
+            short pitch_ref = pk_references[i].rpy[1];
+            //float yaw = pk_references[i].rpy[2];
+
+            //roll_refをオフセット
+            /*
+            if (roll_ref < -90) 
+            {
+                roll_re = 180 + (-1 * (-180 - roll));
+            }
+            roll = roll - 90; // roll=90°を中心にするためのオフセット
+            */
 
 
-      pk pk_selected;
-      float roll_pitch_distance;
-      float roll_pitch_distance_prev=999;
-      if(events_bool[0]==true){
-        //if(mc.current_game_mode==MODE_SF_P1){ pks = pk_vector_sf_left;}
-        //else if(mc.current_game_mode==MODE_SF_P2) { pks = p2_pk_vector_sf_left;}
+            //roll範囲は -180° ~ 180°であり最小roll距離を求めたいので条件分岐する
+            float roll_diff = roll - roll_ref;
+            if(roll > 90 && roll_ref < -90){
+              roll_diff = (180-roll) + (180 + roll_ref); // 1*(150) + (-180 - (-150)) = 30
+            }else if(roll < -90 && roll_ref > 90){
+              roll_diff =-(-180-roll)+ (180 - roll_ref); //-1*(-150) + (180 - 150) = 30
+                                                    //(150,-50) & Ref(-130,-31)?
+                                                    //(150,-50) & (100,0) 
+                                                    //(170,-20) →(100,0) ×. (本来は(-130,-31))
+                                                    //(-170,-20)→(150,-50)〇
+            }else{
+            }
 
-        for(uint8_t i = 0; i < pk_references.size(); i++){
-
-          short roll_ref = pk_references[i].rpy[0];
-          short pitch_ref = pk_references[i].rpy[1];
-          //float yaw = pk_references[i].rpy[2];
-
-          //roll_refをオフセット
-          /*
-          if (roll_ref < -90) 
-          {
-              roll_re = 180 + (-1 * (-180 - roll));
-          }
-          roll = roll - 90; // roll=90°を中心にするためのオフセット
-          */
-
-
-          //roll範囲は -180° ~ 180°であり最小roll距離を求めたいので条件分岐する
-          float roll_diff = roll - roll_ref;
-          if(roll > 90 && roll_ref < -90){
-            roll_diff = (180-roll) + (180 + roll_ref); // 1*(150) + (-180 - (-150)) = 30
-          }else if(roll < -90 && roll_ref > 90){
-            roll_diff =-(-180-roll)+ (180 - roll_ref); //-1*(-150) + (180 - 150) = 30
-                                                   //(150,-50) & Ref(-130,-31)?
-                                                   //(150,-50) & (100,0) 
-                                                   //(170,-20) →(100,0) ×. (本来は(-130,-31))
-                                                   //(-170,-20)→(150,-50)〇
-          }else{
-          }
-
-        
-          float pitch_diff = pitch - pitch_ref;
           
-          //pk_referencesの(roll,pitch)座標と現在の(roll,pitch)座標とのユークリッド距離が最小となるpk_referenceを選択する
-          roll_pitch_distance = sqrt(roll_diff*roll_diff + pitch_diff*pitch_diff);
-          if(roll_pitch_distance_prev > roll_pitch_distance){
-            pk_selected = pk_references[i];
-            roll_pitch_distance_prev = roll_pitch_distance;
+            float pitch_diff = pitch - pitch_ref;
+            
+            //pk_referencesの(roll,pitch)座標と現在の(roll,pitch)座標とのユークリッド距離が最小となるpk_referenceを選択する
+            roll_pitch_distance = sqrt(roll_diff*roll_diff + pitch_diff*pitch_diff);
+            if(roll_pitch_distance_prev > roll_pitch_distance){
+              pk_selected = pk_references[i];
+              roll_pitch_distance_prev = roll_pitch_distance;
+            }
           }
+          if(BLEHID_ENABLE)mc.inputKey(pk_selected.hid_input);
+          if(DEBUG_HID)Serial.printf("selected_pk:%c,%d,%d, current_rp:%f,%f \r\n",pk_selected.hid_input,pk_selected.rpy[0],pk_selected.rpy[1],roll,pitch);
+          if(DEBUG_HID)Serial.printf("selected_pk,%c,%d,%d \r\n",pk_selected.hid_input,pk_selected.rpy[0],pk_selected.rpy[1]);
+          roll_pitch_distance_prev=999;
+          events_bool[0]=false;
         }
-        
-        if(DEBUG_HID)Serial.printf("selected_pk:%c,%d,%d, current_rp:%f,%f \r\n",pk_selected.hid_input,pk_selected.rpy[0],pk_selected.rpy[1],roll,pitch);
-        if(DEBUG_HID)Serial.printf("selected_pk,%c,%d,%d \r\n",pk_selected.hid_input,pk_selected.rpy[0],pk_selected.rpy[1]);
-        roll_pitch_distance_prev=999;
-        events_bool[0]=false;
       }
-      /*
-      std::vector<pk> pks;
-      if(events_bool[0]==true){
-        if(mc.current_game_mode==MODE_SF_P1){ pks = pk_vector_sf_left;}
-        else if(mc.current_game_mode==MODE_SF_P2) { pks = p2_pk_vector_sf_left;}
+      else if(mc.mode==MODE_MOUSE){
+        float mouse_scale=5;
+        float pitch_delta = mouse_scale*mc.mouse_scale2*(pitch - pitch_prev);
+        float yaw_delta = mouse_scale*mc.mouse_scale2*(yaw - yaw_prev);
+        if(events_bool[0]==true && events_bool[1]==true){
+          if(!LEFT_DISPLAY){
+            
+          }
+          else if(LEFT_DISPLAY){
+            //pitch変化が負の場合スクロールアップ、正の場合スクロールダウン
+            if(pitch_delta < 0){
+              Mouse.move(0,0,1);
+            }else if(pitch_delta > 0){
+              Mouse.move(0,0,-1);
+            }
+          }
+        }else if(events_bool[0]==true){
+          if(!LEFT_DISPLAY){
+            
+          }
+          else if(LEFT_DISPLAY){
+            //pitch_deltaがマイナスの場合、マウスの上下移動が逆になるので符号を反転させる
+            mc.moveMouse(yaw_delta,pitch_delta);
+          }
+        }else if(events_bool[1]==true){
+          if(!LEFT_DISPLAY){
+            
+          }
+          else if(LEFT_DISPLAY){
+            //Mouse.press(MOUSE_LEFT);
+            Mouse.click(MOUSE_LEFT);
+            /*
+            float exponent = 1.5;
+            float mouse_scale=5;
+            float pitch_delta = mouse_scale*(pitch - pitch_prev);
+            float yaw_delta = mouse_scale*(yaw - yaw_prev);
+            //pitch_deltaがマイナスの場合、マウスの上下移動が逆になるので符号を反転させる
+            float xMove = (yaw_delta < 0) ? -1 * round(pow(yaw_delta,exponent)) : round(pow(yaw_delta,exponent));
+            float yMove = (pitch_delta < 0) ? -1 * round(pow(pitch_delta,exponent)) : round(pow(pitch_delta,exponent));
 
-        for(uint8_t i = 0; i < pks.size(); i++){
-          //Rollが180度をまたぐ場合
-          if(pks[i].roll_min < 180 && pks[i].roll_max > 180){
-          //例えばRoll 150 ~ 210の場合、150°以上または-150°以下の場合に入力を受け付ける
-            if((pks[i].roll_min < roll) && (-1 *(180 - (pks[i].roll_max - 180)) < roll )){
+            mc.moveMouse(xMove,yMove);
+            //mc.moveMouse(yaw_delta,pitch_delta);
+            */
+          }
+        }else if(events_bool[2]==true){
+            Mouse.click(MOUSE_RIGHT);
+        }
+      }
+      else if(mc.mode==MODE_STREET_FIGHTER){
+        std::vector<pk> pks;
+        if(events_bool[0]==true){
+          if(mc.current_game_mode==MODE_SF_P1){ pks = pk_vector_sf_left;}
+          else if(mc.current_game_mode==MODE_SF_P2) { pks = p2_pk_vector_sf_left;}
+
+          for(uint8_t i = 0; i < pks.size(); i++){
+            //Rollが180度をまたぐ場合
+            if(pks[i].roll_min < 180 && pks[i].roll_max > 180){
+            //例えばRoll 150 ~ 210の場合、150°以上または-150°以下の場合に入力を受け付ける
+              if((pks[i].roll_min < roll) && (-1 *(180 - (pks[i].roll_max - 180)) < roll )){
+                mc.execSF_HIDInputs(pks[i].hid_inputs,(float)pks[i].hid_input_acc_threshold,&acc_buffer);
+              }
+            } 
+            
+            //通常の場合
+            else if(pks[i].roll_min < roll && roll < pks[i].roll_max){
+              if(serial_ON)Serial.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
+              M5.Lcd.setCursor(10,60);
+              M5.Lcd.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
               mc.execSF_HIDInputs(pks[i].hid_inputs,(float)pks[i].hid_input_acc_threshold,&acc_buffer);
+              break;
             }
-          } 
-          
-          //通常の場合
-          else if(pks[i].roll_min < roll && roll < pks[i].roll_max){
-            if(serial_ON)Serial.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
-            M5.Lcd.setCursor(10,60);
-            M5.Lcd.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
-            mc.execSF_HIDInputs(pks[i].hid_inputs,(float)pks[i].hid_input_acc_threshold,&acc_buffer);
-            break;
           }
+          events_bool[0]=false;
         }
-        events_bool[0]=false;
-      }
-      else if(events_bool[1]==true){
-        if(mc.current_game_mode==MODE_SF_P1){ pks = pk_vector_sf_right;}
-        else if(mc.current_game_mode==MODE_SF_P2) { pks = p2_pk_vector_sf_right;}
+        else if(events_bool[1]==true){
+          if(mc.current_game_mode==MODE_SF_P1){ pks = pk_vector_sf_right;}
+          else if(mc.current_game_mode==MODE_SF_P2) { pks = p2_pk_vector_sf_right;}
 
-        for(uint8_t i = 0; i < pks.size(); i++){
-          //Rollが180度をまたぐ場合
-          if(pks[i].roll_min < 180 && pks[i].roll_max > 180){
-          //例えばRoll 150 ~ 210の場合、150°以上または-150°以下の場合に入力を受け付ける
-            if((pks[i].roll_min < roll) && (-1 *(180 - (pks[i].roll_max - 180)) < roll )){
+          for(uint8_t i = 0; i < pks.size(); i++){
+            //Rollが180度をまたぐ場合
+            if(pks[i].roll_min < 180 && pks[i].roll_max > 180){
+            //例えばRoll 150 ~ 210の場合、150°以上または-150°以下の場合に入力を受け付ける
+              if((pks[i].roll_min < roll) && (-1 *(180 - (pks[i].roll_max - 180)) < roll )){
+                mc.execSF_HIDInputs(pks[i].hid_inputs,(float)pks[i].hid_input_acc_threshold,&acc_buffer);
+              }
+            }
+            
+            //通常の場合
+            else if(pks[i].roll_min < roll && roll < pks[i].roll_max){
+              if(serial_ON)Serial.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
+              M5.Lcd.setCursor(10,60);
+              M5.Lcd.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
               mc.execSF_HIDInputs(pks[i].hid_inputs,(float)pks[i].hid_input_acc_threshold,&acc_buffer);
+              break;
             }
           }
+          events_bool[1]=false;
           
-          //通常の場合
-          else if(pks[i].roll_min < roll && roll < pks[i].roll_max){
-            if(serial_ON)Serial.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
-            M5.Lcd.setCursor(10,60);
-            M5.Lcd.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
-            mc.execSF_HIDInputs(pks[i].hid_inputs,(float)pks[i].hid_input_acc_threshold,&acc_buffer);
-            break;
-          }
         }
-        events_bool[1]=false;
-        
       }
-      */
 
+/*
       if(event==REGISTRATION_ROLL_EVENT){
         char input_key;
         if(input_serial_char!=NULL) input_key = input_serial_char;
@@ -450,6 +532,7 @@ static void hidSessionLoop(void* arg) {
         pk_vector.push_back(pk_reg);
 
         M5.Lcd.println(Serial.readStringUntil('/0'));
+        
         for(uint8_t i = 0; i < pk_vector.size(); i++){
           M5.Lcd.setCursor(10,80+i*7);
           M5.Lcd.println(String(pk_vector[i].rpy_priority) +"," +String(pk_vector[i].roll_min) + "," + String(pk_vector[i].roll_max) + "," +String(pk_vector[i].hid_input));
@@ -463,25 +546,30 @@ static void hidSessionLoop(void* arg) {
         pk pk_reg = {'p',pitch-22.5,pitch+22.5,input_key};
         pk_vector.push_back(pk_reg);
       }
-      else if(event==REGISTRATION_ROLL_PITCH_EVENT){
-        //pk pk5 = {MODE_STREET_FIGHTER,5,'r',-30,30,-30,30,{0,0,0},{0,0,0,0},'1',{KEY_DOWN_ARROW,KEY_RIGHT_ARROW,'a','\0'},50,3}; //波動拳
-        char input_key;
-        if(input_serial_char!=NULL){
-          input_key = input_serial_char;
-        }else{
-          Serial.println("input_key is null");
-          return;
+*/
+
+/*
+        if(event==REGISTRATION_ROLL_PITCH_EVENT){
+          //pk pk5 = {MODE_STREET_FIGHTER,5,'r',-30,30,-30,30,{0,0,0},{0,0,0,0},'1',{KEY_DOWN_ARROW,KEY_RIGHT_ARROW,'a','\0'},50,3}; //波動拳
+          char input_key;
+          if(input_serial_char!=NULL){
+            input_key = input_serial_char;
+          }else{
+            Serial.println("input_key is null");
+            input_key = '!';
+          }
+
+          //単一文字の場合
+          pk pk_reg = {MODE_STREET_FIGHTER,6,'r',30,60,-30,30,{roll,pitch,yaw},{q_array[0],q_array[1],q_array[2],q_array[3]},input_key,{input_key,'\0'},50,0};
+
+          //連続文字の場合
+            //後日実装
+
+          pk_references.push_back(pk_reg);
+          input_serial_char = NULL;
         }
-
-        //単一文字の場合
-        pk pk_reg = {MODE_STREET_FIGHTER,6,'r',30,60,-30,30,{roll,pitch,yaw},{q_array[0],q_array[1],q_array[2],q_array[3]},input_key,{input_key,'\0'},50,0};
-
-        //連続文字の場合
-          //後日実装
-
-        pk_references.push_back(pk_reg);
-        input_serial_char = NULL;
       }
+*/
 
       
       mc.keyboardReleaseAll();        
@@ -617,11 +705,29 @@ static void ButtonLoop(void* arg) {
       digitalWrite(10, HIGH); 
     }
     else if(M5.BtnB.wasReleasefor(10)){
+      BLEHID_ENABLE = !BLEHID_ENABLE;
       //event = INPUT_EVENT;
     }
     else{          
     }
 
+    uint8_t axpButton = M5.Axp.GetBtnPress();
+    //電源ボタンを1秒以上押した場合
+    if(axpButton==1){
+      if(mc.mode==MODE_MOUSE){
+        mc.mode = MODE_ROLL_PITCH_VALIDATION;
+        if(DEBUG_HID) Serial.println("REGISTRATION_ROLL_PITCH_EVENT");
+      }else if(mc.mode==MODE_ROLL_PITCH_VALIDATION){
+        mc.mode = MODE_MOUSE;
+        if(DEBUG_HID) Serial.println("MODE_MOUSE");
+      }
+    }
+    //電源ボタンを1秒未満押してから離した場合
+    if(axpButton==2){
+      mc.mouse_scale2 += 1;
+      Serial.println(mc.mouse_scale2);
+      if(mc.mouse_scale2 > 5) mc.mouse_scale2 = 1;
+    }
 
     //ボタン判定
     for(uint8_t i=0; i<sizeof(events_bool); i++){
@@ -629,13 +735,13 @@ static void ButtonLoop(void* arg) {
       if(mc.prev_button_state[i] == false && mc.switchRead(mc.button[i])==true){
           mc.prev_button_state[i] = true;
           events_bool[i] = true;
-          Serial.println("..");
+          //Serial.println("..");
         }
       //ボタン離す判定
       else if(mc.prev_button_state[i] == true && mc.switchRead(mc.button[i])==false){
           mc.prev_button_state[i] = false;
           events_bool[i] = false;
-          Serial.println("!");
+          //Serial.println("!");
       }
     }
     
@@ -839,11 +945,11 @@ void serialprint_pk_references(String option){
 void calibrateMPU6886(){
   float gyroSumX,gyroSumY,gyroSumZ;
   float accSumX,accSumY,accSumZ;
-  int calibCount = 1000;
+  float calibCount = 500;
 
   Serial.println("Calibrating...");
   digitalWrite(10, LOW);
-  vTaskDelay(500);
+  vTaskDelay(1000);
   digitalWrite(10, HIGH);
   vTaskDelay(100);
   digitalWrite(10, LOW); 
@@ -856,7 +962,7 @@ void calibrateMPU6886(){
       accSumX += accX;
       accSumY += accY;
       accSumZ += accZ;
-      vTaskDelay(1);
+      vTaskDelay(10);
       //Serial.printf("%6.2f, %6.2f, %6.2f\r\n", accX, accY, accZ);
   }
   gOX = gyroSumX/calibCount;
@@ -868,13 +974,49 @@ void calibrateMPU6886(){
   //aOZ = (accSumZ/calibCount) + 1.0;//重力加速度1G、つまりM5ボタンが下向きで行う想定
   //aOZ = (accSumZ/calibCount);//
   Serial.println("Calibrating...OK");
-  Serial.printf("%6.2f %6.2f %6.2f %6.2f %6.2f %6.2f", aOX, aOY, aOZ, gOX , gOY , gOZ);
-  Serial.printf("%6.2f %6.2f %6.2f %6.2f %6.2f %6.2f", aOX, aOY, aOZ, gOX , gOY , gOZ);
+  Serial.printf("%3.3f %3.3f %3.3f %3.3f %3.3f %3.3f", aOX, aOY, aOZ, gOX , gOY , gOZ);
+  //Serial.printf("%3.3f %3.3f %3.3f %3.3f %3.3f %3.3f", aOX, aOY, aOZ, gOX , gOY , gOZ);
   /*M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setCursor(0, 30);
   M5.Lcd.printf("%6.2f %6.2f %6.2f %6.2f %6.2f %6.2f", aOX, aOY, aOZ, gOX , gOY , gOZ);
   */
   digitalWrite(10, HIGH);
+
+  //EEPROMへ保存
+  uint16_t n = 0; uint16_t size=0; 
+  n = EEPROM_CAL_SPACE_START;
+  size = EEPROM_CAL_SPACE_SIZE;
+  
+  //==First, write num of element
+  uint8_t num_element = 6; //In case, acc,gyro,mg,quartanion , 13
+  EEPROM.put(n,num_element);
+  Serial.println("calibration: write:index_byte"+String(n)+",num_element"+String(num_element));
+  //n += sizeof(uint8_t) * 2;
+  n += sizeof(uint8_t);
+
+  EEPROM.put(n,aOX); n+=sizeof(float);
+  EEPROM.put(n,aOY); n+=sizeof(float);
+  EEPROM.put(n,aOZ); n+=sizeof(float);
+  EEPROM.put(n,gOX); n+=sizeof(float);
+  EEPROM.put(n,gOY); n+=sizeof(float);
+  EEPROM.put(n,gOZ); n+=sizeof(float);
+  EEPROM.commit();
+
+  //==Second, write pk array;
+  /*
+  for (int i=0 ; i < num_element; i++){
+    if(EEPROM_SIZE< (n + sizeof(pk))){
+      if(DEBUG_EEPROM)Serial.println("EEPROM_SIZE is over, stopped flush.");
+    }
+    else{
+      EEPROM.put(n,pk_vector[i]);
+      if(DEBUG_EEPROM)Serial.println("write:"+String(n)+","+String(pk_vector[i].hid_input) +","+String(pk_vector[i].rpy_priority));
+      n += sizeof(pk);
+    }
+  }
+  */
+
+
 }
 
 //void AllSerialOut()
