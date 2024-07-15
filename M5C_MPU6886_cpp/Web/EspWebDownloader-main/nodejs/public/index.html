@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src * data: gap: https://ssl.gstatic.com 'unsafe-eval' 'unsafe-inline'; style-src * 'unsafe-inline'; media-src *; img-src * data: content: blob:;">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="msapplication-tap-highlight" content="no">
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="viewport" content="user-scalable=no, initial-scale=1, maximum-scale=1, minimum-scale=1, width=device-width">
+
+  <!-- jQuery (necessary for Bootstrap's JavaScript plugins) -->
+  <script src="https://code.jquery.com/jquery-1.12.4.min.js" integrity="sha384-nvAa0+6Qg9clwYCGGPpDQLVpLNn0fRaROjHqs13t4Ggj3Ez50XnGQqc/r8MhnRDZ" crossorigin="anonymous"></script>
+  <!-- Latest compiled and minified CSS -->
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/3.4.1/css/bootstrap.min.css" integrity="sha384-HSMxcRTRxnN+Bdg0JdbxYKrThecOKuH5zCYotlSAcp1+c8xmyTe9GYg1l9a69psu" crossorigin="anonymous">
+  <!-- Optional theme -->
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/3.4.1/css/bootstrap-theme.min.css" integrity="sha384-6pzBo3FDv/PJ8r2KRkGHifhEocL+1X2rVCTTkUfGk7/0pbek5mMa1upzvWbrUbOZ" crossorigin="anonymous">
+  <!-- Latest compiled and minified JavaScript -->
+  <script src="https://stackpath.bootstrapcdn.com/bootstrap/3.4.1/js/bootstrap.min.js" integrity="sha384-aJ21OjlMXNL5UyIl/XNwTMqvzeRMZH2w8c5cRVpzpU8Y5bApTppSuUkhZXN0VxHd" crossorigin="anonymous"></script>
+
+  <link rel="stylesheet" href="css/start.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/spinkit/2.0.1/spinkit.min.css" />
+  <script src="js/methods_bootstrap.js"></script>
+  <script src="js/components_bootstrap.js"></script>
+  <script src="js/components_utils.js"></script>
+  <script src="js/vue_utils.js"></script>
+  <script src="js/gql_utils.js"></script>
+
+  <script src="js/remoteconsole.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vconsole/dist/vconsole.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.x/dist/vue.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vuex@3.x/dist/vuex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vue-router@3.x/dist/vue-router.min.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/js-cookie@2/src/js.cookie.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/toastr.js/latest/toastr.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/toastr.js/latest/toastr.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
+
+  <script type="module" src="https://unpkg.com/esp-web-tools@9/dist/web/install-button.js?module"></script>
+
+  <title>ESP Web Downloader</title>
+</head>
+
+<body>
+  <!--
+    <div id="loader-background">
+      <div class="sk-plane sk-center"></div>
+    </div>
+-->
+  <div id="top" class="container">
+    <div class="jumbotron">
+      <h2>ESP Web Downloader</h2>
+    </div>
+
+    <button class="btn btn-default" v-on:click="start_add_app">App追加</button>
+    <br><br>
+
+    <div class="panel panel-primary" v-for="(item, index) in firmware_list">
+      <div class="panel-heading">
+        <h3 class="panel-title">
+          <a data-toggle="collapse" v-bind:href="`#app${index}`">{{item.name}}</a>
+        </h3>
+      </div>
+      <div v-bind:id="`app${index}`" class="panel-collapse collapse">
+        <div class="panel-body">
+          <button class="btn btn-default btn-sm pull-right" v-on:click="start_update_app(index)">更新</button>
+          <button class="btn btn-default btn-sm pull-right" v-on:click="do_remove_app(index)">削除</button>
+          <label>memo</label><br> 
+          {{item.memo}}<br>
+          <br>
+          <button class="btn btn-default pull-right" v-on:click="start_add_model(index)">Model追加</button>
+          <br>
+          num_of_models: {{item.model_list.length}}
+          <ul class="list-unstyled">
+            <li v-for="(item2, index2) in item.model_list">
+              <br>
+              <esp-web-install-button v-bind:manifest="`firmwares/${item.uuid}/${item2.uuid}/manifest.json`"></esp-web-install-button> {{item2.name}}({{item2.chip_family}})
+              <button class="btn btn-default btn-sm pull-right" v-on:click="start_update_model(index, index2)">更新</button>
+              <button class="btn btn-default btn-sm pull-right" v-on:click="do_remove_model(index, index2)">削除</button>
+            </li>
+          </ul>
+      </div>
+      </div>
+    </div>
+
+
+    <div class="modal fade" id="update_app_dialog">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3 class="modal-title">App更新：{{target_app.name}}</h3>
+          </div>
+          <div class="modal-body">
+            <label>uuid</label> {{target_app.uuid}}<br>
+            <label>name</label> <input type="text" class="form-control" v-model="params_update_app.name"><br>
+            <label>memo</label> <textarea class="form-control" rows="3" v-model="params_update_app.memo"></textarea><br>
+            <label>created_at</label> {{toLocaleString(target_app.created_at)}}<br>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-primary" v-on:click="do_update_app">更新</button>
+            <button class="btn btn-default" v-on:click="dialog_close('#update_app_dialog');">キャンセル</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal fade" id="add_app_dialog">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3 class="modal-title">App追加</h3>
+          </div>
+          <div class="modal-body">
+            <label>name</label> <input type="text" class="form-control" v-model="params_add_app.name"><br>
+            <label>memo</label> <textarea class="form-control" v-model="params_add_app.memo" rows="3"></textarea>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-primary" v-on:click="do_add_app">追加</button>
+            <button class="btn btn-default" v-on:click="dialog_close('#add_app_dialog')">閉じる</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal fade" id="update_model_dialog">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3 class="modal-title">Model更新：{{params_update_model.name}}</h3>
+          </div>
+          <div class="modal-body">
+            <label>uuid</label> {{params_update_model.uuid}}<br>
+            <label>chip_family</label> {{params_update_model.chip_family}}<br>
+            <label>name</label> <input type="text" class="form-control" v-model="params_update_model.name"><br>
+            <label>memo</label> <textarea class="form-control" rows="3" v-model="params_update_model.memo"></textarea><br>
+            <label>created_at</label> {{toLocaleString(params_update_model.created_at)}}<br>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-primary" v-on:click="do_update_model">更新</button>
+            <button class="btn btn-default" v-on:click="dialog_close('#update_model_dialog');">キャンセル</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal fade" id="add_model_dialog">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3 class="modal-title">Model追加</h3>
+          </div>
+          <div class="modal-body">
+            <label>app</label> {{target_app.name}}<br>
+            <label>name</label> <input type="text" class="form-control" v-model="params_add_model.name"><br>
+            <label>memo</label> <textarea class="form-control" rows="3" v-model="params_add_model.memo"></textarea><br>
+            <div class="form-inline">
+              <label>chip_family</label> <select class="form-control" v-model="params_add_model.chip_family">
+                <option value="ESP32">ESP32</option>
+                <option value="ESP32-C3">ESP32-C3</option>
+                <option value="ESP32-S3">ESP32-S3</option>
+                <!--
+                <option value="ESP32-S2">ESP32-S2</option>
+                <option value="ESP8266">ESP8266</option>
+                -->
+              </select><br>
+              <label>bootloader</label> <comp_file accept=".bin" v-bind:callback="bootloader_change"></comp_file>
+              <label>partitions</label> <comp_file accept=".bin" v-bind:callback="partitions_change"></comp_file>
+              <label>firmware</label> <comp_file accept=".bin" v-bind:callback="firmware_change"></comp_file>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-primary" v-on:click="do_add_model">追加</button>
+            <button class="btn btn-default" v-on:click="dialog_close('#add_model_dialog');">キャンセル</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <router-view></router-view>
+
+    <!-- for progress-dialog -->
+    <progress-dialog v-bind:title="progress_title"></progress-dialog>
+  </div>
+
+  <script src="js/store.js"></script>
+  <script src="js/router.js"></script>
+  <script src="js/start.js"></script>
+</body>

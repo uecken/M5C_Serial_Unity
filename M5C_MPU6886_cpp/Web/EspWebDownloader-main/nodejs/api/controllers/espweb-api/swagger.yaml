@@ -1,0 +1,98 @@
+paths:
+  /espweb-add-model:
+    post:
+      consumes:
+        - multipart/form-data
+      parameters:
+        - in: formData
+          name: file_bootloader
+          type: file
+        - in: formData
+          name: file_partitions
+          type: file
+        - in: formData
+          name: file_firmware
+          type: file
+      responses:
+        200:
+          description: Success
+          schema:
+            type: object
+
+  /espweb-add-app:
+    post:
+      parameters:
+        - in: body
+          name: body
+          schema:
+            type: object
+      responses:
+        200:
+          description: Success
+          schema:
+            type: object
+
+  /espweb-list-app:
+    post:
+      parameters:
+        - in: body
+          name: body
+          schema:
+            type: object
+      responses:
+        200:
+          description: Success
+          schema:
+            type: object
+
+  /espweb-remove-model:
+    post:
+      parameters:
+        - in: body
+          name: body
+          schema:
+            type: object
+      responses:
+        200:
+          description: Success
+          schema:
+            type: object
+
+  /espweb-remove-app:
+    post:
+      parameters:
+        - in: body
+          name: body
+          schema:
+            type: object
+      responses:
+        200:
+          description: Success
+          schema:
+            type: object
+
+  /espweb-update-app:
+    post:
+      parameters:
+        - in: body
+          name: body
+          schema:
+            type: object
+      responses:
+        200:
+          description: Success
+          schema:
+            type: object
+
+  /espweb-update-model:
+    post:
+      parameters:
+        - in: body
+          name: body
+          schema:
+            type: object
+      responses:
+        200:
+          description: Success
+          schema:
+            type: object

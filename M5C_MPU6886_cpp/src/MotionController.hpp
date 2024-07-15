@@ -4,7 +4,17 @@
 
 #include <M5StickC.h>
 //#include "MotionController.h"
+#define USE_NIMBLE
+#ifdef USE_NIMBLE
 #include <BleCombo.h>
+BleCombo bleCombo;
+
+//#include <BleKeyboard.h>
+//#include <BleMouse.h>
+
+#elif defined(!USE_NIMBLE)
+#include <BleCombo.h>
+#endif
 
 const uint8_t P2_KEY_UP_ARROW = 'i';
 const uint8_t P2_KEY_DOWN_ARROW = 'k';
@@ -18,12 +28,17 @@ boolean LEFT_DISPLAY = true;
 
 
 //Mode設定
-#define MODE_MOUSE 0
-#define MODE_KEYBOARD 1
-#define MODE_MOUSE_KEYBOARD 1
-#define MODE_STREET_FIGHTER 3
-#define MODE_XXXXX 9
-#define MODE_ROLL_PITCH_VALIDATION 10
+#define NUM_OF_MODE 4
+#define MODE_STREET_FIGHTER_DIST 0
+#define MODE_MOTION_CONTROLLER 1  //MOTION INPUT
+#define MODE_MOTION_MASSAGE 2  //MOTION MESSAGE
+#define MODE_MOUSE 3
+#define MODE_MOUSE_KEYBOARD 4
+#define MODE_STREET_FIGHTER_RANGE 5 //not used
+
+
+#define MODE_KEYBOARD 99
+//#define MODE_XXXXX 9
 #define MODE_TEST_BUTTONB 20
 
 
@@ -51,7 +66,9 @@ class MotionController{
         uint8_t pin_LED = 10;
         String game_modes[2] = {MODE_SF_P1,MODE_SF_P2};
         String current_game_mode = game_modes[0];
-        uint8_t mode;
+        uint8_t mode = 0;
+        bool serial_ON=false;
+        bool ble_enable=true;
 
         SensorData* sensorDataArray;
         int dataSize_;
@@ -106,11 +123,26 @@ class MotionController{
             M5.Lcd.fillScreen(BLACK);
             M5.Lcd.setTextSize(1);
             M5.Lcd.setCursor(5, 5); //set the cursor location.  设置光标位置
-            M5.Lcd.println("Street Fighter Controller");
-            M5.Lcd.setCursor(30, 30);
-            M5.Lcd.println("  X       Y       Z");
-            M5.Lcd.setCursor(30, 50);
+            M5.Lcd.println("Motion Controller");
+            //M5.Lcd.setCursor(30, 30);
+            //M5.Lcd.println("  X       Y       Z");
+            M5.Lcd.setCursor(5, 15);
+            M5.Lcd.println("Mode:");
+            changeMCMode(true);
+
+            M5.Lcd.setCursor(5, 25);
+            M5.Lcd.println("GameMode:");
+            changeGameMode(true);
+
+            M5.Lcd.setCursor(5, 35); 
+            M5.Lcd.println("BLE:");
+
+            M5.Lcd.setCursor(15, 50); 
             M5.Lcd.println("  Pitch   Roll    Yaw");
+
+            M5.Lcd.setCursor(5, 72);
+            M5.Lcd.println("Serial:");
+            changeSerialONOFF(true);
 
             pinMode(pin_LED,   OUTPUT); //LED
             digitalWrite(pin_LED, HIGH); //OFF
@@ -120,51 +152,82 @@ class MotionController{
             //pinMode(button[1],   INPUT_PULLUP);//26
 
             if(LEFT_DISPLAY){
-                uint8_t button_tmp = button[0   ];
+                uint8_t button_tmp = button[0];
                 button[0] = button[2];
                 button[2] = button_tmp;
             }
 
-            Keyboard.begin();
-            Mouse.begin();
-
-            while(!Keyboard.isConnected()){
-                vTaskDelay(100);
-                M5.Lcd.setCursor(5, 15); //set the cursor location.  设置光标位置
-                M5.Lcd.print("BLE Connecting...");
+            if(ble_enable){
+                bleCombo.begin();
+                //bleCombo.begin(); 
+                //bleCombo.setDelay(7);           
+                while(!bleCombo.isConnected()){
+                    vTaskDelay(100);
+                    M5.Lcd.setCursor(5, 35);
+                    M5.Lcd.print("BLE Connecting...");
+                }
+                M5.Lcd.setCursor(5, 35);
+                M5.Lcd.print("BLE Connected!      ");
+            }else{
+                M5.Lcd.setCursor(5, 35);
+                M5.Lcd.print("BLE disabled      ");
             }
-                M5.Lcd.print("BLE Connected!    ");
+
         }
 
         void reConnect() {
-            Keyboard.end();
-            Mouse.end();
-            Keyboard.begin();
-            Mouse.begin();
+            bleCombo.end();
+            //bleCombo.end();
+            bleCombo.begin();
+            //bleCombo.begin();
+
+            while(!bleCombo.isConnected()){
+                vTaskDelay(100);
+                M5.Lcd.setCursor(5, 35);
+                M5.Lcd.print("BLE Connecting....");
+            }
+            M5.Lcd.print("BLE Connected!      ");
         }
 
 
         void inputKey(char key){
-            if(Keyboard.isConnected()){
-                Keyboard.println(key);   
+            if(bleCombo.isConnected()){
+                //bleCombo.println(key);   
+                bleCombo.write(key);
+            }else{
+                Serial.println("Keyboard is not connected.");
             }
         }
 
+        void inputKeys(String keys){
+            if(bleCombo.isConnected()){
+                bleCombo.println(keys);
+                bleCombo.releaseAll();
+            }else{
+                Serial.println("Keyboard is not connected.");
+            }
+        }
+
+
         void pressKey(char key){
-            if(Keyboard.isConnected()){
-                Keyboard.press(key);
+            if(bleCombo.isConnected()){
+                //bleCombo.press(key);
+                bleCombo.press(uint8_t(key));
+            }else{
+                Serial.println("Keyboard is not connected.");
             }
         }
 
         void releaseKey(char key){
-            if(Keyboard.isConnected()){
-                Keyboard.release(key);
+            if(bleCombo.isConnected()){
+                //bleCombo.release(key);
+                bleCombo.release(uint8_t(key));
             }
         }
 
         void keyboardReleaseAll(){
-            if(Keyboard.isConnected()){
-                Keyboard.releaseAll();
+            if(bleCombo.isConnected()){
+                bleCombo.releaseAll();
             }
         }
 
@@ -179,7 +242,7 @@ class MotionController{
             else if(y <-127) y=-127;
             */
             
-            Mouse.move(x,y);
+            bleCombo.move(x,y);
             return;
         }
 
@@ -191,7 +254,7 @@ class MotionController{
             int yMove = round(mouse_scale * pitchDelta / timeDelta);
             mc.moveMouse(xMove, yMove);
 
-            Mouse.move(x,y);
+            bleCombo.move(x,y);
             return;
         }
 */
@@ -228,6 +291,7 @@ class MotionController{
                 }
             }
 
+            return true;
         }
 
 
@@ -239,32 +303,39 @@ class MotionController{
 
 
             digitalWriteLED(true);
-            
+            /* 5/1 remove for Stick Command
             if(strlen(inputs)<=4){
                 delay(100);
             }
+            */
 
+            if(!bleCombo.isConnected()){
+                Serial.println("BLE is not connected.");
+            }
             while(inputs[i]!='\0'){
                 if((acc_buffer->getMaxAbsAccel(5)) >= acc_threshold ) acc_flag = true;
                 
                 //過去入力ボタンのリリース
                 //(波動拳等のコマンド入力で初期入力の↓がリリースされている必要がある)
                 if(i>=2){
-                    Keyboard.release(inputs[i-2]);
+                    //bleCombo.release(inputs[i-2]);
+                    bleCombo.release(uint8_t(inputs[i-2]));
                     vTaskDelay(20);
        
                 }
 
                 //最終入力値以外の通常入力
                 if(inputs[i+1]!='\0'){
-                    Keyboard.press(inputs[i]);
+                    //bleCombo.press(inputs[i]);
+                    bleCombo.press(uint8_t(inputs[i]));
                     vTaskDelay(30);
                 }
                 //最終入力値は一定以上の閾値が観測された場合に実行する
                 else if(inputs[i+1]=='\0'){
                     if(acc_flag){
                         digitalWriteLED(false);
-                        Keyboard.press(inputs[i]);
+                        //bleCombo.press(inputs[i]);
+                        bleCombo.press(uint8_t(inputs[i]));
                         acc_flag = false;
                     }
                     vTaskDelay(30);
@@ -276,35 +347,102 @@ class MotionController{
 
             if(inputs[i]=='\0'){
                 vTaskDelay(50);
-                Keyboard.releaseAll();
+                bleCombo.releaseAll();
                 digitalWriteLED(false);
             }
 
         }
 
-        void changeGameMode()
-        {
-            if(current_game_mode == game_modes[0]){
-                current_game_mode = game_modes[1];
-            }else{
-                current_game_mode = game_modes[0];
+        void changeMCMode(boolean init){
+            /*
+            if(mc.mode==MODE_MOUSE){
+                mc.mode = MODE_MOTION_CONTROLLER
+;
+                if(DEBUG_HID) Serial.println("MODE_MOTION_CONTROLLER");
+
+            }else if(mc.mode==MODE_MOTION_CONTROLLER){
+                mc.mode = MODE_STREET_FIGHTER;
+                if(DEBUG_HID) Serial.println("MODE_STREET_FIGHTER");
+
+            }else if(mc.mode==MODE_STREET_FIGHTER){
+                mc.mode = MODE_MOUSE;
+                if(DEBUG_HID) Serial.println("MODE_MOUSE");
             }
-            M5.Lcd.setCursor(5, 15); 
+            */
+            if(!init) mode = (mode + 1)% NUM_OF_MODE;
+            String mode_str;
+            switch(mode){
+                case MODE_STREET_FIGHTER_DIST: mode_str="STREET FIGHTER      "; break;
+                case MODE_MOTION_CONTROLLER: mode_str  ="MOTION CONTROLLER   "; break;
+                case MODE_MOTION_MASSAGE: mode_str     ="MOTION_MASSAGE      "; break;  
+                case MODE_MOUSE: mode_str              ="MOUSE               "; break;
+                //case MODE_MOUSE_KEYBOARD: mode_str     ="MOUKEY              "; break;
+                //case MODE_STREET_FIGHTER_RANGE:mode_str="STREET FIGHTER OLD  "; break;
+
+                default: mode_str="UNKNOWN      "; break;
+            }
+            M5.Lcd.setCursor(5, 15);
+            M5.Lcd.println("Mode:"+mode_str);
+        }
+
+        void changeGameMode(boolean init)
+        {
+            if(!init){
+                if(mode==MODE_STREET_FIGHTER_DIST || mode==MODE_STREET_FIGHTER_RANGE ){
+                    if(current_game_mode == game_modes[0]){
+                        current_game_mode = game_modes[1];
+                    }else{
+                        current_game_mode = game_modes[0];
+                    }
+                }
+            }
+            M5.Lcd.setCursor(5, 25); 
             M5.Lcd.print("GameMode:"+current_game_mode);
+        }
+
+        void changeSerialONOFF(bool init){
+            //String serial_str;
+            if(!init){
+                if(serial_ON){
+                    //M5.Lcd.println("Serial:OFF");
+                    serial_ON = false;
+                    //serial_str = "OFF";
+                }
+                else if(!serial_ON){
+                    //M5.Lcd.println("Serial:ON ");
+                    serial_ON = true;
+                    //serial_str = "ON";
+                }
+            }
+            M5.Lcd.setCursor(5, 70);
+            M5.Lcd.print("Serial:"+String(serial_ON));
+        }
+
+        void serialON(){
+            serial_ON = true;
+            M5.Lcd.setCursor(5, 70);
+            M5.Lcd.print("Serial:"+String(serial_ON));
+        }
+        void serialOFF(){
+            serial_ON = false;
+            M5.Lcd.setCursor(5, 70);
+            M5.Lcd.print("Serial:"+String(serial_ON));
         }
 
 
         void SF_hadoken(){
-                Keyboard.press(KEY_DOWN_ARROW);
+                bleCombo.press(KEY_DOWN_ARROW);
                 vTaskDelay(50);
-                Keyboard.press(KEY_RIGHT_ARROW);
-                vTaskDelay(50);
-
-                Keyboard.release(KEY_DOWN_ARROW);
-                Keyboard.press(KEY_RIGHT_ARROW);
+                bleCombo.press(KEY_RIGHT_ARROW);
                 vTaskDelay(50);
 
-                Keyboard.press('a');
+                bleCombo.release(KEY_DOWN_ARROW);
+                //bleCombo.press(KEY_RIGHT_ARROW);
+                bleCombo.press(uint8_t(KEY_RIGHT_ARROW));
+                vTaskDelay(50);
+
+                //bleCombo.press('a');
+                bleCombo.press(uint8_t('a'));
                 //TaskDelay(50);
         }
 
