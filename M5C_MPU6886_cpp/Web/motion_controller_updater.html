@@ -1,0 +1,185 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Motion Controller Updater</title>
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        body, html {
+            height: 100%;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+        }
+        .container-fluid {
+            flex: 1;
+            display: flex;
+        }
+        .sidebar {
+            min-width: 200px;
+            max-width: 200px;
+            background: #f8f9fa;
+            padding: 10px;
+        }
+        .content {
+            flex: 1;
+            padding: 20px;
+        }
+        .threejs-canvas {
+            width: 100%;
+            height: 400px;
+        }
+        .controls {
+            background: rgba(255, 255, 255, 0.8);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        #serialOutput {
+            height: 150px;
+            overflow-y: scroll;
+        }
+        #pitchRollCanvas {
+            width: 100%;
+            height: 200px;
+            background: #f0f0f0;
+            border: 1px solid #ccc;
+        }
+    </style>
+    <script type="module" src="https://unpkg.com/esp-web-tools@8.0.1/dist/web/install-button.js?module"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script src="motion_controller.js"></script>
+</head>
+<body>
+<div class="container-fluid">
+    <!-- サイドバー -->
+    <div class="sidebar">
+        <h4>メニュー</h4>
+        <ul class="nav flex-column">
+            <li class="nav-item">
+                <a class="nav-link active" href="#page1" onclick="showPage('page1')">シリアル & 3D表示</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#page2" onclick="showPage('page2')">Firmware書き込み</a>
+            </li>
+        </ul>
+    </div>
+
+    <!-- メインコンテンツ -->
+    <div class="content">
+        <!-- ページ1 -->
+        <div id="page1" class="page">
+            <div class="row">
+                <div class="col-md-6 controls">
+                    <h4>Web Serial</h4>
+                    <button id="connectBtn" class="btn btn-primary">Connect</button>
+                    <div id="serialOutput" class="mt-2"></div>
+                    <div class="mt-2">
+                        <input type="text" id="serialInput" class="form-control" placeholder="Enter command">
+                        <button id="sendBtn" class="btn btn-secondary mt-2">Send</button>
+                    </div>
+                    <div class="mt-2">
+                        <p>Pitch: <span id="pitch">0</span></p>
+                        <p>Roll: <span id="roll">0</span></p>
+                        <p>Yaw: <span id="yaw">0</span></p>
+                        <p>Quaternion: <span id="quaternion">0, 0, 0, 1</span></p>
+                    </div>
+                    <div class="mt-2">
+                        <input type="checkbox" id="eulerToQuaternion" class="form-check-input">
+                        <label for="eulerToQuaternion" class="form-check-label">Euler to Quaternion</label>
+                    </div>
+                </div>
+                <div class="col-md-6 controls">
+                    <h4>3D Quaternion Display</h4>
+                    <button id="initYawBtn" class="btn btn-secondary">Init Yaw</button>
+                    <div id="threejsContainer" class="threejs-canvas mt-2"></div>
+                    <canvas id="pitchRollCanvas" class="mt-2"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- ページ2 -->
+        <div id="page2" class="page" style="display:none;">
+            <div class="controls">
+                <h4>Firmware Writing</h4>
+                <p>Select your product</p>
+                <div>
+                    <h5>Controller</h5>
+                    <ul class="radios">
+                        <li><label><input type="radio" name="type" value="motion_burst"> Motion Burst</label></li>
+                        <li><label><input type="radio" name="type" value="m5stickc"> M5StickC</label></li>
+                        <li><label><input type="radio" name="type" value="m5stickc_plus"> M5StickC Plus</label></li>
+                        <li><label><input type="radio" name="type" value="m5stickc_2"> M5StickC 2</label></li>
+                        <li><label><input type="radio" name="type" value="m5atom_s3"> M5Atom S3</label></li>
+                        <li><label><input type="radio" name="type" value="spiffs"> SPIFFS(test)</label></li>
+
+                    </ul>
+                    <ul class="radios">
+                        <li><label><input type="radio" name="type" value="m5stickc_spiffs"> M5StickC_withSPIFFS</label></li>
+
+                    </ul>
+                    <h5>Adapter</h5>
+                    <ul class="radios">
+                        <li><label><input type="radio" name="type" value="motion_burst_adapter"> Motion Burst Adapter</label></li>
+                        <li><label><input type="radio" name="type" value="rp2040_w"> RP2040 W</label></li>
+                        <li><label><input type="radio" name="type" value="m5atom_s3_adapter"> M5Atom S3</label></li>
+                    </ul>
+                </div>
+                <p class="button-row" align="center">
+                    <esp-web-install-button class="invisible"></esp-web-install-button>
+                </p>
+                <h2>Select Binary Files from Web Storage</h2>
+                <p>Select binary files from web storage to upload to M5StickC:</p>
+                <select id="webFilesSelect" multiple size="10"></select>
+                <button id="uploadSelectedFilesButton">Upload Selected Files</button>
+                <div id="status"></div>
+            </div>
+            <div class="controls mt-4">
+                <h4>基本情報書き込み</h4>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="communicationMode" value="ble_hid_usb_serial" id="bleHidUsbSerial">
+                    <label class="form-check-label" for="bleHidUsbSerial">
+                        BLE HID & USB Serial
+                    </label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="communicationMode" value="usb_hid_bluetooth_serial" id="usbHidBluetoothSerial">
+                    <label class="form-check-label" for="usbHidBluetoothSerial">
+                        USB HID & Bluetooth Serial (ESP32S3 or RP2040 Wのみ対応予定)
+                    </label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="communicationMode" value="ble_hid_bluetooth_serial" id="bleHidBluetoothSerial" disabled>
+                    <label class="form-check-label" for="bleHidBluetoothSerial">
+                        BLE HID & Bluetooth Serial (未サポートのためチェック付加にする)
+                    </label>
+                </div>
+                <div class="form-group mt-2">
+                    <label for="usbHidName">USB HID Name</label>
+                    <input type="text" class="form-control" id="usbHidName" placeholder="Enter USB HID Name">
+                </div>
+                <div class="form-group mt-2">
+                    <label for="bleHidName">BLE HID Name</label>
+                    <input type="text" class="form-control" id="bleHidName" placeholder="Enter BLE HID Name">
+                </div>
+                <div class="form-group mt-2">
+                    <label for="bluetoothSerialName">Bluetooth Serial Name</label>
+                    <input type="text" class="form-control" id="bluetoothSerialName" placeholder="Enter Bluetooth Serial Name">
+                </div>
+                <div class="form-group mt-2">
+                    <label for="WiFisetting">WiFi Setting</label>
+                    <input type="text" class="form-control" id="WiFI_ssid" placeholder="Enter WiFi SSID">
+                    <input type="text" class="form-control" id="WiFI_password" placeholder="Enter WiFi Password">
+
+                </div>
+                <button id="writeBasicInfoBtn" class="btn btn-secondary mt-2">基本情報書き込み</button>
+                <p class="mt-2">USB HIDとBluetooth Serialはサポート予定です。ESP32S3またはRP2040Wに限ります。</p>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

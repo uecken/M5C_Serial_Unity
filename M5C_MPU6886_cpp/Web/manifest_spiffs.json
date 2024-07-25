@@ -1,0 +1,14 @@
+{
+    "name": "Motion Controller",
+    "builds": [
+        {
+            "chipFamily": "ESP32",
+            "parts": [
+                {
+                    "path": "./firmware/spiffs/merged-firmware.bin",
+                    "offset": 0
+                }
+            ]
+        }
+    ]
+}

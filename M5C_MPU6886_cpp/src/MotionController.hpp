@@ -116,13 +116,13 @@ class MotionController{
 
 
         void begin() {
-            M5.begin();  //Init M5StickC Plus.  初始化 M5StickC Plus
+            M5.begin();  //Init M5StickC Plus.
             delay(500);
-            M5.Imu.Init(sampleFreq);  //Init IMU.  初始化IMU
-            M5.Lcd.setRotation(3);  //Rotate the screen. 将屏幕旋转
+            M5.Imu.Init(sampleFreq);  //Init IMU.  
+            M5.Lcd.setRotation(3);  //Rotate the screen. 
             M5.Lcd.fillScreen(BLACK);
             M5.Lcd.setTextSize(1);
-            M5.Lcd.setCursor(5, 5); //set the cursor location.  设置光标位置
+            M5.Lcd.setCursor(5, 5); //set the cursor location. 
             M5.Lcd.println("Motion Controller");
             //M5.Lcd.setCursor(30, 30);
             //M5.Lcd.println("  X       Y       Z");
@@ -158,6 +158,7 @@ class MotionController{
             }
 
             if(ble_enable){
+                bleCombo.setName("MotionController");
                 bleCombo.begin();
                 //bleCombo.begin(); 
                 //bleCombo.setDelay(7);           

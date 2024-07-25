@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Motion Controller Updater</title>
+    <meta name="description" content="Easily allow users to install Motion-Controller firmware and write key-mapping binary files by WebSerial." />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="color-scheme" content="dark light" />
+    <style>
+        body {
+            font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, sans-serif;
+            padding: 0;
+            margin: 0;
+            line-height: 1.4;
+        }
+        .content {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 12px;
+        }
+        h2 {
+            margin-top: 2em;
+        }
+        h3 {
+            margin-top: 1.5em;
+        }
+        a {
+            color: #03a9f4;
+        }
+        .invisible {
+            visibility: hidden;
+        }
+        .hidden {
+            display: none;
+        }
+        esp-web-install-button[install-unsupported] {
+            visibility: inherit;
+        }
+        .content pre {
+            max-width: 100%;
+            overflow-y: scroll;
+        }
+        .footer {
+            margin-top: 24px;
+            border-top: 1px solid #ccc;
+            padding-top: 24px;
+            text-align: center;
+        }
+        .footer .initiative {
+            font-style: italic;
+            margin-top: 16px;
+        }
+        table {
+            border-spacing: 0;
+        }
+        td {
+            padding: 8px;
+            border-bottom: 1px solid #ccc;
+        }
+        .radios li {
+            list-style: none;
+            line-height: 2em;
+        }
+        @media (prefers-color-scheme: dark) {
+            body {
+                background-color: #333;
+                color: #fff;
+            }
+            a {
+                color: #58a6ff;
+            }
+        }
+    </style>
+    <script type="module" src="https://unpkg.com/esp-web-tools@8.0.1/dist/web/install-button.js?module"></script>
+</head>
+<body>
+<div class="content">
+    <h1>Motion Controller Updater</h1>
+    <p>Select your product</p>
+    <ul class="radios">
+        <li>
+            <label><input type="radio" name="type" value="m5stickc" /> M5StickC</label>
+        </li>
+        <li>
+            <label><input type="radio" name="type" value="m5stickc_plus" /> M5StickC Plus</label>
+        </li>
+        <li>
+            <label><input type="radio" name="type" value="m5stickc_s2" /> M5StickC S2</label>
+        </li>
+        <li>
+            <label><input type="radio" name="type" value="m5atom_s3" /> M5Atom S3</label>
+        </li>
+    </ul>
+    <p class="button-row" align="center">
+        <esp-web-install-button class="invisible"></esp-web-install-button>
+    </p>
+    
+    <h2>Select Binary Files from Web Storage</h2>
+    <p>Select binary files from web storage to upload to M5StickC:</p>
+    <select id="webFilesSelect" multiple size="10"></select>
+    <button id="uploadSelectedFilesButton">Upload Selected Files</button>
+
+    <div id="status"></div>
+
+    <div class="footer">
+        Installer powered by <a href="https://esphome.github.io/esp-web-tools/">ESP Web Tools</a>.
+    </div>
+</div>
+
+<script>
+    const uploadSelectedFilesButton = document.getElementById('uploadSelectedFilesButton');
+    const webFilesSelect = document.getElementById('webFilesSelect');
+    const statusDiv = document.getElementById('status');
+    const radioButtons = document.querySelectorAll('input[name="type"]');
+    let port;
+
+    async function connectSerial() {
+        if (!("serial" in navigator)) {
+            statusDiv.textContent = "Web Serial API not supported.";
+            return null;
+        }
+
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200});
+        return port;
+    }
+
+    async function writeToSerial(data) {
+        const writer = port.writable.getWriter();
+        await writer.write(data);
+        writer.releaseLock();
+    }
+
+    async function fetchWebFiles() {
+        // ここでは静的なリストを使用していますが、サーバーからの動的リストを取得することもできます。
+        const files = ['firmware1.bin', 'firmware2.bin'];
+        webFilesSelect.innerHTML = '';
+        files.forEach(file => {
+            const option = document.createElement('option');
+            option.value = file;
+            option.textContent = file;
+            webFilesSelect.appendChild(option);
+        });
+    }
+
+    async function uploadSelectedFiles() {
+        const selectedFiles = Array.from(webFilesSelect.selectedOptions).map(option => option.value);
+        if (selectedFiles.length === 0) {
+            statusDiv.textContent = "No files selected.";
+            return;
+        }
+
+        if (!port) {
+            await connectSerial();
+        }
+
+        for (const fileName of selectedFiles) {
+            const response = await fetch(`/uploads/${fileName}`);
+            if (response.ok) {
+                const arrayBuffer = await response.arrayBuffer();
+                const header = `savepk2vectol,${fileName},${arrayBuffer.byteLength}\n`;
+
+                // Send header
+                await writeToSerial(new TextEncoder().encode(header));
+                // Send file data
+                await writeToSerial(new Uint8Array(arrayBuffer));
+
+                statusDiv.textContent += `Uploaded ${fileName}\n`;
+            } else {
+                statusDiv.textContent += `Failed to fetch ${fileName} from web storage.\n`;
+            }
+        }
+    }
+
+    uploadSelectedFilesButton.addEventListener('click', uploadSelectedFiles);
+
+    radioButtons.forEach(radio => {
+        radio.addEventListener('change', () => {
+            const button = document.querySelector('esp-web-install-button');
+            button.manifest = `./manifest_${radio.value}.json`;
+            button.classList.remove('invisible');
+        });
+    });
+
+    // ページロード時にWebストレージ上のファイルを取得
+    window.onload = fetchWebFiles;
+</script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+{
+    "name": "Motion Controller",
+    "builds": [
+        {
+            "chipFamily": "ESP32",
+            "parts": [
+                {
+                    "path": "./firmware/spiffs/bootloader.bin",
+                    "offset": 4096
+                },
+                {
+                    "path": "./firmware/spiffs/partitions.bin",
+                    "offset": 32768
+                },
+                {
+                    "path": "./firmware/spiffs/boot_app0.bin",
+                    "offset": 57344
+                }
+                ,{
+                    "path": "./firmware/spiffs/firmware.bin",
+                    "offset": 65536
+                }
+            ]
+        }
+    ]
+}
