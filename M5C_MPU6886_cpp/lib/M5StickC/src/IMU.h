@@ -13,7 +13,7 @@ public:
 
     IMU();
 
-    int Init(float sampleFreq);
+    int Init(float Fs);
 
     void getGres();
     void getAres();

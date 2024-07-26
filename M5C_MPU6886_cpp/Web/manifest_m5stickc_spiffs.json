@@ -5,19 +5,19 @@
             "chipFamily": "ESP32",
             "parts": [
                 {
-                    "path": "./firmware/m5c/bootloader.bin",
+                    "path": "./firmware/m5c_spiffs/bootloader.bin",
                     "offset": 4096
                 },
                 {
-                    "path": "./firmware/m5c/partitions.bin",
+                    "path": "./firmware/m5c_spiffs/partitions.bin",
                     "offset": 32768
                 },
                 {
-                    "path": "./firmware/m5c/firmware.bin",
+                    "path": "./firmware/m5c_spiffs/firmware.bin",
                     "offset": 65536
                 },
                 {
-                    "path": "./firmware/m5c/spiffs.bin",
+                    "path": "./firmware/m5c_spiffs/spiffs.bin",
                     "offset": 2662400
                 }
             ]

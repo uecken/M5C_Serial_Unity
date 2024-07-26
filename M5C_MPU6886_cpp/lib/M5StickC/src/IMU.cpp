@@ -7,8 +7,8 @@
 IMU::IMU() {
 }
 
-int IMU::Init(float sampleFreq) {
-    sampleFreq = sampleFreq;
+int IMU::Init(float Fs) {
+    sampleFreq = Fs;
     int imu_flag = M5.Sh200Q.Init();
     if (imu_flag != 0) {
         imu_flag = M5.Mpu6886.Init();
@@ -98,7 +98,6 @@ float* IMU::getAhrsData(float *pitch,float *roll,float *yaw, float aOX,float aOY
   float gyroX = 0;
   float gyroY = 0;
   float gyroZ = 0;
-
 
   getGyroData(&gyroX,&gyroY,&gyroZ);
   getAccelData(&accX,&accY,&accZ);

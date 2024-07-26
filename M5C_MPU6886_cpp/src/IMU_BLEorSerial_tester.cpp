@@ -329,8 +329,12 @@ void setup() {
     if(DEBUG_EEPROM)Serial.println("EEPROM_SIZE is over 4095(EEPROM_MAX_SIZE)");
   }
   else{
-    if(!EEPROM.begin(EEPROM_SIZE)) Serial.println("ERROR:EEPROM begin failed"); //EEPROM.begin(size)で確保できる最大サイズは通常、最大4095バイト（4KB未満）
-    readPKvector("MOTION_CONT");
+    if(!EEPROM.begin(EEPROM_SIZE)){
+      Serial.println("ERROR:EEPROM begin failed"); //EEPROM.begin(size)で確保できる最大サイズは通常、最大4095バイト（4KB未満）
+    }else{
+      Serial.println("ERROR:EEPROM begin succesed"); //EEPROM.begin(size)で確保できる最大サイズは通常、最大4095バイト（4KB未満）
+    }
+    //readPKvector("MOTION_CONT");
   }
 
   //EEPROMから読んだCalibration値を読み出し
@@ -343,6 +347,8 @@ void setup() {
   EEPROM.get(n,gOX); n+=sizeof(gOX);
   EEPROM.get(n,gOY); n+=sizeof(gOY);
   EEPROM.get(n,gOZ); n+=sizeof(gOZ);
+
+  Serial.printf("Read Cal:%d, %2.3f,%2.3f,%2.3f,%2.3f,%2.3f,%2.3f\r\n", size, aOX, aOY, aOZ,gOX, gOY, gOZ);
   if((abs(aOX) < 1 & abs(aOY) < 1 & abs(aOZ) < 1) & (abs(aOX) != 0 & abs(aOY) != 0 & abs(aOZ) != 0)){
     Serial.printf("Read Cal:%d, %2.3f,%2.3f,%2.3f,%2.3f,%2.3f,%2.3f\r\n", size, aOX, aOY, aOZ,gOX, gOY, gOZ);
   }else{
@@ -1361,8 +1367,12 @@ void calibrateMPU6886(){
   EEPROM.put(n,gOX); n+=sizeof(float);
   EEPROM.put(n,gOY); n+=sizeof(float);
   EEPROM.put(n,gOZ); n+=sizeof(float);
-  if(!EEPROM.commit()) Serial.println("ERROR:calibration commit failed");
-
+  if (!EEPROM.commit()) {
+      Serial.println("ERROR: calibration commit failed");
+  } else {
+      Serial.println("Calibration data committed to EEPROM");
+  }
+  
   resetTask(&taskHandleIMU);
   //==Second, write pk array;
   /*

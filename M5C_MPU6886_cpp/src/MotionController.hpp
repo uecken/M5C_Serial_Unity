@@ -144,6 +144,9 @@ class MotionController{
             M5.Lcd.println("Serial:");
             changeSerialONOFF(true);
 
+            M5.Lcd.setCursor(100, 72);
+            M5.Lcd.print(sampleFreq);
+
             pinMode(pin_LED,   OUTPUT); //LED
             digitalWrite(pin_LED, HIGH); //OFF
             pinMode(button[0],   INPUT_PULLUP); //PU 起動モード設定のためか、常にプルアップされており、ソフト制御できない。スイッチでGNDに落として判定する必要あり。
