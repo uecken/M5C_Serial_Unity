@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -113,6 +114,12 @@
                         <li><label><input type="radio" name="type" value="m5stickc_plus"> M5StickC Plus</label></li>
                         <li><label><input type="radio" name="type" value="m5stickc_2"> M5StickC 2</label></li>
                         <li><label><input type="radio" name="type" value="m5atom_s3"> M5Atom S3</label></li>
+                        <li><label><input type="radio" name="type" value="spiffs"> SPIFFS(test)</label></li>
+
+                    </ul>
+                    <ul class="radios">
+                        <li><label><input type="radio" name="type" value="m5stickc_spiffs"> M5StickC_withSPIFFS</label></li>
+
                     </ul>
                     <h5>Adapter</h5>
                     <ul class="radios">
@@ -151,16 +158,22 @@
                     </label>
                 </div>
                 <div class="form-group mt-2">
-                    <label for="usbHidName">USB HID 名称</label>
+                    <label for="usbHidName">USB HID Name</label>
                     <input type="text" class="form-control" id="usbHidName" placeholder="Enter USB HID Name">
                 </div>
                 <div class="form-group mt-2">
-                    <label for="bleHidName">BLE HID 名称</label>
+                    <label for="bleHidName">BLE HID Name</label>
                     <input type="text" class="form-control" id="bleHidName" placeholder="Enter BLE HID Name">
                 </div>
                 <div class="form-group mt-2">
-                    <label for="bluetoothSerialName">Bluetooth Serial 名称</label>
+                    <label for="bluetoothSerialName">Bluetooth Serial Name</label>
                     <input type="text" class="form-control" id="bluetoothSerialName" placeholder="Enter Bluetooth Serial Name">
+                </div>
+                <div class="form-group mt-2">
+                    <label for="WiFisetting">WiFi Setting</label>
+                    <input type="text" class="form-control" id="WiFI_ssid" placeholder="Enter WiFi SSID">
+                    <input type="text" class="form-control" id="WiFI_password" placeholder="Enter WiFi Password">
+
                 </div>
                 <button id="writeBasicInfoBtn" class="btn btn-secondary mt-2">基本情報書き込み</button>
                 <p class="mt-2">USB HIDとBluetooth Serialはサポート予定です。ESP32S3またはRP2040Wに限ります。</p>

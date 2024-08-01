@@ -403,7 +403,7 @@ static void ImuLoop(void* arg) {
       accX -= aOX; accY -= aOY; accZ -= aOZ; 
       //accABS = sqrt(accX*accX + accY*accY + accZ*accZ);
       gyroX -=gOX; gyroY -=gOY; gyroZ -=gOZ;       
-      q_array = M5.IMU.getAhrsData(&pitch,&roll,&yaw,aOX,aOY,aOZ,gOX,gOY,gOZ);
+      q_array = M5.IMU.getAhrsData(&pitch,&roll,&yaw,aOX,aOY,aOZ,gOX,gOY,gOZ); //w,x,y,z
       //q_array = M5.IMU.getAhrsData2(&pitch,&roll,&yaw,aOX,aOY,aOZ,gOX,gOY,gOZ);
       pitch -=pO;  roll -= rO;  yaw -= yO;//★最小値-188.5。原因はgyroZの補正ができていないからか？一時的に+8.5して補正する。
       if(LEFT_DISPLAY){
