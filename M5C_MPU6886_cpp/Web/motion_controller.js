@@ -254,7 +254,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function plotIntersectionWithSphere(quaternion) {
-        const direction = new THREE.Vector3(1, 0, 0);
+        const direction = new THREE.Vector3(0, 0, 1);
         direction.applyQuaternion(quaternion).normalize();
         const intersection = direction.clone().multiplyScalar(1);
         const color = intersection.z >= 0 ? 0x0000ff : 0x800080;
