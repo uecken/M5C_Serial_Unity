@@ -191,7 +191,7 @@ document.addEventListener('DOMContentLoaded', () => {
                //quaternion.set(-qz, qw, -qx, qy);
 
                //quaternion.set(qx, qy, qz, qw);
-               //quaternion.set(qx, qy, qz, -qw); //おしい
+               //quaternion.set(qx, -qy, qz, -qw); //おしい
                //quaternion.set(-qx, -qy, -qz, qw); //おしい
                //quaternion.set(-qx, -qy, -qz, -qw);
                //quaternion.set(-qx, qy, qz, -qw); //おしい
@@ -207,11 +207,36 @@ document.addEventListener('DOMContentLoaded', () => {
                //quaternion.set(qz, qy, qw,-qx);//unityと同じで引数順調整
                //quaternion.set(qw, qx, qz,-qy);//unityと同じで引数順調整
 
-               //quaternion.set(-qz, qy, qw,qx);//unityと同じで引数順調整
-               //quaternion.set(-qw, qx, qz,qy);//unityと同じで引数順調整
+    
 
-               //quaternion.set(-qw, qx, qz, qy);//本来正しいはず
-               quaternion.set(-qw, qy, qz, qx);
+
+               //quaternion.set(-qw, qx, qz, qy);//unityの順番を変えたので本来正しいはず
+               //quaternion.set(qw, qx, qz, -qy);//本来正しいはず
+               //quaternion.set(qw, -qx, qz, qy);//本来正しいはず
+               //quaternion.set(-qw, qy, qz, qx);//OKかと思ったがOKではない
+               //quaternion.set(-qw, qy, qz, qx);//OKかと思ったがOKではない
+
+               //quaternion.set(qy, qw, qz, -qx);//yaw回転方向が逆
+            
+               //quaternion.set(-qz, qw, -qx, qy)
+               //quaternion.set( -qx, qy, qz, -qw )
+
+               //quaternion.set(-qw, qx, qz, qy);//unityの順番を変えたので本来正しいはず
+               //quaternion.set(qw, -qx, qz, qy);//unityの順番を変えたので本来正しいはず
+               //quaternion.set(-qz, qy, qw, qx);//https://ovide.hatenablog.com/entry/2018/05/16/183232
+
+                //unityの引数はxyzzの順
+                //q = new Quaternion(q_array[1], q_array[3], q_array[2], -q_array[0]).normalized;
+                //q = new Quaternion(qx, qz, qy, -qw).normalized;
+                //さらにxとyの符号を逆にすればよい。
+                //https://stackoverflow.com/questions/18066581/convert-unity-transforms-to-three-js-rotations
+                quaternion.set(-qx, qz, qy, qw)
+
+
+
+                //quaternion.set( qx, -qy, -qz, qw ) https://techblog.kayac.com/2022-group-calendar-three-js-sync-to-unity-webgl
+                //quaternion.set( -qx, qy, qz, -qw ) 
+                //quaternion.set(qw, qx, -qz, -qy);//本来正しいはず
 
 
 
@@ -310,14 +335,14 @@ document.addEventListener('DOMContentLoaded', () => {
         // 初期姿勢を直立に設定
         console.log("pushed inityawBtn")
         
-        const uprightQuaternion = new THREE.Quaternion();
+        //const uprightQuaternion = new THREE.Quaternion();
 //        uprightQuaternion.setFromEuler(new THREE.Euler(0, THREE.Math.degToRad(90), 0, 'YXZ'));        
 //        uprightQuaternion.setFromEuler(new THREE.Euler(0, THREE.Math.degToRad(90), 0, 'YXZ'));
 
 //        uprightQuaternion.setFromEuler(new THREE.Euler(0, THREE.Math.degToRad(90), 0, 'XYZ'));
 //        uprightQuaternion.setFromEuler(new THREE.Euler(0, THREE.Math.degToRad(90), 0, 'XYZ'));
 
-          uprightQuaternion.setFromEuler(new THREE.Euler(0, THREE.Math.degToRad(90), 0, 'XYZ'));
+          //uprightQuaternion.setFromEuler(new THREE.Euler(0, THREE.Math.degToRad(90), 0, 'XYZ'));
           //uprightQuaternion.setFromEuler(new THREE.Euler(0, 0, 0, 'XYZ'));
 
 
@@ -386,14 +411,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const stickGeometry = new THREE.BoxGeometry(0.24, 0.12, 0.48);
     const orangeMaterial = new THREE.MeshBasicMaterial({ color: 0xffa500 });
     const blackMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
+    const whiteMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
     
     const m5StickC = new THREE.Mesh(stickGeometry, [
         orangeMaterial,  // +X
         orangeMaterial,  // -X
-        orangeMaterial,  // +Y
+        blackMaterial,  // +Y
         orangeMaterial,  // -Y
-        blackMaterial,   // +Z
-        orangeMaterial   // -Z
+        orangeMaterial,   // +Z
+        whiteMaterial   // -Z
     ]);
     
     const displayGeometry = new THREE.PlaneGeometry(0.2, 0.05);
@@ -421,7 +448,7 @@ document.addEventListener('DOMContentLoaded', () => {
         //m5StickC.setRotationFromQuaternion(base_q.clone().invert().multiply(quaternion));
         //m5StickC.setRotationFromQuaternion(base_q.clone().invert().multiply(quaternion));
         //m5StickC.setRotationFromQuaternion(base_q.clone().invert().multiply(quaternion));
-        m5StickC.setRotationFromQuaternion(base_q.clone().multiply(quaternion));
+        m5StickC.setRotationFromQuaternion(base_q.clone().invert().multiply(quaternion));
 
 
 
