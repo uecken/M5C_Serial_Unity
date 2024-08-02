@@ -6,7 +6,15 @@ document.addEventListener('DOMContentLoaded', () => {
     let port;
     let yawOffset = 0;
     let base_q = new THREE.Quaternion();
-    let quaternion = new THREE.Quaternion(0,0,0);
+    let quaternion = new THREE.Quaternion();
+    let rotate_q = new THREE.Quaternion();
+    //let quaternion_hosei = new THREE.Quaternion(0.5,-0.5,-0.5,0.5);//0.468, -0.529, -0.501, 0.498
+    //let upright_q = new THREE.Quaternion(0.495, -0.509, -0.517, 0.474);
+    let base2_q = new THREE.Quaternion();
+    let horizontal_q = new THREE.Quaternion();
+    let upright_q = new THREE.Quaternion().setFromEuler(new THREE.Euler(1.57,1.57,0));
+    //let quaternion_hosei = new THREE.Quaternion();
+
     let lastPitch = 0, lastRoll = 0;
     const pitchElem = document.getElementById('pitch');
     const rollElem = document.getElementById('roll');
@@ -166,7 +174,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 //quaternion.set(qy, -qw, -qz, -qx);
                 //quaternion.set(-qy, qw, -qz, qx);
 
-                //quaternion.set(qy, qw, -qz, qx);
+                //quaternion.set(qy, qw, qz, -qx);
 
                 //quaternion.set(qy, qw, qz, -qx);//yaw回転方向が逆
 //                quaternion.set(qy, qw, qz, -qx);
@@ -230,8 +238,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 //q = new Quaternion(qx, qz, qy, -qw).normalized;
                 //さらにxとyの符号を逆にすればよい。
                 //https://stackoverflow.com/questions/18066581/convert-unity-transforms-to-three-js-rotations
-                quaternion.set(-qx, qz, qy, qw)
+                quaternion.set(-qx, qz, qy, qw) //寝かせてオフセットするとただしい
+                //quaternion.set(+qx, -qz, -qy, -qw) //同じ
 
+                //quaternion.set(-qz, qy, qx, qw)
+                //zyx > xzy
 
 
                 //quaternion.set( qx, -qy, -qz, qw ) https://techblog.kayac.com/2022-group-calendar-three-js-sync-to-unity-webgl
@@ -279,22 +290,23 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function plotIntersectionWithSphere(quaternion) {
+        // Ensure direction is along the z-axis
         const direction = new THREE.Vector3(0, 0, 1);
-        direction.applyQuaternion(quaternion).normalize();
+        direction.applyQuaternion(rotate_q).normalize();
+        
         const intersection = direction.clone().multiplyScalar(1);
         const color = intersection.z >= 0 ? 0x0000ff : 0x800080;
-
+    
         const geometry = new THREE.SphereGeometry(0.05, 32, 32);
         const material = new THREE.MeshBasicMaterial({ color: color });
         const sphere = new THREE.Mesh(geometry, material);
-
+    
         sphere.position.copy(intersection);
         sphere.scale.setScalar(1 / camera.position.distanceTo(sphere.position));
-
+    
         scene.add(sphere);
         sphereIntersections.push(sphere);
     }
-
     function drawAxis(ctx) {
         ctx.save();
         ctx.globalAlpha = 0.5;
@@ -437,21 +449,23 @@ document.addEventListener('DOMContentLoaded', () => {
     m5StickC.add(mark);
     
     sphere.add(m5StickC);
-    
+
+    //camera.position.x = 0;
+    //camera.position.y = 0;
     camera.position.z = -2;
     camera.lookAt(0, 0, 0);
 
+    const baseUprightCheckbox = document.getElementById('baseUprightCheckbox');
+
     function animate() {
         requestAnimationFrame(animate);
-        //m5StickC.setRotationFromQuaternion(quaternion);
-        // `base_q` を基準としてオブジェクトを回転させる
-        //m5StickC.setRotationFromQuaternion(base_q.clone().invert().multiply(quaternion));
-        //m5StickC.setRotationFromQuaternion(base_q.clone().invert().multiply(quaternion));
-        //m5StickC.setRotationFromQuaternion(base_q.clone().invert().multiply(quaternion));
-        m5StickC.setRotationFromQuaternion(base_q.clone().invert().multiply(quaternion));
-
-
-
+        if (baseUprightCheckbox.checked) {
+            base2_q = upright_q;
+        } else {
+            base2_q = horizontal_q;
+        }
+        rotate_q = base_q.clone().multiply(base2_q).invert().multiply(quaternion);
+        m5StickC.setRotationFromQuaternion(rotate_q);
         renderer.render(scene, camera);
     }
     animate();
