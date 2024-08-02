@@ -6,6 +6,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let port;
     let yawOffset = 0;
     let base_q = new THREE.Quaternion();
+    let q_ref = new THREE.Quaternion();
 
     let quaternion = new THREE.Quaternion();
     let rotate_q = new THREE.Quaternion();
@@ -81,17 +82,30 @@ document.addEventListener('DOMContentLoaded', () => {
     async function readLoop() {
         const reader = port.readable.getReader();
         let readBuffer = '';
-        while (true) {
-            const { value, done } = await reader.read();
-            if (done) {
-                reader.releaseLock();
-                break;
+        try {
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) {
+                    reader.releaseLock();
+                    break;
+                }
+                const data = new TextDecoder().decode(value);
+                readBuffer += data;
+                readBuffer = processBuffer(readBuffer);
             }
-            const data = new TextDecoder().decode(value);
-            readBuffer += data;
-            readBuffer = processBuffer(readBuffer);
+        } catch (error) {
+            if (error.name === 'NetworkError' || error.name === 'DOMException') {
+                console.error('The device has been lost:', error);
+                statusDiv.textContent = "The device has been lost. Please reconnect.";
+                // Optionally, you can attempt to reconnect or handle the error as needed
+            } else {
+                console.error('An unexpected error occurred:', error);
+            }
+        } finally {
+            reader.releaseLock();
         }
     }
+
 
     function processBuffer(readBuffer) {
         let endIndex;
@@ -132,41 +146,75 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 updatePitchRollCanvas(pitch, roll);
 
+
                 lastPitch = pitch;
                 lastRoll = roll;
             }
         } else if (line.startsWith('selected_pk')) {
-            plotPoint(lastPitch, lastRoll, 'blue');
-            plotIntersectionWithSphere(quaternion);
+            const parts = line.split(',');
+            const roll = parseFloat(parts[1]);
+            const pitch = parseFloat(parts[2]);
+            plotPoint(pitch, roll, 'red');
+            plotIntersectionWithSphere(quaternion, "selected_pk");
+    
+            // Find the closest reference
+            let minAngle = Infinity;
+            let closestReference = null;
+            referencesData.forEach(reference => {
+                const refQuaternion = new THREE.Quaternion(-reference.qx, reference.qz, reference.qy, reference.qw);
+                const angle = quaternion.angleTo(refQuaternion);
+                if (angle < minAngle) {
+                    minAngle = angle;
+                    closestReference = reference;
+                }
+            });
+    
+            if (closestReference) {
+                // Output the closest reference
+                console.log('Closest Reference:', closestReference);
+    
+                // Change the color of the closest reference point
+                plotIntersectionWithSphere(new THREE.Quaternion(-1 * closestReference.qx, closestReference.qz, closestReference.qy, closestReference.qw), "closest_reference");
+
+                setTimeout(() => {
+                    if (selectedSphere) {
+                        selectedSphere.material.color.set(0xff6347); // tomato color
+                    }
+                }, 500); // Change the delay as needed
+            }
+    
         } else if (line.startsWith('pk_references')) {
             const parts = line.split(',');
             const reference = {
-                index: parts[2],
-                roll: parts[8],
-                pitch: parts[9],
-                yaw: parts[10],
-                qw: parts[11],
-                qx: parts[12],
-                qy: parts[13],
-                qz: parts[14],
+                index: parseInt(parts[2]),
+                roll: parseFloat(parts[8]),
+                pitch: parseFloat(parts[9]),
+                yaw: parseFloat(parts[10]),
+                qw: parseFloat(parts[11]),
+                qx: parseFloat(parts[12]),
+                qy: parseFloat(parts[13]),
+                qz: parseFloat(parts[14]),
                 hid_input: parts[15],
                 hid_inputs: parts.slice(16, 24).join(''),
-                hid_input_acc_threshold: parts[25]
+                hid_input_acc_threshold: parseFloat(parts[25])
             };
             referencesData.push(reference);
             displayReferencesTable(referencesData);
 
             plotPoint(parseFloat(reference.pitch), parseFloat(reference.roll), 'orange');
-            plotIntersectionWithSphere(new THREE.Quaternion(-1 * reference.qx, reference.qz, reference.qy, reference.qw));
-        }
+            plotIntersectionWithSphere(new THREE.Quaternion(-1 * reference.qx, reference.qz, reference.qy, reference.qw),"pk_references");
+        };
     }
 
     function updatePitchRollCanvas(pitch, roll) {
         ctx.clearRect(0, 0, pitchRollCanvas.width, pitchRollCanvas.height);
+        drawAxis(ctx);
+        /*
         ctx.beginPath();
         ctx.arc(pitchRollCanvas.width / 2, pitchRollCanvas.height / 2, 5, 0, 2 * Math.PI);
         ctx.fillStyle = 'red';
         ctx.fill();
+        */
         bluePoints.forEach(point => {
             ctx.beginPath();
             ctx.arc(point.x, point.y, 5, 0, 2 * Math.PI);
@@ -196,23 +244,39 @@ document.addEventListener('DOMContentLoaded', () => {
         plotPoint(pitch, roll, 'orange');
     }
 
-    function plotIntersectionWithSphere(quaternion) {
+    function plotIntersectionWithSphere(q, type) {
         // Ensure direction is along the z-axis
         const direction = new THREE.Vector3(0, 0, 1);
-        direction.applyQuaternion(base2_q).applyQuaternion(quaternion).normalize();
+        rotate_q = base_q.clone().multiply(q_ref).invert().multiply(q);
+        direction.applyQuaternion(rotate_q).normalize();
+        console.log(rotate_q);
         
         const intersection = direction.clone().multiplyScalar(1);
-        const color = intersection.z >= 0 ? 0x0000ff : 0x800080;
-
-        const geometry = new THREE.SphereGeometry(0.05, 32, 32);
+        console.log(intersection.z);
+        let color = 'red';
+        if (type == "selected_pk") {
+            color = intersection.z >= 0 ? 0x0000ff : 0x800080; //奥)blue or 手前)purple
+        } else if (type == "pk_references") {
+            color = intersection.z >= 0 ? 0xff6347 : 0xffa500; //tomato or orange
+        } else if (type == "closest_reference") {
+            color = 0x00ff00; // green for the closest reference
+        }
+    
+        const distance = camera.position.distanceTo(intersection);
+        const scaleFactor = Math.max(0.7, 0.5 * distance); // Ensure a minimum size
+    
+        const geometry = new THREE.SphereGeometry(0.05 * scaleFactor, 32, 32);
         const material = new THREE.MeshBasicMaterial({ color: color });
         const sphere = new THREE.Mesh(geometry, material);
-
+    
         sphere.position.copy(intersection);
-        sphere.scale.setScalar(1 / camera.position.distanceTo(sphere.position));
-
         scene.add(sphere);
         sphereIntersections.push(sphere);
+    
+        // Track the selected sphere
+        if (type == "closest_reference") {
+            selectedSphere = sphere;
+        }
 
         // Debugging: Log the intersection position
         console.log('Intersection Position:', intersection);
@@ -266,6 +330,12 @@ document.addEventListener('DOMContentLoaded', () => {
         await connectSerial();
     });
 
+    let isCalibrated = false;
+    const calibrationStatusElem = document.createElement('span');
+    calibrationStatusElem.textContent = 'not GUI calibrated';
+    document.getElementById('initYawBtn').insertAdjacentElement('afterend', calibrationStatusElem);
+
+
     document.getElementById('sendBtn').addEventListener('click', async () => {
         const input = document.getElementById('serialInput').value;
         if (port && input) {
@@ -274,8 +344,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.getElementById('initYawBtn').addEventListener('click', () => {
-        console.log("pushed inityawBtn")
+        console.log("pushed initYawBtn");
         base_q.copy(quaternion);
+        isCalibrated = true;
+        calibrationStatusElem.textContent = '';
     });
 
     uploadSelectedFilesButton.addEventListener('click', uploadSelectedFiles);
@@ -313,9 +385,23 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+
+
+    function showPage(pageId) {
+        document.querySelectorAll('.page').forEach(page => {
+            page.style.display = 'none';
+        });
+        document.getElementById(pageId).style.display = 'block';
+    }
+
+    // グローバルスコープに関数を移動
+    window.showPage = showPage;
+
+
     window.onload = () => {
-        fetchWebFiles();
+        //fetchWebFiles();
         drawAxis(ctx);
+        
     };
 
     const scene = new THREE.Scene();
@@ -365,22 +451,16 @@ document.addEventListener('DOMContentLoaded', () => {
     function animate() {
         requestAnimationFrame(animate);
         if (baseUprightCheckbox.checked) {
-            base2_q = upright_q;
+            q_ref = upright_q;
         } else {
-            base2_q = horizontal_q;
+            q_ref = horizontal_q;
         }
-        rotate_q = base_q.clone().multiply(base2_q).invert().multiply(quaternion);
+        rotate_q = base_q.clone().multiply(q_ref).invert().multiply(quaternion);
         m5StickC.setRotationFromQuaternion(rotate_q);
         renderer.render(scene, camera);
     }
     animate();
 
-    function showPage(pageId) {
-        document.querySelectorAll('.page').forEach(page => {
-            page.style.display = 'none';
-        });
-        document.getElementById(pageId).style.display = 'block';
-    }
 
     function displayReferencesTable(data) {
         const table = document.createElement('table');
