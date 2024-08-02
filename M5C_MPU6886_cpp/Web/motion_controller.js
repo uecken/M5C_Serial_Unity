@@ -6,14 +6,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let port;
     let yawOffset = 0;
     let base_q = new THREE.Quaternion();
+
     let quaternion = new THREE.Quaternion();
     let rotate_q = new THREE.Quaternion();
-    //let quaternion_hosei = new THREE.Quaternion(0.5,-0.5,-0.5,0.5);//0.468, -0.529, -0.501, 0.498
-    //let upright_q = new THREE.Quaternion(0.495, -0.509, -0.517, 0.474);
-    let base2_q = new THREE.Quaternion();
+
     let horizontal_q = new THREE.Quaternion();
-    let upright_q = new THREE.Quaternion().setFromEuler(new THREE.Euler(1.57,1.57,0));
-    //let quaternion_hosei = new THREE.Quaternion();
+    let upright_q = new THREE.Quaternion().setFromEuler(new THREE.Euler(1.57, 1.57, 0));
 
     let lastPitch = 0, lastRoll = 0;
     const pitchElem = document.getElementById('pitch');
@@ -25,15 +23,59 @@ document.addEventListener('DOMContentLoaded', () => {
     const bluePoints = [];
     const sphereIntersections = [];
 
+    const referencesData = [];
+
+    const flushBtn = document.getElementById('flushBtn');
+    const readBtn = document.getElementById('readBtn');
+    const deleteBtn = document.getElementById('deleteBtn');
+    const showBtn = document.getElementById('showBtn');
+    const showReferencesBtn = document.getElementById('showReferencesBtn');
+    const rebootBtn = document.getElementById('rebootBtn');
+    const resetBtn = document.getElementById('resetBtn');
+
+    document.getElementById('connectBtn').addEventListener('click', async () => {
+        await connectSerial();
+    });
+
     async function connectSerial() {
         if (!("serial" in navigator)) {
             statusDiv.textContent = "Web Serial API not supported.";
             return null;
         }
 
-        port = await navigator.serial.requestPort();
-        await port.open({ baudRate: 115200 });
-        readLoop();
+        if (port && port.readable) {
+            statusDiv.textContent = "Port is already open.";
+            return port;
+        }
+
+        try {
+            port = await navigator.serial.requestPort();
+            await port.open({ baudRate: 115200 });
+            readLoop();
+            setupEventListeners(); // Set up event listeners after the port is open
+        } catch (error) {
+            if (error.name === 'NotFoundError') {
+                statusDiv.textContent = "No port selected by the user.";
+            } else {
+                statusDiv.textContent = `Error: ${error.message}`;
+            }
+        }
+    }
+
+    function setupEventListeners() {
+        flushBtn.addEventListener('click', () => sendCommand('FLUSH'));
+        readBtn.addEventListener('click', () => sendCommand('READ'));
+        deleteBtn.addEventListener('click', () => sendCommand('DELETE'));
+        showBtn.addEventListener('click', () => sendCommand('SHOW'));
+        showReferencesBtn.addEventListener('click', () => sendCommand('SHOW_REFERENCES'));
+        rebootBtn.addEventListener('click', () => sendCommand('REBOOT'));
+        resetBtn.addEventListener('click', () => sendCommand('RESET'));
+
+        function sendCommand(command) {
+            const serialInput = document.getElementById('serialInput');
+            serialInput.value = command;
+            document.getElementById('sendBtn').click();
+        }
     }
 
     async function readLoop() {
@@ -62,57 +104,10 @@ document.addEventListener('DOMContentLoaded', () => {
         return readBuffer;
     }
 
-    async function writeToSerial(data) {
-        const writer = port.writable.getWriter();
-        await writer.write(data);
-        writer.releaseLock();
-    }
-
-    async function fetchWebFiles() {
-        const files = ['firmware/m5c/firmware.bin']; // これをファイルパスに合わせて変更
-        webFilesSelect.innerHTML = '';
-        files.forEach(file => {
-            const option = document.createElement('option');
-            option.value = file;
-            option.textContent = file;
-            webFilesSelect.appendChild(option);
-        });
-    }
-
-    async function uploadSelectedFiles() {
-        const selectedFiles = Array.from(webFilesSelect.selectedOptions).map(option => option.value);
-        if (selectedFiles.length === 0) {
-            statusDiv.textContent = "No files selected.";
-            return;
-        }
-
-        if (!port) {
-            await connectSerial();
-        }
-
-        for (const fileName of selectedFiles) {
-            const response = await fetch(`/${fileName}`);
-            if (response.ok) {
-                const arrayBuffer = await response.arrayBuffer();
-                const header = `savepk2vectol,${fileName},${arrayBuffer.byteLength}\n`;
-
-                // Send header
-                await writeToSerial(new TextEncoder().encode(header));
-                // Send file data
-                await writeToSerial(new Uint8Array(arrayBuffer));
-
-                statusDiv.textContent += `Uploaded ${fileName}\n`;
-            } else {
-                statusDiv.textContent += `Failed to fetch ${fileName} from web storage.\n`;
-            }
-        }
-    }
-
-    function appendSerialOutput(data) {
-        const outputDiv = document.createElement('div');
-        outputDiv.textContent = data;
-        serialOutput.appendChild(outputDiv);
-        serialOutput.scrollTop = serialOutput.scrollHeight; // Scroll to bottom
+    function appendSerialOutput(text) {
+        const serialOutput = document.getElementById('serialOutput');
+        serialOutput.textContent += text;
+        serialOutput.scrollTop = serialOutput.scrollHeight;
     }
 
     function handleSerialData(line) {
@@ -123,151 +118,54 @@ document.addEventListener('DOMContentLoaded', () => {
                 let roll = parseFloat(parts[8]);
                 let yaw = parseFloat(parts[9]);
 
-                /*
-                let qx = parseFloat(parts[10]);
-                let qy = parseFloat(parts[11]);
-                let qz = parseFloat(parts[12]);
-                let qw = parseFloat(parts[13]);
-                */
-
                 let qw = parseFloat(parts[10]);
                 let qx = parseFloat(parts[11]);
                 let qy = parseFloat(parts[12]);
                 let qz = parseFloat(parts[13]);
 
-    
-                if (document.getElementById('eulerToQuaternion').checked) {
-                    const euler = new THREE.Euler(
-                        THREE.Math.degToRad(pitch),
-                        THREE.Math.degToRad(roll),
-                        THREE.Math.degToRad(yaw),
-                        'YXZ'
-                    );
-                    quaternion.setFromEuler(euler);
-                    qx = quaternion.x;
-                    qy = quaternion.y;
-                    qz = quaternion.z;
-                    qw = quaternion.w;
-                    
-                   /*
-                    quaternion.setFromEuler(euler);
-                    qx = quaternion.y;
-                    qy = quaternion.w;
-                    qz = quaternion.z;
-                    qw = -quaternion.x;
-                    */
-                }
-    
                 pitchElem.textContent = pitch.toFixed(3);
                 rollElem.textContent = roll.toFixed(3);
                 yawElem.textContent = yaw.toFixed(3);
                 quaternionElem.textContent = `${qx.toFixed(3)}, ${qy.toFixed(3)}, ${qz.toFixed(3)}, ${qw.toFixed(3)}`;
-    
-                //quaternion.set(qx, qy, qz, qw);
 
-                //unityの引数はwxyzの順
-                //q = new Quaternion(q_array[1], q_array[3], q_array[2], -q_array[0]).normalized;
-                //q = new Quaternion(qx, qz, qy, -qw).normalized;
-                //m5stickC1.transform.rotation = Quaternion.Inverse(base_q) * q;
-                
-                //quaternion.set(qy, qw, qz, -qx);
-                //quaternion.set(qy, -qw, -qz, -qx);
-                //quaternion.set(-qy, qw, -qz, qx);
-
-                //quaternion.set(qy, qw, qz, -qx);
-
-                //quaternion.set(qy, qw, qz, -qx);//yaw回転方向が逆
-//                quaternion.set(qy, qw, qz, -qx);
-                //quaternion.set(qx, -qy, -qz, qw);
-                
-    
-//                quaternion.set(qx, qz, -qy, qw);  // UnityからThree.jsへの
-                
-               //var q = new THREE.Quaternion(-qz, qw, -qx, qy);
-               //quaternion.set(-qz, qw, -qx, qy);
-
-               //quaternion.set(-qw, -qx, -qy, qz);//roll pitch逆 @YXZ
-               //quaternion.set(-qy, qz, qw, qx);//-qw, -qx, -qy, qzと同じ
-
-               //quaternion.set(qx, -qy, -qz, qw);
-
-               //quaternion.set(qw, qx, qy, qz);
-
-                //Quaternion( x : Float, y : Float, z : Float, w : Float )
-                //quaternion.set(qx, qy, qz, qw);
-                //quaternion.set(-qx, qy, qz, -qw);
-               //quaternion.set(-qz, qw, -qx, qy);
-
-               //quaternion.set(qx, qy, qz, qw);
-               //quaternion.set(qx, -qy, qz, -qw); //おしい
-               //quaternion.set(-qx, -qy, -qz, qw); //おしい
-               //quaternion.set(-qx, -qy, -qz, -qw);
-               //quaternion.set(-qx, qy, qz, -qw); //おしい
-
-
-               //quaternion.set(qx, qy, -qz, qw);//カメラ視点が変わればOKと思ったが、pitchが逆。
-               //uprightQuaternion.setFromEuler(new THREE.Euler(0, THREE.Math.degToRad(90), 0, 'XYZ'));
-
-
-
-               //quaternion.set(qw, qx, qy,qz);
-               //quaternion.set(qx, qz, qy,-qw);//unityと同じ
-               //quaternion.set(qz, qy, qw,-qx);//unityと同じで引数順調整
-               //quaternion.set(qw, qx, qz,-qy);//unityと同じで引数順調整
-
-    
-
-
-               //quaternion.set(-qw, qx, qz, qy);//unityの順番を変えたので本来正しいはず
-               //quaternion.set(qw, qx, qz, -qy);//本来正しいはず
-               //quaternion.set(qw, -qx, qz, qy);//本来正しいはず
-               //quaternion.set(-qw, qy, qz, qx);//OKかと思ったがOKではない
-               //quaternion.set(-qw, qy, qz, qx);//OKかと思ったがOKではない
-
-               //quaternion.set(qy, qw, qz, -qx);//yaw回転方向が逆
-            
-               //quaternion.set(-qz, qw, -qx, qy)
-               //quaternion.set( -qx, qy, qz, -qw )
-
-               //quaternion.set(-qw, qx, qz, qy);//unityの順番を変えたので本来正しいはず
-               //quaternion.set(qw, -qx, qz, qy);//unityの順番を変えたので本来正しいはず
-               //quaternion.set(-qz, qy, qw, qx);//https://ovide.hatenablog.com/entry/2018/05/16/183232
-
-                //unityの引数はxyzzの順
-                //q = new Quaternion(q_array[1], q_array[3], q_array[2], -q_array[0]).normalized;
-                //q = new Quaternion(qx, qz, qy, -qw).normalized;
-                //さらにxとyの符号を逆にすればよい。
-                //https://stackoverflow.com/questions/18066581/convert-unity-transforms-to-three-js-rotations
-                quaternion.set(-qx, qz, qy, qw) //寝かせてオフセットするとただしい
-                //quaternion.set(+qx, -qz, -qy, -qw) //同じ
-
-                //quaternion.set(-qz, qy, qx, qw)
-                //zyx > xzy
-
-
-                //quaternion.set( qx, -qy, -qz, qw ) https://techblog.kayac.com/2022-group-calendar-three-js-sync-to-unity-webgl
-                //quaternion.set( -qx, qy, qz, -qw ) 
-                //quaternion.set(qw, qx, -qz, -qy);//本来正しいはず
-
-
+                quaternion.set(-qx, qz, qy, qw); // 寝かせてオフセットするとただしい
 
                 updatePitchRollCanvas(pitch, roll);
-    
-    
+
                 lastPitch = pitch;
                 lastRoll = roll;
             }
         } else if (line.startsWith('selected_pk')) {
             plotPoint(lastPitch, lastRoll, 'blue');
             plotIntersectionWithSphere(quaternion);
+        } else if (line.startsWith('pk_references')) {
+            const parts = line.split(',');
+            const reference = {
+                index: parts[2],
+                roll: parts[8],
+                pitch: parts[9],
+                yaw: parts[10],
+                qw: parts[11],
+                qx: parts[12],
+                qy: parts[13],
+                qz: parts[14],
+                hid_input: parts[15],
+                hid_inputs: parts.slice(16, 24).join(''),
+                hid_input_acc_threshold: parts[25]
+            };
+            referencesData.push(reference);
+            displayReferencesTable(referencesData);
+
+            plotPoint(parseFloat(reference.pitch), parseFloat(reference.roll), 'orange');
+            plotIntersectionWithSphere(new THREE.Quaternion(-1 * reference.qx, reference.qz, reference.qy, reference.qw));
         }
     }
 
     function updatePitchRollCanvas(pitch, roll) {
         ctx.clearRect(0, 0, pitchRollCanvas.width, pitchRollCanvas.height);
-        drawAxis(ctx); // Draw the axis again
         ctx.beginPath();
         ctx.arc(pitchRollCanvas.width / 2, pitchRollCanvas.height / 2, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = 'red';
         ctx.fill();
         bluePoints.forEach(point => {
             ctx.beginPath();
@@ -283,30 +181,43 @@ document.addEventListener('DOMContentLoaded', () => {
         ctx.fill();
     }
 
-    function plotPoint(pitch, roll, color) {
+    function plotPoint(pitch, roll, color = 'blue') {
         const x = (roll + 180) * (pitchRollCanvas.width / 360);
         const y = (pitch + 90) * (pitchRollCanvas.height / 180);
+        console.log(`Plotting point at (${x}, ${y}) with color ${color}`); // Debugging: Log the point coordinates
         bluePoints.push({ x, y, color });
+        ctx.beginPath();
+        ctx.arc(x, y, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = color;
+        ctx.fill();
+    }
+
+    function plotReferencesPoint(pitch, roll) {
+        plotPoint(pitch, roll, 'orange');
     }
 
     function plotIntersectionWithSphere(quaternion) {
         // Ensure direction is along the z-axis
         const direction = new THREE.Vector3(0, 0, 1);
-        direction.applyQuaternion(rotate_q).normalize();
+        direction.applyQuaternion(base2_q).applyQuaternion(quaternion).normalize();
         
         const intersection = direction.clone().multiplyScalar(1);
         const color = intersection.z >= 0 ? 0x0000ff : 0x800080;
-    
+
         const geometry = new THREE.SphereGeometry(0.05, 32, 32);
         const material = new THREE.MeshBasicMaterial({ color: color });
         const sphere = new THREE.Mesh(geometry, material);
-    
+
         sphere.position.copy(intersection);
         sphere.scale.setScalar(1 / camera.position.distanceTo(sphere.position));
-    
+
         scene.add(sphere);
         sphereIntersections.push(sphere);
+
+        // Debugging: Log the intersection position
+        console.log('Intersection Position:', intersection);
     }
+
     function drawAxis(ctx) {
         ctx.save();
         ctx.globalAlpha = 0.5;
@@ -330,6 +241,27 @@ document.addEventListener('DOMContentLoaded', () => {
         ctx.restore();
     }
 
+    async function writeToSerial(data) {
+        const writer = port.writable.getWriter();
+        await writer.write(data);
+        writer.releaseLock();
+    }
+
+    async function uploadSelectedFiles() {
+        const selectedFiles = Array.from(webFilesSelect.selectedOptions).map(option => option.value);
+        if (selectedFiles.length === 0) {
+            statusDiv.textContent = "No files selected.";
+            return;
+        }
+
+        for (const file of selectedFiles) {
+            const response = await fetch(file);
+            const data = await response.arrayBuffer();
+            await writeToSerial(new Uint8Array(data));
+            statusDiv.textContent += `Uploaded: ${file}\n`;
+        }
+    }
+
     document.getElementById('connectBtn').addEventListener('click', async () => {
         await connectSerial();
     });
@@ -342,29 +274,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.getElementById('initYawBtn').addEventListener('click', () => {
-        //yawOffset = parseFloat(yawElem.textContent) || 0;
-        //yawOffset = parseFloat(yawElem.textContent) || 0;
-        // 初期姿勢を直立に設定
         console.log("pushed inityawBtn")
-        
-        //const uprightQuaternion = new THREE.Quaternion();
-//        uprightQuaternion.setFromEuler(new THREE.Euler(0, THREE.Math.degToRad(90), 0, 'YXZ'));        
-//        uprightQuaternion.setFromEuler(new THREE.Euler(0, THREE.Math.degToRad(90), 0, 'YXZ'));
-
-//        uprightQuaternion.setFromEuler(new THREE.Euler(0, THREE.Math.degToRad(90), 0, 'XYZ'));
-//        uprightQuaternion.setFromEuler(new THREE.Euler(0, THREE.Math.degToRad(90), 0, 'XYZ'));
-
-          //uprightQuaternion.setFromEuler(new THREE.Euler(0, THREE.Math.degToRad(90), 0, 'XYZ'));
-          //uprightQuaternion.setFromEuler(new THREE.Euler(0, 0, 0, 'XYZ'));
-
-
-        //uprightQuaternion.setFromEuler(new THREE.Euler(0,0,  THREE.Math.degToRad(90), 'ZXY'));
-        //uprightQuaternion.setFromEuler(new THREE.Euler(0, 0, 0, 'ZXY'));        
-        //uprightQuaternion.setFromEuler(new THREE.Euler(0, 0, 0, 'YXZ'));        
-        
-        //base_q.copy(uprightQuaternion);
-
-        
         base_q.copy(quaternion);
     });
 
@@ -419,13 +329,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
     scene.add(sphere);
 
-    //const stickGeometry = new THREE.BoxGeometry(0.24, 0.12, 0.48);
     const stickGeometry = new THREE.BoxGeometry(0.24, 0.12, 0.48);
     const orangeMaterial = new THREE.MeshBasicMaterial({ color: 0xffa500 });
     const blackMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
     const whiteMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
 
-    
     const m5StickC = new THREE.Mesh(stickGeometry, [
         orangeMaterial,  // +X
         orangeMaterial,  // -X
@@ -434,24 +342,21 @@ document.addEventListener('DOMContentLoaded', () => {
         orangeMaterial,   // +Z
         whiteMaterial   // -Z
     ]);
-    
+
     const displayGeometry = new THREE.PlaneGeometry(0.2, 0.05);
     const displayMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
     const display = new THREE.Mesh(displayGeometry, displayMaterial);
     display.position.set(0, 0.06, 0.24);  // スケールに合わせて位置を調整
     m5StickC.add(display);
-    
-    
+
     const markGeometry = new THREE.PlaneGeometry(0.04, 0.02);
     const markMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const mark = new THREE.Mesh(markGeometry, markMaterial);
     mark.position.set(0, -0.06, 0.24);  // スケールに合わせて位置を調整
     m5StickC.add(mark);
-    
+
     sphere.add(m5StickC);
 
-    //camera.position.x = 0;
-    //camera.position.y = 0;
     camera.position.z = -2;
     camera.lookAt(0, 0, 0);
 
@@ -475,5 +380,36 @@ document.addEventListener('DOMContentLoaded', () => {
             page.style.display = 'none';
         });
         document.getElementById(pageId).style.display = 'block';
+    }
+
+    function displayReferencesTable(data) {
+        const table = document.createElement('table');
+        table.classList.add('table', 'table-striped');
+
+        const header = table.createTHead();
+        const headerRow = header.insertRow();
+        const headers = ['Index', 'Roll', 'Pitch', 'Yaw', 'Quaternion (qx, qy, qz, qw)', 'HID Input', 'HID Inputs', 'HID Input Acc Threshold'];
+        headers.forEach(text => {
+            const cell = document.createElement('th');
+            cell.textContent = text;
+            headerRow.appendChild(cell);
+        });
+
+        const tbody = table.createTBody();
+        data.forEach(item => {
+            const row = tbody.insertRow();
+            row.insertCell().textContent = item.index;
+            row.insertCell().textContent = item.roll;
+            row.insertCell().textContent = item.pitch;
+            row.insertCell().textContent = item.yaw;
+            row.insertCell().textContent = `${item.qx}, ${item.qy}, ${item.qz}, ${item.qw}`;
+            row.insertCell().textContent = item.hid_input;
+            row.insertCell().textContent = item.hid_inputs;
+            row.insertCell().textContent = item.hid_input_acc_threshold;
+        });
+
+        const container = document.getElementById('referencesTableContainer');
+        container.innerHTML = '';
+        container.appendChild(table);
     }
 });

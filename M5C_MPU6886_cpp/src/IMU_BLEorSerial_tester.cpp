@@ -134,13 +134,13 @@ struct pk{ //44byte (padding 2Byte?)
   //Index設定
   uint8_t index; //1~255
 
-  char rpy_priority;  //rpy 1byte
+  char rpy_priority;  //rpy 1byte //notused
 
   //モーション始端
-  short roll_min;    // 2byte
-  short roll_max;    // 2byte
-  short pitch_min;    // 2byte
-  short pitch_max;    // 2byte
+  short roll_min;    // 2byte //notused
+  short roll_max;    // 2byte //notused
+  short pitch_min;    // 2byte //notused
+  short pitch_max;    // 2byte //notused
 
   short rpy[3]; //6byte
   float quatanion[4]; //16byte
