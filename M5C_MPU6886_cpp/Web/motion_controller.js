@@ -35,6 +35,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const resetBtn = document.getElementById('resetBtn');
     const qoffsetBtn = document.getElementById('qoffsetBtn');
     const qinitializeBtn = document.getElementById('qinitializeBtn');
+    const qinitializeHorizontalBtn = document.getElementById('qinitializeHorizontalBtn');
+    const qinitializeUprightBtn = document.getElementById('qinitializeUprightBtn');
 
     let savedPort = null; // 以前選択したポートを保存する変数
 
@@ -83,6 +85,8 @@ document.addEventListener('DOMContentLoaded', () => {
         resetBtn.addEventListener('click', () => sendCommand('RESET'));
         qoffsetBtn.addEventListener('click', () => sendCommand('QOFFSET'));
         qinitializeBtn.addEventListener('click', () => sendCommand('QINIT'));
+        qinitializeHorizontalBtn.addEventListener('click', () => sendCommand('QINITH'));
+        qinitializeUprightBtn.addEventListener('click', () => sendCommand('QINITU'));
 
 
         function sendCommand(command) {

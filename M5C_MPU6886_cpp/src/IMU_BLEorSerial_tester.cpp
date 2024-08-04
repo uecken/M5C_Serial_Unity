@@ -409,19 +409,29 @@ static void ImuLoop(void* arg) {
 
 
       //クォータニオンの初期化. 
-      //Roll/PitchもOffsetされるが、MafoniFilterによりすぐに正しい値となる
+      //Roll/PitchもOffsetされるが、MafonyFilterによりすぐに正しい値となる
       //そのためYawだけOffsetされることになる
-      if(mc.initial_quat_offset_enable){
-        //mc.quatMultiply(q_array,mc.initial_quat);
-
-        float Q[4] = {1.0,0.0,0.0,0.0}; //wxyz,M5Cにおける初期クォータニオン. MahonyFilterで設定されている
-        M5.IMU.setQuaternion(Q);
-        Serial.printf("%f,%f,%f,%f",Q[0],Q[1],Q[2],Q[3]);
-        mc.initial_quat_offset_enable = false;
+      if(mc.set_initial_quaternion){
+        mc.initial_quat = new float[4]; //WebGUUから設定する
+        M5.IMU.setQuaternion(mc.initial_quat);
+        Serial.printf("%f,%f,%f,%f",mc.initial_quat[0],mc.initial_quat[1],mc.initial_quat[2],mc.initial_quat[3]);
+        mc.set_initial_quaternion = false;
+      }else if(mc.set_initial_quaternion_horizontal){
+        mc.initial_quat = mc.initial_quat_horizontal; //wxyz,M5Cにおける初期クォータニオン. MahonyFilterで設定されている
+        M5.IMU.setQuaternion(mc.initial_quat);
+        Serial.printf("%f,%f,%f,%f",mc.initial_quat[0],mc.initial_quat[1],mc.initial_quat[2],mc.initial_quat[3]);
+        mc.set_initial_quaternion_horizontal = false;
+      }else if(mc.set_initial_quaternion_upright){
+        mc.initial_quat = mc.initial_quat_upright; //wxyz,M5Cにおける初期クォータニオン. MahonyFilterで設定されている
+        M5.IMU.setQuaternion(mc.initial_quat);
+        Serial.printf("%f,%f,%f,%f",mc.initial_quat[0],mc.initial_quat[1],mc.initial_quat[2],mc.initial_quat[3]);
+        mc.set_initial_quaternion_upright = false;
       }
 
       q_array = M5.IMU.getAhrsData(&pitch,&roll,&yaw,aOX,aOY,aOZ,gOX,gOY,gOZ); //w,x,y,z
 
+
+      
       if(mc.q_offset_enable){
         mc.quatMultiply(q_array,mc.q_offset);
       }
@@ -901,6 +911,12 @@ static void ReadSessionLoop(void* arg){
         else if(command == "SERIAL" && inputs[1] == "ON") mc.serialON();
         else if(command == "SERIAL" && inputs[1] == "OFF") mc.serialOFF();
         else if(command == "UNITY" && inputs[1] == "START") unityAppInit();
+        else if(command == "QINIT") {
+          for (int i = 1; i <= 4; i++) {
+              mc.initial_quat[i] = inputs[i + 1].toFloat();
+          }
+          mc.set_initial_quaternion = true;
+        }
       }else if(mc.mode==MODE_MOTION_MASSAGE){
         if(input_serial == "FLUSH") flushMessageVector(message_vector,"MESSAGE");
         else if(input_serial == "READ")readMessageVector("MESSAGE");
@@ -910,7 +926,9 @@ static void ReadSessionLoop(void* arg){
         else if(input_serial == "REBOOT") ESP.restart();
         else if(input_serial == "RESET") {deleteEEPROM("ALL"); ESP.restart();}
         else if(input_serial == "QOFFSET") {mc.set_qoffset(q_array);}
-        else if(input_serial == "QINIT") {mc.initial_quat_offset_enable = true;}  //本来は起動時して姿勢が変わる前に実行
+        //else if(input_serial == "QINIT") {mc.set_initial_quaternion = true;}
+        else if(input_serial == "QINITU") {mc.set_initial_quaternion_upright = true;}
+        else if(input_serial == "QINITH") {mc.set_initial_quaternion_horizontal = true;} 
       }else if(mc.mode!=MODE_MOTION_MASSAGE){
         if(input_serial == "FLUSH") flushPKvector(pk_references,"MOTION_CONT");
         else if(input_serial == "READ")readPKvector("MOTION_CONT");
@@ -920,7 +938,9 @@ static void ReadSessionLoop(void* arg){
         else if(input_serial == "REBOOT") ESP.restart();
         else if(input_serial == "RESET") {deleteEEPROM("ALL"); ESP.restart();}
         else if(input_serial == "QOFFSET") {mc.set_qoffset(q_array);}
-        else if(input_serial == "QINIT") {mc.initial_quat_offset_enable = true;} //本来は起動時して姿勢が変わる前に実行
+        //else if(input_serial == "QINIT") {mc.set_initial_quaternion = true;} //本来は起動時して姿勢が変わる前に実行
+        else if(input_serial == "QINITU") {mc.set_initial_quaternion_upright = true;} 
+        else if(input_serial == "QINITH") {mc.set_initial_quaternion_horizontal = true;} 
       }
 
 

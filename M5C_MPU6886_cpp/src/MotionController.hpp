@@ -78,11 +78,16 @@ class MotionController{
         float sampleFreq;
         float* q_offset = new float[4];
         boolean q_offset_enable = false;
-
-        float* initial_quat = new float[4]; // 初期姿勢のクォータニオン
-        bool initial_quat_set = false;
-        bool initial_quat_offset_enable = false;
         
+        float* initial_quat = new float[4];
+        float initial_quat_horizontal[4] = {1,0,0,0}; // 寝かせ、ディスプレイ上の初期姿勢のクォータニオン
+        float initial_quat_upright[4] = {0.444, 0.469, -0.532, -0.5}; // 右手持ち、ディスプレイ左の初期クォータニオン
+        //bool initial_quat_set = false;
+        bool set_initial_quaternion = false;
+        bool set_initial_quaternion_horizontal = false;
+        bool set_initial_quaternion_upright = false;
+
+
     // インスタンス作成時に構造体配列を初期化
         MotionController(int dataSize,float Fs) {
             sensorDataArray = new SensorData[dataSize];
@@ -197,7 +202,7 @@ class MotionController{
             for (int i = 0; i < 4; ++i) {
                 initial_quat[i] = quat[i];
             }
-            initial_quat_set = true;
+            set_initial_quaternion = true;
         }
 
 
