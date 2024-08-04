@@ -105,3 +105,8 @@ float* IMU::getAhrsData(float *pitch,float *roll,float *yaw, float aOX,float aOY
   float* quatanion = MahonyAHRSupdateIMU((gyroX-gOX) * DEG_TO_RAD, (gyroY-gOY) * DEG_TO_RAD, (gyroZ-gOZ) * DEG_TO_RAD, (accX-aOX), (accY-aOY), (accZ-aOZ),pitch,roll,yaw,sampleFreq);
   return quatanion;
 }
+
+void IMU::setQuaternion(float* Q){
+    //Serial.printf("%f,%f,%f,%f",Q[0],Q[1],Q[2],Q[3]);
+    setQ(Q);
+}

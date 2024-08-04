@@ -85,7 +85,7 @@ float gyroX = 0.0F,gyroY = 0.0F,gyroZ = 0.0F;
 float pitch = 0.0F,roll  = 0.0F,yaw   = 0.0F;
 float unwrpRoll,unwrpYaw;
 float accABS;
-float* q_array = new float[4]; //quatanion
+float* q_array = new float[4]; //quaternion
 float aOX = -0.003, aOY = +0.018, aOZ =  0.085 ;  //-0.00   0.01   0.07 
 float gOX = 3.516, gOY = -6.023 , gOZ = -5.14;  //3.36   9.66   4.11
 float pO=0 , rO=0 , yO=-8.5, yO2=0;
@@ -360,6 +360,9 @@ void setup() {
   if(LEFT_DISPLAY){
     Serial.println("LEFT_DISPLAY,");
   }
+ 
+  vTaskDelay(500);
+  mc.setInitialQuat(q_array);
   //TEST_ER.begin(EEPROM_SIZE/5); //8Byte * 100/20;
   /*
   USER1_ER.begin(EEPROM_SIZE/5);
@@ -402,8 +405,27 @@ static void ImuLoop(void* arg) {
       M5.IMU.getAccelData(&accX,&accY,&accZ);
       accX -= aOX; accY -= aOY; accZ -= aOZ; 
       //accABS = sqrt(accX*accX + accY*accY + accZ*accZ);
-      gyroX -=gOX; gyroY -=gOY; gyroZ -=gOZ;       
+      gyroX -=gOX; gyroY -=gOY; gyroZ -=gOZ;
+
+
+      //クォータニオンの初期化. 
+      //Roll/PitchもOffsetされるが、MafoniFilterによりすぐに正しい値となる
+      //そのためYawだけOffsetされることになる
+      if(mc.initial_quat_offset_enable){
+        //mc.quatMultiply(q_array,mc.initial_quat);
+
+        float Q[4] = {1.0,0.0,0.0,0.0}; //wxyz,M5Cにおける初期クォータニオン. MahonyFilterで設定されている
+        M5.IMU.setQuaternion(Q);
+        Serial.printf("%f,%f,%f,%f",Q[0],Q[1],Q[2],Q[3]);
+        mc.initial_quat_offset_enable = false;
+      }
+
       q_array = M5.IMU.getAhrsData(&pitch,&roll,&yaw,aOX,aOY,aOZ,gOX,gOY,gOZ); //w,x,y,z
+
+      if(mc.q_offset_enable){
+        mc.quatMultiply(q_array,mc.q_offset);
+      }
+
       //q_array = M5.IMU.getAhrsData2(&pitch,&roll,&yaw,aOX,aOY,aOZ,gOX,gOY,gOZ);
       pitch -=pO;  roll -= rO;  yaw -= yO;//★最小値-188.5。原因はgyroZの補正ができていないからか？一時的に+8.5して補正する。
       if(LEFT_DISPLAY){
@@ -887,6 +909,8 @@ static void ReadSessionLoop(void* arg){
         else if(input_serial == "SHOW_REFERENCES") serialprint_motion_messages("csv");
         else if(input_serial == "REBOOT") ESP.restart();
         else if(input_serial == "RESET") {deleteEEPROM("ALL"); ESP.restart();}
+        else if(input_serial == "QOFFSET") {mc.set_qoffset(q_array);}
+        else if(input_serial == "QINIT") {mc.initial_quat_offset_enable = true;}  //本来は起動時して姿勢が変わる前に実行
       }else if(mc.mode!=MODE_MOTION_MASSAGE){
         if(input_serial == "FLUSH") flushPKvector(pk_references,"MOTION_CONT");
         else if(input_serial == "READ")readPKvector("MOTION_CONT");
@@ -895,6 +919,8 @@ static void ReadSessionLoop(void* arg){
         else if(input_serial == "SHOW_REFERENCES") serialprint_pk_references("csv");
         else if(input_serial == "REBOOT") ESP.restart();
         else if(input_serial == "RESET") {deleteEEPROM("ALL"); ESP.restart();}
+        else if(input_serial == "QOFFSET") {mc.set_qoffset(q_array);}
+        else if(input_serial == "QINIT") {mc.initial_quat_offset_enable = true;} //本来は起動時して姿勢が変わる前に実行
       }
 
 

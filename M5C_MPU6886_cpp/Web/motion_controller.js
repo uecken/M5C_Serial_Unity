@@ -33,24 +33,35 @@ document.addEventListener('DOMContentLoaded', () => {
     const showReferencesBtn = document.getElementById('showReferencesBtn');
     const rebootBtn = document.getElementById('rebootBtn');
     const resetBtn = document.getElementById('resetBtn');
+    const qoffsetBtn = document.getElementById('qoffsetBtn');
+    const qinitializeBtn = document.getElementById('qinitializeBtn');
+
+    let savedPort = null; // 以前選択したポートを保存する変数
+
 
     document.getElementById('connectBtn').addEventListener('click', async () => {
         await connectSerial();
     });
+
 
     async function connectSerial() {
         if (!("serial" in navigator)) {
             statusDiv.textContent = "Web Serial API not supported.";
             return null;
         }
-
+    
         if (port && port.readable) {
             statusDiv.textContent = "Port is already open.";
             return port;
         }
-
+    
         try {
-            port = await navigator.serial.requestPort();
+            if (!savedPort) {
+                port = await navigator.serial.requestPort();
+                savedPort = port; // ポートを保存
+            } else {
+                port = savedPort; // 保存されたポートを使用
+            }
             await port.open({ baudRate: 115200 });
             readLoop();
             setupEventListeners(); // Set up event listeners after the port is open
@@ -62,7 +73,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     }
-
     function setupEventListeners() {
         flushBtn.addEventListener('click', () => sendCommand('FLUSH'));
         readBtn.addEventListener('click', () => sendCommand('READ'));
@@ -71,6 +81,9 @@ document.addEventListener('DOMContentLoaded', () => {
         showReferencesBtn.addEventListener('click', () => sendCommand('SHOW_REFERENCES'));
         rebootBtn.addEventListener('click', () => sendCommand('REBOOT'));
         resetBtn.addEventListener('click', () => sendCommand('RESET'));
+        qoffsetBtn.addEventListener('click', () => sendCommand('QOFFSET'));
+        qinitializeBtn.addEventListener('click', () => sendCommand('QINIT'));
+
 
         function sendCommand(command) {
             const serialInput = document.getElementById('serialInput');
@@ -94,6 +107,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 readBuffer = processBuffer(readBuffer);
             }
         } catch (error) {
+            // Attempt to reconnect if a NetworkError occurs
+            if (error.name === 'NetworkError' || error.name === 'DOMException') {
+                console.error('The device has been lost:', error);
+                statusDiv.textContent = "The device has been lost. Attempting to reconnect...";
+                
+                try {
+                    await reconnectSerial();
+                } catch (reconnectError) {
+                    console.error('Reconnection failed:', reconnectError);
+                    statusDiv.textContent = `Reconnection failed: ${reconnectError.message}`;
+                }
+            } else {
+                console.error('An unexpected error occurred:', error);
+            }
             if (error.name === 'NetworkError' || error.name === 'DOMException') {
                 console.error('The device has been lost:', error);
                 statusDiv.textContent = "The device has been lost. Please reconnect.";

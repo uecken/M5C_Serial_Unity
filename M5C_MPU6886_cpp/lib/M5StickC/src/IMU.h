@@ -27,6 +27,7 @@ public:
     void getTempData(float *t);
 
     float* getAhrsData(float *pitch,float *roll,float *yaw,float aOX,float aOY,float aOZ,float gOX,float gOY,float gOZ);
+    void setQuaternion(float *Q);
 
     ImuType imuType;
     float aRes, gRes;

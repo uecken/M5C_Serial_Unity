@@ -76,7 +76,13 @@ class MotionController{
         
         uint8_t mouse_scale2 = 2;
         float sampleFreq;
+        float* q_offset = new float[4];
+        boolean q_offset_enable = false;
 
+        float* initial_quat = new float[4]; // 初期姿勢のクォータニオン
+        bool initial_quat_set = false;
+        bool initial_quat_offset_enable = false;
+        
     // インスタンス作成時に構造体配列を初期化
         MotionController(int dataSize,float Fs) {
             sensorDataArray = new SensorData[dataSize];
@@ -178,6 +184,58 @@ class MotionController{
             }
 
         }
+
+        void set_qoffset(float* q_array){
+            for (int i = 0; i < 4; ++i) {
+                q_offset[i] = q_array[i];
+            }
+            q_offset_enable = true;
+        }
+
+        // 初期姿勢のクォータニオンを設定する関数
+        void setInitialQuat(float* quat) {
+            for (int i = 0; i < 4; ++i) {
+                initial_quat[i] = quat[i];
+            }
+            initial_quat_set = true;
+        }
+
+
+        void quatMultiply(float* Q1, float* Q2) {
+            // Conjugate the offset quaternion to reverse its rotation
+            float Q2_conjugate[4] = { Q2[0], -Q2[1], -Q2[2], -Q2[3] };
+
+            float w = Q1[0] * Q2_conjugate[0] - Q1[1] * Q2_conjugate[1] - Q1[2] * Q2_conjugate[2] - Q1[3] * Q2_conjugate[3];
+            float x = Q1[0] * Q2_conjugate[1] + Q1[1] * Q2_conjugate[0] + Q1[2] * Q2_conjugate[3] - Q1[3] * Q2_conjugate[2];
+            float y = Q1[0] * Q2_conjugate[2] - Q1[1] * Q2_conjugate[3] + Q1[2] * Q2_conjugate[0] + Q1[3] * Q2_conjugate[1];
+            float z = Q1[0] * Q2_conjugate[3] + Q1[1] * Q2_conjugate[2] - Q1[2] * Q2_conjugate[1] + Q1[3] * Q2_conjugate[0];
+            Q1[0] = w; Q1[1] = x; Q1[2] = y; Q1[3] = z;
+        }  
+
+        /*
+                // クォータニオンの逆を計算する関数
+        void inverseQuat(float* quat, float* result) {
+            float norm = quat[0]*quat[0] + quat[1]*quat[1] + quat[2]*quat[2] + quat[3]*quat[3];
+            result[0] = quat[0] / norm;
+            result[1] = -quat[1] / norm;
+            result[2] = -quat[2] / norm;
+            result[3] = -quat[3] / norm;
+        }
+
+
+        // 初期姿勢に戻す関数
+        void resetToInitialQuat(float* current_quat) {
+            if (!initial_quat_set) return;
+            float inverse_initial_quat[4];
+            inverseQuat(initial_quat, inverse_initial_quat);
+            float result[4];
+            quatMultiply(current_quat, inverse_initial_quat, result);
+            for (int i = 0; i < 4; ++i) {
+                current_quat[i] = result[i];
+            }
+        }
+        */
+
 
         void reConnect() {
             bleCombo.end();

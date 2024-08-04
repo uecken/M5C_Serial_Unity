@@ -27,6 +27,7 @@ void MahonyAHRSupdate(float gx, float gy, float gz, float ax, float ay, float az
 //void MahonyAHRSupdateIMU(float gx, float gy, float gz, float ax, float ay, float az);
 float* MahonyAHRSupdateIMU(float gx, float gy, float gz, float ax, float ay, float az,float *pitch,float *roll,float *yaw,float sampleFreq);
 float invSqrt(float x);
+void setQ(float *Q);
 #endif
 //=====================================================================================================
 // End of file
