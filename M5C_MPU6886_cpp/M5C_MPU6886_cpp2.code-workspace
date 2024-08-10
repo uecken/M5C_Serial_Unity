@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "C:/Users/user/Documents/unity/M5C_Serial_Unity"
+		},
+		{
+			"path": "../M5C_Serialwrite2SPIFFS"
 		}
 	],
 	"settings": {

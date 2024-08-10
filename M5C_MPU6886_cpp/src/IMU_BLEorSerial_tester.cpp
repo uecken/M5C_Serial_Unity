@@ -161,6 +161,36 @@ struct pk{ //44byte (padding 2Byte?)
   float hid_input_acc_threshold; //最終入力値の絶対加速度閾値 2byte
 };
 
+struct pk2{ //44byte (padding 2Byte?)
+  //mode設定
+  uint8_t mode; //
+  uint8_t index; //1~255
+  uint8_t priority; //1~255 1:high , 255:low
+
+  //---トリガー---
+  //オイラー格
+  short rpy[3]; //6byte
+  short rpy_end[3]; //6byte
+
+  //クォータニオン
+  float quatanion[4]; //16byte
+  float quatanion_end[4]; //16byte
+
+  //加速度,ジャイロ (優先度低)
+  float acc_triger[4];  //x,y,z,composite
+  float gyro_triger[4];  //x,y,z,composite
+
+
+  //---入力値---
+  char hid_input;   // 1byte
+  char hid_inputs[8];   // 8byte
+
+  
+
+  uint8_t hid_input_interval; //コマンド入力間隔 1byte
+  float hid_input_acc_threshold; //最終入力値の絶対加速度閾値 2byte
+};
+
 // roll -180 ~ +180, pitch -90 ~ +90, yaw -180 ~ +180
 
 // ======== Street Fighter, MODE_STREET_FIGHTER_RANGE用, RightDisplay ==========

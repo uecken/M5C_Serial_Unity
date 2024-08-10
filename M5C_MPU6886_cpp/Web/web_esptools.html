@@ -133,7 +133,7 @@
 
     async function fetchWebFiles() {
         // ここでは静的なリストを使用していますが、サーバーからの動的リストを取得することもできます。
-        const files = ['firmware1.bin', 'firmware2.bin'];
+        const files = ['default.bin', 'pk2data.bin'];
         webFilesSelect.innerHTML = '';
         files.forEach(file => {
             const option = document.createElement('option');
