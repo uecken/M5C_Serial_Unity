@@ -37,6 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const qinitializeBtn = document.getElementById('qinitializeBtn');
     const qinitializeHorizontalBtn = document.getElementById('qinitializeHorizontalBtn');
     const qinitializeUprightBtn = document.getElementById('qinitializeUprightBtn');
+    const addpk2Btn = document.getElementById('addpk2Btn');
 
     let savedPort = null; // 以前選択したポートを保存する変数
 
@@ -87,11 +88,27 @@ document.addEventListener('DOMContentLoaded', () => {
         qinitializeBtn.addEventListener('click', () => sendCommand('QINIT'));
         qinitializeHorizontalBtn.addEventListener('click', () => sendCommand('QINITH'));
         qinitializeUprightBtn.addEventListener('click', () => sendCommand('QINITU'));
-
+        addpk2Btn.addEventListener('click', () => {
+            const index = document.getElementById('index').value;
+            const buttonIdx = document.getElementById('button_idx').value;
+            const rpy = document.getElementById('rpy').value;
+            const quaternion = document.getElementById('quatarnion').value;
+            const accTrigger = document.getElementById('acc_triger').value;
+            const gyroTrigger = document.getElementById('gyro_triger').value;
+            const inputsMsg = document.getElementById('inputs_msg').value;
+            const hidInputInterval = document.getElementById('hid_input_interval').value;
+            const msgFormat = document.getElementById('msg_format').value;
+    
+            const command = `addpk2,${index},${buttonIdx},${rpy},${quaternion},${accTrigger},${gyroTrigger},${inputsMsg},${hidInputInterval},${msgFormat}`;
+            console.log("Sending command:", command);
+            sendCommand(command);
+        });
 
         function sendCommand(command) {
             const serialInput = document.getElementById('serialInput');
+            console.log(command);
             serialInput.value = command;
+            console.log(serialInput.value);
             document.getElementById('sendBtn').click();
         }
     }
@@ -523,4 +540,147 @@ document.addEventListener('DOMContentLoaded', () => {
         container.innerHTML = '';
         container.appendChild(table);
     }
-});
+
+//=============pk3==================
+
+    // pk3構造体の定義
+    class Pk3 {
+      constructor(data) {
+        this.index = data.index;
+        this.button_idx = data.button_idx;
+        this.rpy = data.rpy;
+        this.quatarnion = data.quatarnion;
+        this.acc_triger = data.acc_triger;
+        this.gyro_triger = data.gyro_triger;
+        this.inputs_msg = data.inputs_msg;
+        this.hid_input_interval = data.hid_input_interval;
+        this.msg_format = data.msg_format;
+      }
+    }
+
+    // pk3構造体のベクトルを送信する関数
+    async function sendPk3Vector(pk3Vector, fileName) {
+        console.log('Sending PK3 vector', pk3Vector, 'to file', fileName); // デバッグ出力
+        const buffer = new ArrayBuffer(pk3Vector.length * 84); // pk3構造体のサイズは84バイト
+        const view = new DataView(buffer);
+    
+        pk3Vector.forEach((pk3Data, idx) => {
+            const offset = idx * 84;
+            view.setUint8(offset, pk3Data.index);
+            view.setUint8(offset + 1, pk3Data.button_idx);
+            // パディング2バイトをスキップ
+            pk3Data.rpy.forEach((val, rpyIdx) => view.setInt16(offset + 4 + rpyIdx * 2, val, true));
+            // パディング2バイトをスキップ
+            pk3Data.quatarnion.forEach((val, quatIdx) => view.setFloat32(offset + 12 + quatIdx * 4, val, true));
+            pk3Data.acc_triger.forEach((val, accIdx) => view.setFloat32(offset + 28 + accIdx * 4, val, true));
+            pk3Data.gyro_triger.forEach((val, gyroIdx) => view.setFloat32(offset + 44 + gyroIdx * 4, val, true));
+            
+            // inputs_msg の処理を修正
+            if (typeof pk3Data.inputs_msg === 'string') {
+                pk3Data.inputs_msg.split('').forEach((char, msgIdx) => view.setUint8(offset + 60 + msgIdx, char.charCodeAt(0)));
+            } else if (typeof pk3Data.inputs_msg === 'number') {
+                view.setUint8(offset + 60, pk3Data.inputs_msg);
+            } else {
+                console.error('Invalid inputs_msg type:', typeof pk3Data.inputs_msg);
+            }
+            
+            view.setUint8(offset + 80, pk3Data.hid_input_interval);
+            view.setUint8(offset + 81, pk3Data.msg_format);
+            // パディング2バイトをスキップ
+        });
+    
+        const header = `savepk3vectol2file,${fileName},${pk3Vector.length},${buffer.byteLength}\n`;
+        console.log('Sending header:', header); // デバッグ出力
+        await writeToSerial(new TextEncoder().encode(header)); // Send header
+    
+        /*
+        const chunkSize = 64; // より小さなチャンクサイズを設定
+        for (let i = 0; i < buffer.byteLength; i += chunkSize) {
+            const chunk = new Uint8Array(buffer, i, Math.min(chunkSize, buffer.byteLength - i));
+            console.log(`Sending chunk ${i / chunkSize + 1}`);
+            await writeToSerial(chunk);
+            await new Promise(resolve => setTimeout(resolve, 100)); // チャンク間に少し待機
+        }
+            */
+
+        // ==256Byte以下の送信の場合
+        // 200ミリ秒待機
+        await new Promise(resolve => setTimeout(resolve, 200));
+    
+        console.log('Sending binary data'); // デバッグ出力
+        await writeToSerial(new Uint8Array(buffer)); // Send pk3vectol binary
+        
+    }
+
+    // pk3Vectorをグローバルスコープで定義
+    let pk3Vector = [];
+    const pk3Form = document.getElementById('pk3Form');
+    const pk3Items = document.getElementById('pk3Items');
+    const sendPk3VectorBtn = document.getElementById('sendPk3VectorBtn');
+
+    console.log('pk3Form:', pk3Form);
+    console.log('pk3Items:', pk3Items);
+    console.log('sendPk3VectorBtn:', sendPk3VectorBtn);
+
+    pk3Form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        addPk3ToList();
+    });
+
+    function addPk3ToList() {
+        const pk3 = {
+            index: parseInt(document.getElementById('index').value),
+            button_idx: parseInt(document.getElementById('button_idx').value),
+            rpy: document.getElementById('rpy').value.split(',').map(Number),
+            quatarnion: document.getElementById('quatarnion').value.split(',').map(Number),
+            acc_triger: document.getElementById('acc_triger').value.split(',').map(Number),
+            gyro_triger: document.getElementById('gyro_triger').value.split(',').map(Number),
+            inputs_msg: document.getElementById('inputs_msg').value,
+            hid_input_interval: parseInt(document.getElementById('hid_input_interval').value),
+            msg_format: parseInt(document.getElementById('msg_format').value)
+        };
+    
+        console.log('Added PK3:', pk3); // デバッグ出力
+    
+        pk3Vector.push(pk3);
+        updatePk3List();
+    }
+
+    function updatePk3List() {
+        pk3Items.innerHTML = '';
+        pk3Vector.forEach((pk3, index) => {
+            const li = document.createElement('li');
+            li.className = 'list-group-item';
+            li.innerHTML = `
+                <strong>PK3 ${index + 1}:</strong><br>
+                Index: ${pk3.index}, Button: ${pk3.button_idx}<br>
+                RPY: ${pk3.rpy.join(', ')}<br>
+                Quaternion: ${pk3.quatarnion.join(', ')}<br>
+                Acc Trigger: ${pk3.acc_triger.join(', ')}<br>
+                Gyro Trigger: ${pk3.gyro_triger.join(', ')}<br>
+                Inputs Message: ${pk3.inputs_msg}<br>
+                HID Input Interval: ${pk3.hid_input_interval}<br>
+                Message Format: ${pk3.msg_format}
+            `;
+            pk3Items.appendChild(li);
+        });
+    }
+
+    if (sendPk3VectorBtn) {
+        sendPk3VectorBtn.addEventListener('click', async () => {
+            if (pk3Vector.length === 0) {
+                alert('No PK3 data to send');
+                return;
+            }
+            const fileName = prompt('Enter file name to save PK3 vector:');
+            if (fileName) {
+                await sendPk3Vector(pk3Vector, fileName);
+                alert('Sent PK3 vector to microcontroller');
+                pk3Vector = [];
+                updatePk3List();
+            }
+        });
+    } else {
+        console.error('sendPk3VectorBtn not found');
+    }
+    });

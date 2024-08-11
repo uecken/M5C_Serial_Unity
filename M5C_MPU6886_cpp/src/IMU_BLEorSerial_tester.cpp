@@ -8,6 +8,7 @@
 #endif
 #include <vector>
 #include <EEPROM.h>
+#include <LittleFS.h>
 
 
 //Select BTserial or MotionController
@@ -97,30 +98,7 @@ boolean DEBUG_HID = true;
 boolean BLEHID_ENABLE = true;
 
 
-//===========Player Key settings2=============
-struct pk2{
-  uint16_t index;
 
-  //===Trigger==
-  uint8_t button_idx; //0~2
-  short rpy[3]; //6byte
-  float quatarnion[4]; //16byte
-  float accX_triger;  
-  float accY_triger;  
-  float accZ_triger;   
-  float accABS_trigger;
-  float gyroX_triger;  
-  float gyroY_triger;  
-  float gyroZ_triger;
-  float gyroABS_trigger;
-  
-  //==Outoput==
-  uint8_t inputs_msg[20]; //ASCI+Key&Mouse or Gamepad
-
-  //==Option==
-  uint8_t hid_input_interval; //default:20ms
-  uint8_t msg_format; //0:deafult 1:Gamepad
-};
 
 
 
@@ -156,36 +134,6 @@ struct pk{ //44byte (padding 2Byte?)
   //入力値
   char hid_input;   // 1byte
   char hid_inputs[8];   // 8byte
-
-  uint8_t hid_input_interval; //コマンド入力間隔 1byte
-  float hid_input_acc_threshold; //最終入力値の絶対加速度閾値 2byte
-};
-
-struct pk2{ //44byte (padding 2Byte?)
-  //mode設定
-  uint8_t mode; //
-  uint8_t index; //1~255
-  uint8_t priority; //1~255 1:high , 255:low
-
-  //---トリガー---
-  //オイラー格
-  short rpy[3]; //6byte
-  short rpy_end[3]; //6byte
-
-  //クォータニオン
-  float quatanion[4]; //16byte
-  float quatanion_end[4]; //16byte
-
-  //加速度,ジャイロ (優先度低)
-  float acc_triger[4];  //x,y,z,composite
-  float gyro_triger[4];  //x,y,z,composite
-
-
-  //---入力値---
-  char hid_input;   // 1byte
-  char hid_inputs[8];   // 8byte
-
-  
 
   uint8_t hid_input_interval; //コマンド入力間隔 1byte
   float hid_input_acc_threshold; //最終入力値の絶対加速度閾値 2byte
@@ -354,6 +302,20 @@ void setup() {
     xSemaphoreGive(imuDataMutex);
   }*/
  
+      // LittleFSの初期化
+    if (!LittleFS.begin()) {
+        Serial.println("An Error has occurred while mounting LittleFS");
+        Serial.println("Formatting LittleFS...");
+        if (LittleFS.format()) {
+            Serial.println("LittleFS formatted successfully");
+        } else {
+            Serial.println("Failed to format LittleFS");
+        }
+    } else {
+        Serial.println("LittleFS mounted successfully");
+    }
+
+
   //保存したPlayerkeyベクトルの読みだし
   if(EEPROM_SIZE>EEPROM_MAX_SIZE){
     if(DEBUG_EEPROM)Serial.println("EEPROM_SIZE is over 4095(EEPROM_MAX_SIZE)");
@@ -843,7 +805,7 @@ static void hidSessionLoop(void* arg) {
         }else{
           if(mc.mode==MODE_MOTION_MASSAGE){
             char cs[50];
-            input_serial.toCharArray(cs,50);
+            s.toCharArray(cs,50);
             //message message = { {roll,pitch,yaw}, cs}; //C++では配列に直接配列コピーできない
             message message;
             message.rpy[0] = roll;
@@ -863,7 +825,7 @@ static void hidSessionLoop(void* arg) {
         //連続文字の場合
           //後日実装
         
-        input_serial = "";
+        //input_serial = "";
         input_serial_char =  NULL;
       }
 
@@ -916,17 +878,31 @@ static void WriteSessionLoop(void* arg) {
   }
 }
 
-String inputs[10] = {"\0"};
+String inputs[50] = {"\0"};
 static void ReadSessionLoop(void* arg){
   while (1) {
     uint32_t entryTime = millis();
     if(Serial.available()){//受信データ確認
-      //M5.Lcd.setCursor(10, 110);
+
+      //初期化
+      input_serial = "";
+      for (int i = 0; i < 50; i++) {
+          inputs[i] = "";
+      }
+
+      while (Serial.available()) {
+          char c = Serial.read();
+          input_serial += c;
+          vTaskDelay(1); // 少し待つことでデータの取りこぼしを防ぐ
+          //1ms待たないと0が入力されない
+      }
       
-      input_serial = Serial.readStringUntil('/0');
+      //Serial.println("1"+input_serial);
+      //input_serial = Serial.readStringUntil('/0');
+      Serial.println("2:"+input_serial);
       input_serial.trim(); //remove (" ","\t","\v","\f","\r","\n") not split
       input_serial_char = input_serial[0];
-      Serial.println(input_serial);
+      Serial.println("3:"+input_serial);
       //M5.Lcd.println(input_serial);
 
       int num_length ;
@@ -947,6 +923,116 @@ static void ReadSessionLoop(void* arg){
           }
           mc.set_initial_quaternion = true;
         }
+        else if(command == "addpk2" || command == "pk2"){
+          Serial.println("4:");
+          mc.addPK2ToVector(mc.pk2_array2struct(inputs,1),mc.pk2_ref_vector);
+          mc.serialprint_pk2vector(&mc.pk2_ref_vector);
+          //mc.readPK2vector(&mc.pk2_ref_vector);
+        }else if(command == "loadpk3vector"){
+          std::vector<pk3> loadedVector;
+          if (mc.loadpk3Vector(inputs[1].c_str(), loadedVector)) {
+              Serial.println("pk3 vector loaded from LittleFS successfully");
+              mc.printpk3Vector(loadedVector);
+          } else {
+              Serial.println("Failed to load pk3 vector from LittleFS");
+          }
+        }else if(command == "savepk3vectol2file"){
+
+          String fileName = inputs[1];
+          int pk3VectorLength = inputs[2].toInt();
+          int totalSize = inputs[3].toInt();
+        
+          Serial.printf("Received command to save pk3 vector. File: %s, Length: %d, Size: %d bytes\n", 
+                        fileName.c_str(), pk3VectorLength, totalSize);
+
+          std::vector<pk3> receivedPK3Vector(pk3VectorLength);
+          unsigned long startTime = millis();
+          unsigned long timeout = 2000; // 2秒のタイムアウト
+
+
+//シリアバッファ変更は C:\Users\User\.platformio\packages\framework-arduinoespressif32\cores\esp32
+//_rxBufferSize(256),
+          while (Serial.available() < totalSize) {
+            // シリアルバッファにデータが揃うまで待つ
+            Serial.print("C:Waiting. Available bytes is: ");
+            Serial.println(Serial.available());
+
+            // タイムアウトチェック
+            if (millis() - startTime > timeout) {
+                Serial.println("Timeout: Data reception incomplete after 5 seconds");
+                break; // タイムアウトした場合、ループを抜ける
+            }
+                
+            vTaskDelay(500); // 少し待つWebSerialはデータ遅れが頻繁に発生する
+          } //標準バッファは256Byteのため、84x3=252Byteを超えるとエラーが起きやすい。
+
+/*
+          size_t totalReceived = 0;
+          while (totalReceived < totalSize) {
+              if (Serial.available()) {
+                  size_t bytesAvailable = Serial.available();
+                  size_t bytesToRead = totalSize - totalReceived;
+                  if (bytesAvailable < bytesToRead) {
+                      bytesToRead = bytesAvailable;
+                  }
+                  size_t bytesRead = Serial.readBytes(((char*)receivedPK3Vector.data()) + totalReceived, bytesToRead);
+                  totalReceived += bytesRead;
+                  Serial.printf("Received %d bytes, total: %d\n", bytesRead, totalReceived);
+              }
+              delay(10); // 短い待機時間を設定
+          }
+*/
+
+          for (size_t i = 0; i < pk3VectorLength; i++) {
+            Serial.readBytes((char *)&receivedPK3Vector[i], sizeof(pk3));
+
+            //受信文字を1行で表示
+            //if(debug_serial) Serial.println((char *)&receivedData[i]);
+
+            //受信文字を要素ごとに表示
+            /*
+            if(1) {
+              Serial.print("index: "); Serial.println(receivedData[i].index);
+              Serial.print("button_idx: "); Serial.println(receivedData[i].button_idx);
+              Serial.print("rpy: ");
+              for (int j = 0; j < 3; j++) { Serial.print(receivedData[i].rpy[j]); Serial.print(" "); }
+              Serial.println();
+              Serial.print("quatarnion: ");
+              for (int j = 0; j < 4; j++) { Serial.print(receivedData[i].quatarnion[j]); Serial.print(" "); }
+              Serial.println();
+              Serial.print("acc_triger: ");
+              for (int j = 0; j < 4; j++) { Serial.print(receivedData[i].acc_triger[j]); Serial.print(" "); }
+              Serial.println();
+              Serial.print("gyro_triger: ");
+              for (int j = 0; j < 4; j++) { Serial.print(receivedData[i].gyro_triger[j]); Serial.print(" "); }
+              Serial.println();
+              Serial.print("inputs_msg: ");
+              for (int j = 0; j < 20; j++) { Serial.print((char)receivedData[i].inputs_msg[j]); Serial.print(" "); }
+              Serial.println();
+              Serial.print("hid_input_interval: "); Serial.println(receivedData[i].hid_input_interval);
+              Serial.print("msg_format: "); Serial.println(receivedData[i].msg_format);
+              Serial.println("-------------");
+            }
+            */
+          }
+          mc.printpk3Vector(receivedPK3Vector);
+          if (mc.savePk3VectorToLittleFS(fileName.c_str(), receivedPK3Vector)) {
+            Serial.println("Data saved successfully");
+          } else {
+            Serial.println("Failed to save data");
+          }
+
+        }else if(command == "listDir"){
+          mc.listRootDirectory();
+        }else if(command == "writeMsg"){
+          mc.writeStringToFile(inputs[1].c_str(),inputs[2].c_str());
+        }else if(command == "readMsg"){
+          String a = mc.readStringFromFile(inputs[1].c_str());
+        }
+        else{
+        //`savepk2vectol,${fileName},${arrayBuffer.byteLength}
+        }
+
       }else if(mc.mode==MODE_MOTION_MASSAGE){
         if(input_serial == "FLUSH") flushMessageVector(message_vector,"MESSAGE");
         else if(input_serial == "READ")readMessageVector("MESSAGE");
@@ -1624,3 +1710,5 @@ int split(String data, char delimiter, String *dst){
     }
     return (index + 1);
 }
+
+
