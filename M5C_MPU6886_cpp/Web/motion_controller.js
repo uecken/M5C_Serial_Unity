@@ -555,6 +555,7 @@ document.addEventListener('DOMContentLoaded', () => {
         this.inputs_msg = data.inputs_msg;
         this.hid_input_interval = data.hid_input_interval;
         this.msg_format = data.msg_format;
+        this.hid_input_acc_threshold = data.hid_input_acc_threshold
       }
     }
 
@@ -576,17 +577,16 @@ document.addEventListener('DOMContentLoaded', () => {
             pk3Data.gyro_triger.forEach((val, gyroIdx) => view.setFloat32(offset + 44 + gyroIdx * 4, val, true));
             
             // inputs_msg の処理を修正
-            if (typeof pk3Data.inputs_msg === 'string') {
-                pk3Data.inputs_msg.split('').forEach((char, msgIdx) => view.setUint8(offset + 60 + msgIdx, char.charCodeAt(0)));
-            } else if (typeof pk3Data.inputs_msg === 'number') {
-                view.setUint8(offset + 60, pk3Data.inputs_msg);
-            } else {
-                console.error('Invalid inputs_msg type:', typeof pk3Data.inputs_msg);
-            }
+            pk3Data.inputs_msg.forEach((byte, msgIdx) => {
+                if (msgIdx < 20) { // 最大20バイトまで
+                    view.setUint8(offset + 60 + msgIdx, byte);
+                }
+            });
             
             view.setUint8(offset + 80, pk3Data.hid_input_interval);
             view.setUint8(offset + 81, pk3Data.msg_format);
-            // パディング2バイトをスキップ
+            view.setUint8(offset, pk3.hid_input_acc_threshold); offset += 1;
+            // パディング1バイトをスキップ
         });
     
         const header = `savepk3vectol2file,${fileName},${pk3Vector.length},${buffer.byteLength}\n`;
@@ -628,6 +628,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     function addPk3ToList() {
+        const inputsMsgRaw = document.getElementById('inputs_msg').value;
+        const inputsMsg = parseInputMsg(inputsMsgRaw);
+        
         const pk3 = {
             index: parseInt(document.getElementById('index').value),
             button_idx: parseInt(document.getElementById('button_idx').value),
@@ -635,7 +638,7 @@ document.addEventListener('DOMContentLoaded', () => {
             quatarnion: document.getElementById('quatarnion').value.split(',').map(Number),
             acc_triger: document.getElementById('acc_triger').value.split(',').map(Number),
             gyro_triger: document.getElementById('gyro_triger').value.split(',').map(Number),
-            inputs_msg: document.getElementById('inputs_msg').value,
+            inputs_msg: inputsMsg,
             hid_input_interval: parseInt(document.getElementById('hid_input_interval').value),
             msg_format: parseInt(document.getElementById('msg_format').value)
         };
@@ -658,12 +661,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 Quaternion: ${pk3.quatarnion.join(', ')}<br>
                 Acc Trigger: ${pk3.acc_triger.join(', ')}<br>
                 Gyro Trigger: ${pk3.gyro_triger.join(', ')}<br>
-                Inputs Message: ${pk3.inputs_msg}<br>
+                Inputs Message: ${Array.from(pk3.inputs_msg).map(b => 
+                    b >= 32 && b <= 126 ? String.fromCharCode(b) : '0x' + b.toString(16).padStart(2, '0').toUpperCase()
+                ).join(', ')}<br>                
                 HID Input Interval: ${pk3.hid_input_interval}<br>
                 Message Format: ${pk3.msg_format}
             `;
+        //  Inputs Message: ${pk3.inputs_msg}<br>
             pk3Items.appendChild(li);
         });
+
     }
 
     if (sendPk3VectorBtn) {
@@ -683,4 +690,21 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
         console.error('sendPk3VectorBtn not found');
     }
-    });
+
+    function parseInputMsg(input) {
+        return input.split(',').map(item => {
+            item = item.trim();
+            if (item.startsWith('0x')) {
+                return parseInt(item, 16);
+            } else if (item.length === 1) {
+                return item.charCodeAt(0);
+            } else {
+                console.warn(`Invalid input: ${item}`);
+                return 0;
+            }
+        });
+    }
+});
+
+
+    

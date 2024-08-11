@@ -28,11 +28,12 @@ boolean LEFT_DISPLAY = true;
 
 
 //Mode設定
-#define NUM_OF_MODE 4
+#define NUM_OF_MODE 5
 #define MODE_STREET_FIGHTER_DIST 0
-#define MODE_MOTION_CONTROLLER 1  //MOTION INPUT
-#define MODE_MOTION_MASSAGE 2  //MOTION MESSAGE
-#define MODE_MOUSE 3
+#define MODE_PK3 1
+#define MODE_MOTION_CONTROLLER 2  //MOTION INPUT
+#define MODE_MOTION_MASSAGE 3  //MOTION MESSAGE
+#define MODE_MOUSE 4
 #define MODE_MOUSE_KEYBOARD 4
 #define MODE_STREET_FIGHTER_RANGE 5 //not used
 
@@ -90,6 +91,8 @@ struct basicInfo {
     uint8_t initial_mode; //BLEHID_USBSerial, USBHID_BTSerial,BLEHID_BTSerial
 };
 
+
+
 struct pk3 {
   uint8_t index;
   uint8_t button_idx;
@@ -102,7 +105,8 @@ struct pk3 {
   uint8_t inputs_msg[20];
   uint8_t hid_input_interval;
   uint8_t msg_format;
-  uint8_t padding3[2];
+  uint8_t hid_input_acc_threshold;
+  uint8_t padding3[1];
 };
 
 
@@ -139,8 +143,11 @@ class MotionController{
         bool set_initial_quaternion_horizontal = false;
         bool set_initial_quaternion_upright = false;
         
-        
+        float rpyc[4];       
+        float* q_array;
+
         std::vector<pk2> pk2_ref_vector;
+        std::vector<pk3> pk3_ref_vector;
 
     // インスタンス作成時に構造体配列を初期化
         MotionController(int dataSize,float Fs) {
@@ -166,6 +173,9 @@ class MotionController{
         void addSensorData(float accelX, float accelY, float accelZ, 
                                             float gyroX, float gyroY, float gyroZ, 
                                             float roll, float pitch, float yaw) {
+            rpyc[0] = roll;
+            rpyc[1] = pitch;
+            rpyc[2] = yaw;
             // ローパスフィルタを適用してデータを更新
             applyLowPassFilter(sensorDataArray[currentDataIndex_].accelX, accelX);
             applyLowPassFilter(sensorDataArray[currentDataIndex_].accelY, accelY);
@@ -497,6 +507,7 @@ class MotionController{
             String mode_str;
             switch(mode){
                 case MODE_STREET_FIGHTER_DIST: mode_str="STREET FIGHTER      "; break;
+                case MODE_PK3: mode_str                ="PK3                 "; break;                
                 case MODE_MOTION_CONTROLLER: mode_str  ="MOTION CONTROLLER   "; break;
                 case MODE_MOTION_MASSAGE: mode_str     ="MOTION_MASSAGE      "; break;  
                 case MODE_MOUSE: mode_str              ="MOUSE               "; break;
@@ -975,6 +986,51 @@ class MotionController{
             safePath = "/" + safePath;
         }
         return safePath;
+    }
+
+    pk3 getClosestPK3(std::vector<pk3> pk3_refs, String type) {
+        pk3 pk3_selected;
+        float distance;
+        float min_distance = 999999.0f;
+
+        if (type == "rp") {
+            for (uint8_t i = 0; i < pk3_refs.size(); i++) {
+            short roll_ref = pk3_refs[i].rpy[0];
+            short pitch_ref = pk3_refs[i].rpy[1];
+
+            float roll_diff = rpyc[0] - roll_ref;
+            if (rpyc[0] > 90 && roll_ref < -90) {
+                roll_diff = (180 - rpyc[0]) + (180 + roll_ref);
+            } else if (rpyc[0] < -90 && roll_ref > 90) {
+                roll_diff = -(-180 - rpyc[0]) + (180 - roll_ref);
+            }
+
+            float pitch_diff = rpyc[1] - pitch_ref;
+
+            distance = sqrt(roll_diff * roll_diff + pitch_diff * pitch_diff);
+
+                if (distance < min_distance) {
+                    min_distance = distance;
+                    pk3_selected = pk3_refs[i];
+                }
+            }
+        } else if (type == "quaternion") {
+            for (uint8_t i = 0; i < pk3_refs.size(); i++) {
+                float qx_diff = (*q_array) - pk3_refs[i].quatarnion[0];
+                float qy_diff = (*(q_array + 1)) - pk3_refs[i].quatarnion[1];
+                float qz_diff = (*(q_array + 2)) - pk3_refs[i].quatarnion[2];
+                float qw_diff = (*(q_array + 3)) - pk3_refs[i].quatarnion[3];
+
+                distance = sqrt(qx_diff * qx_diff + qy_diff * qy_diff + qz_diff * qz_diff + qw_diff * qw_diff);
+
+                if (distance < min_distance) {
+                    min_distance = distance;
+                    pk3_selected = pk3_refs[i];
+                }
+            }
+        }
+
+        return pk3_selected;
     }
 
 

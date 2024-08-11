@@ -157,7 +157,10 @@
                     </div>
                     <div class="form-group">
                         <label for="inputs_msg">Inputs Message</label>
-                        <input type="text" class="form-control" id="inputs_msg" value="a" required>
+                        <input type="text" class="form-control" id="inputs_msg" value="0xDA,0xD8" required>
+                        <small class="form-text text-muted">
+                            Enter hex values for keys (e.g., DA for UP, D8 for LEFT, 61 for 'a')
+                        </small>
                     </div>
                     <div class="form-group">
                         <label for="hid_input_interval">HID Input Interval</label>
@@ -167,7 +170,12 @@
                         <label for="msg_format">Message Format</label>
                         <input type="number" class="form-control" id="msg_format" value="0" required>
                     </div>
+                    <div class="form-group">
+                        <label for="hid_input_acc_threshold">HID_input_acc_threshold</label>
+                        <input type="number" class="form-control" id="hid_input_acc_threshold" placeholder="HID Input Acc Threshold" value="2">                   
+                    </div>
                     <button type="submit" class="btn btn-primary">Add PK3</button>
+                    End Trigger (not implemented)
                 </form>
             </div>
             <div id="pk3List" class="mt-3">

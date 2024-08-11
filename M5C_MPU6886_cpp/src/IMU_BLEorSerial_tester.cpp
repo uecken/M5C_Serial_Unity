@@ -423,6 +423,7 @@ static void ImuLoop(void* arg) {
       q_array = M5.IMU.getAhrsData(&pitch,&roll,&yaw,aOX,aOY,aOZ,gOX,gOY,gOZ); //w,x,y,z
 
 
+
       
       if(mc.q_offset_enable){
         mc.quatMultiply(q_array,mc.q_offset);
@@ -435,8 +436,8 @@ static void ImuLoop(void* arg) {
         roll = -roll;
         yaw = -yaw;
       }
-      
 
+      mc.q_array = q_array;
       mc.addSensorData(accX,accY,accZ,gyroX,gyroY,gyroZ,roll,pitch,yaw);
 
     //}
@@ -466,7 +467,26 @@ static void hidSessionLoop(void* arg) {
         M5.Lcd.println(pk1.hid_input);
         event = NO_EVENT;
       }*/
-      if(mc.mode==MODE_TEST_BUTTONB){
+
+
+      //pk3s = pk3_references;
+      if(mc.mode==MODE_PK3){
+        pk3 pk3_selected = mc.getClosestPK3(mc.pk3_ref_vector,"rp");
+        if(events_bool[0]==true){
+
+          if(BLEHID_ENABLE)mc.inputKey(pk3_selected.inputs_msg[0]);
+          //if(DEBUG_HID)Serial.printf("selected_pk,%c,%s,%d,%d, current_rp:%f,%f \r\n",pk_selected.hid_input,pk_selected.hid_inputs,pk_selected.rpy[0],pk_selected.rpy[1],roll,pitch);
+          //if(DEBUG_HID) serialOutput(pk3_selected, "SELECTED_PK");
+          if(DEBUG_HID)Serial.printf("selected_pk3,%c,%d,%d \r\n",pk3_selected.inputs_msg[0],pk3_selected.rpy[0],pk3_selected.rpy[1]);
+          events_bool[0]=false;
+        }else if(events_bool[1]==true){
+          if(BLEHID_ENABLE)mc.execSF_HIDInputs((char*)pk3_selected.inputs_msg,static_cast<float>(pk3_selected.hid_input_acc_threshold),&acc_buffer);
+          //if(BLEHID_ENABLE)mc.execSF_HIDInputs((char*)pk3_selected.inputs_msg,(float)pk3_selected.hid_input_acc_threshold,&acc_buffer);
+          events_bool[1]=false;
+        }
+        
+
+      }else if(mc.mode==MODE_TEST_BUTTONB){
         if(event==INPUT_EVENT){
           //登録キーから判定
           for(uint8_t i = 0; i < pk_vector.size(); i++){
@@ -929,10 +949,10 @@ static void ReadSessionLoop(void* arg){
           mc.serialprint_pk2vector(&mc.pk2_ref_vector);
           //mc.readPK2vector(&mc.pk2_ref_vector);
         }else if(command == "loadpk3vector"){
-          std::vector<pk3> loadedVector;
-          if (mc.loadpk3Vector(inputs[1].c_str(), loadedVector)) {
+          //std::vector<pk3> loadedVector;
+          if (mc.loadpk3Vector(inputs[1].c_str(), mc.pk3_ref_vector)) {
               Serial.println("pk3 vector loaded from LittleFS successfully");
-              mc.printpk3Vector(loadedVector);
+              mc.printpk3Vector(mc.pk3_ref_vector);
           } else {
               Serial.println("Failed to load pk3 vector from LittleFS");
           }
@@ -947,7 +967,7 @@ static void ReadSessionLoop(void* arg){
 
           std::vector<pk3> receivedPK3Vector(pk3VectorLength);
           unsigned long startTime = millis();
-          unsigned long timeout = 2000; // 2秒のタイムアウト
+          unsigned long timeout = 1000; // 2秒のタイムアウト
 
 
 //シリアバッファ変更は C:\Users\User\.platformio\packages\framework-arduinoespressif32\cores\esp32
@@ -959,11 +979,11 @@ static void ReadSessionLoop(void* arg){
 
             // タイムアウトチェック
             if (millis() - startTime > timeout) {
-                Serial.println("Timeout: Data reception incomplete after 5 seconds");
+                Serial.println("Timeout: Data reception incomplete after 1 seconds");
                 break; // タイムアウトした場合、ループを抜ける
             }
                 
-            vTaskDelay(500); // 少し待つWebSerialはデータ遅れが頻繁に発生する
+            vTaskDelay(200); // 少し待つWebSerialはデータ遅れが頻繁に発生する
           } //標準バッファは256Byteのため、84x3=252Byteを超えるとエラーが起きやすい。
 
 /*
@@ -985,7 +1005,21 @@ static void ReadSessionLoop(void* arg){
 
           for (size_t i = 0; i < pk3VectorLength; i++) {
             Serial.readBytes((char *)&receivedPK3Vector[i], sizeof(pk3));
-
+            Serial.print("Received PK3 ");
+            Serial.println(i);
+            Serial.print("Inputs Message: ");
+            for (int j = 0; j < 20 && receivedPK3Vector[i].inputs_msg[j] != 0; j++) {
+                uint8_t key = receivedPK3Vector[i].inputs_msg[j];
+                if (key >= 32 && key <= 126) {
+                    Serial.print((char)key);
+                } else {
+                    Serial.print("0x");
+                    Serial.print(key, HEX);
+                }
+                Serial.print(" ");
+            }
+            Serial.println();
+    
             //受信文字を1行で表示
             //if(debug_serial) Serial.println((char *)&receivedData[i]);
 
@@ -1441,6 +1475,10 @@ void serialprint_pk_references(String option){
           pk_references[i].hid_inputs[4], pk_references[i].hid_inputs[5], pk_references[i].hid_inputs[6], pk_references[i].hid_inputs[7],
           pk_references[i].hid_input_interval,
           pk_references[i].hid_input_acc_threshold);
+    }else if(option=="pk3"){
+
+
+
     }
   }
 }
@@ -1550,6 +1588,7 @@ void calibrateMPU6886(){
   }
   */
 }
+
 
 
 
