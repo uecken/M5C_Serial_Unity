@@ -2,7 +2,20 @@
 #define MotionController_H
 #include <AccelRingBuffer.hpp>
 
-#include <M5StickC.h>
+#define ESP32C3
+//#define _M5STICKC_H_
+
+#ifdef ESP32C3
+  #include <Arduino.h>
+  #include "I2Cdev.h"
+  #include "MPU6050_6Axis_MotionApps20.h"
+  #include "Wire.h"
+#elif defined(_M5STICKC_H_)
+  #include <M5StickC.h>
+#endif
+
+
+
 //#include "MotionController.h"
 #define USE_NIMBLE
 #ifdef USE_NIMBLE
@@ -115,6 +128,17 @@ class MotionController{
     private:
 
     public:
+        #ifdef ESP32C3
+            MPU6050 mpu;
+            //int16_t ax, ay, az;
+            //int16_t gx, gy, gz;
+            float ax, ay, az;
+            float gx, gy, gz;
+            uint8_t fifoBuffer[64]; // FIFO storage buffer
+            Quaternion q;
+        #elif defined(_M5STICKC_H_)
+        #endif
+
         //float mouse_speed = 10;
         uint8_t button[3] = {0,36,26};
         //uint8_t button[3] = {0,26};s
@@ -155,8 +179,6 @@ class MotionController{
             dataSize_ = dataSize;
             currentDataIndex_ = 0;
             sampleFreq = Fs;
-
-
         }
 
         // デストラクタでメモリ解放
@@ -193,7 +215,14 @@ class MotionController{
 
 
         void begin() {
-            M5.begin();  //Init M5StickC Plus.
+        #ifdef ESP32C3
+            Serial.begin(115200);
+            Wire.begin();
+            Serial.println("Initializing I2C devices...");
+            mpu.initialize();
+            delay(100);
+        #else
+            M5.begin();
 
             delay(500);
             M5.Imu.Init(sampleFreq);  //Init IMU.  
@@ -255,6 +284,7 @@ class MotionController{
                 M5.Lcd.print("BLE disabled      ");
             }
 
+            #endif
         }
 
         void set_qoffset(float* q_array){
@@ -315,12 +345,20 @@ class MotionController{
             bleCombo.begin();
             //bleCombo.begin();
 
+            #ifdef _M5STICKC_H_
+            M5.Lcd.print("BLE Connecting....");
             while(!bleCombo.isConnected()){
-                vTaskDelay(100);
-                M5.Lcd.setCursor(5, 35);
                 M5.Lcd.print("BLE Connecting....");
+                vTaskDelay(100);
             }
-            M5.Lcd.print("BLE Connected!      ");
+            Serial.println("BLE Connected!");
+            #endif
+            while(!bleCombo.isConnected()){
+                Serial.println("BLE Connecting....");
+                vTaskDelay(100);
+            }
+            Serial.println("BLE Connected!");
+
         }
 
 
@@ -516,8 +554,13 @@ class MotionController{
 
                 default: mode_str="UNKNOWN      "; break;
             }
+            #ifdef _M5STICKC_H_
             M5.Lcd.setCursor(5, 15);
             M5.Lcd.println("Mode:"+mode_str);
+            #elif defined(ESP32C3)
+            Serial.println("Mode:"+mode_str);
+            #endif
+    
         }
 
         void changeGameMode(boolean init)
@@ -531,8 +574,13 @@ class MotionController{
                     }
                 }
             }
+            #ifdef _M5STICKC_H_
             M5.Lcd.setCursor(5, 25); 
             M5.Lcd.print("GameMode:"+current_game_mode);
+            #elif defined(ESP32C3)
+            Serial.println("GameMode:"+current_game_mode);
+            #endif
+
         }
 
         void changeSerialONOFF(bool init){
@@ -549,19 +597,32 @@ class MotionController{
                     //serial_str = "ON";
                 }
             }
+            #ifdef _M5STICKC_H_
             M5.Lcd.setCursor(5, 70);
             M5.Lcd.print("Serial:"+String(serial_ON));
+            #elif defined(ESP32C3)
+            Serial.println("Serial:"+String(serial_ON));
+            #endif
         }
 
         void serialON(){
             serial_ON = true;
+            #ifdef _M5STICKC_H_
             M5.Lcd.setCursor(5, 70);
             M5.Lcd.print("Serial:"+String(serial_ON));
+            #elif defined(ESP32C3)
+            Serial.println("Serial:"+String(serial_ON));
+            #endif
+
         }
         void serialOFF(){
             serial_ON = false;
+            #ifdef _M5STICKC_H_
             M5.Lcd.setCursor(5, 70);
-            M5.Lcd.print("Serial:"+String(serial_ON));
+            M5.Lcd.print("Serial:"+String(0));
+            #elif defined(ESP32C3)
+            Serial.println("Serial:"+String(serial_ON));
+            #endif
         }
 
 

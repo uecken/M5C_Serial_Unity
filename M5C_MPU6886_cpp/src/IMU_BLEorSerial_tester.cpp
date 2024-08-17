@@ -3,9 +3,12 @@
 #endif 
 
 //#include <M5StickCPlus.h>
+/*
 #ifndef _M5STICKC_H_
 #include <M5StickC.h>
 #endif
+*/
+
 #include <vector>
 #include <EEPROM.h>
 #include <LittleFS.h>
@@ -78,7 +81,7 @@ bool events_bool[3]; //events[0] = INPUT1_EVENT, events[1] = INPUT2_EVENT, event
 const float CONVERT_G_TO_MS2 = 9.80665f;
 const boolean left_axis_trans = true; //Unityは左手系、M5Stackは右手系
 
-void calibrateMPU6886();
+void calibrateMPU();
 int split(String,char,String*);
 
 float accX = 0.0F,accY = 0.0F,accZ = 0.0F;
@@ -285,20 +288,11 @@ void setup() {
    mc.begin();
   #endif
 
-  serWriteMutex = xSemaphoreCreateMutex();
-  imuDataMutex = xSemaphoreCreateMutex();
-  btnDataMutex = xSemaphoreCreateMutex();
-
-  xTaskCreatePinnedToCore(ImuLoop, TASK_NAME_IMU, TASK_STACK_DEPTH, NULL, 2, &taskHandleIMU, TASK_DEFAULT_CORE_ID); 
-  xTaskCreatePinnedToCore(WriteSessionLoop, TASK_NAME_WRITE_SESSION, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
-  xTaskCreatePinnedToCore(ReadSessionLoop, TASK_NAME_READ_SESSION, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
-  xTaskCreatePinnedToCore(ButtonLoop, TASK_NAME_BUTTON, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
-  xTaskCreatePinnedToCore(hidSessionLoop, TASK_NAME_HID, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
 
 
   //calibrate
   /*if (xSemaphoreTake(imuDataMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) {
-    //calibrateMPU6886();
+    //calibrateMPU();
     xSemaphoreGive(imuDataMutex);
   }*/
  
@@ -319,8 +313,7 @@ void setup() {
   //保存したPlayerkeyベクトルの読みだし
   if(EEPROM_SIZE>EEPROM_MAX_SIZE){
     if(DEBUG_EEPROM)Serial.println("EEPROM_SIZE is over 4095(EEPROM_MAX_SIZE)");
-  }
-  else{
+  }else{
     if(!EEPROM.begin(EEPROM_SIZE)){
       Serial.println("ERROR:EEPROM begin failed"); //EEPROM.begin(size)で確保できる最大サイズは通常、最大4095バイト（4KB未満）
     }else{
@@ -348,6 +341,18 @@ void setup() {
     deleteEEPROM("ALL");
   }
    
+
+  serWriteMutex = xSemaphoreCreateMutex();
+  imuDataMutex = xSemaphoreCreateMutex();
+  btnDataMutex = xSemaphoreCreateMutex();
+
+  xTaskCreatePinnedToCore(ImuLoop, TASK_NAME_IMU, TASK_STACK_DEPTH, NULL, 2, &taskHandleIMU, TASK_DEFAULT_CORE_ID); 
+  xTaskCreatePinnedToCore(WriteSessionLoop, TASK_NAME_WRITE_SESSION, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
+  xTaskCreatePinnedToCore(ReadSessionLoop, TASK_NAME_READ_SESSION, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
+  xTaskCreatePinnedToCore(ButtonLoop, TASK_NAME_BUTTON, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
+  xTaskCreatePinnedToCore(hidSessionLoop, TASK_NAME_HID, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
+
+
 
   if(LEFT_DISPLAY){
     Serial.println("LEFT_DISPLAY,");
@@ -387,12 +392,24 @@ void loop() {
 
 static void ImuLoop(void* arg) {
   while (1) {
-    uint32_t entryTime = millis();
+      uint32_t entryTime = millis();
       roll_prev = roll;
       pitch_prev = pitch;
       yaw_prev = yaw;
-      
-    //if (xSemaphoreTake(imuDataMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) {
+
+      #ifdef ESP32C3
+      //mc.mpu.getMotion6(&mc.ax, &mc.ay, &mc.az, &mc.gx, &mc.gy, &mc.gz);
+      mc.mpu.getRealAcceleration(&mc.ax, &mc.ay, &mc.az);
+      mc.mpu.getRealRotation(&mc.gx, &mc.gy, &mc.gz);
+      if (mc.mpu.dmpGetCurrentFIFOPacket(mc.fifoBuffer)) { // Get a packet
+        // Use DMP to get quaternion
+        mc.mpu.dmpGetQuaternion(&mc.q, mc.fifoBuffer);
+        q_array = mc.q.q;
+      }
+      //mc.addSensorData(accX,accY,accZ,gyroX,gyroY,gyroZ,roll,pitch,yaw);
+
+      #else
+      //if (xSemaphoreTake(imuDataMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) {
       M5.IMU.getGyroData(&gyroX,&gyroY,&gyroZ);
       M5.IMU.getAccelData(&accX,&accY,&accZ);
       accX -= aOX; accY -= aOY; accZ -= aOZ; 
@@ -421,13 +438,14 @@ static void ImuLoop(void* arg) {
       }
 
       q_array = M5.IMU.getAhrsData(&pitch,&roll,&yaw,aOX,aOY,aOZ,gOX,gOY,gOZ); //w,x,y,z
-
-
-
       
       if(mc.q_offset_enable){
         mc.quatMultiply(q_array,mc.q_offset);
       }
+
+      mc.q_array = q_array;
+      mc.addSensorData(accX,accY,accZ,gyroX,gyroY,gyroZ,roll,pitch,yaw);
+      #endif
 
       //q_array = M5.IMU.getAhrsData2(&pitch,&roll,&yaw,aOX,aOY,aOZ,gOX,gOY,gOZ);
       pitch -=pO;  roll -= rO;  yaw -= yO;//★最小値-188.5。原因はgyroZの補正ができていないからか？一時的に+8.5して補正する。
@@ -437,18 +455,18 @@ static void ImuLoop(void* arg) {
         yaw = -yaw;
       }
 
-      mc.q_array = q_array;
-      mc.addSensorData(accX,accY,accZ,gyroX,gyroY,gyroZ,roll,pitch,yaw);
+
+
 
     //}
     //xSemaphoreGive(imuDataMutex);
 
-    acc_buffer.add(accX, accY, accZ);
-    unwrpRoll = imur.unwrappingRoll(roll,pitch);
-    unwrpYaw = imur.unwrappingYaw(yaw);
+      acc_buffer.add(accX, accY, accZ);
+      unwrpRoll = imur.unwrappingRoll(roll,pitch);
+      unwrpYaw = imur.unwrappingYaw(yaw);
 
-    int32_t sleep = TASK_SLEEP_IMU - (millis() - entryTime);
-    vTaskDelay((sleep > 0) ? sleep : 0);
+      int32_t sleep = TASK_SLEEP_IMU - (millis() - entryTime);
+      vTaskDelay((sleep > 0) ? sleep : 0);
   }
 }
 
@@ -508,8 +526,8 @@ static void hidSessionLoop(void* arg) {
             //通常の場合
             else if(pk_vector[i].roll_min < roll && roll < pk_vector[i].roll_max){
               if(mc.serial_ON)Serial.println(String("In,")+String(pk_vector[i].hid_input) + ","+String(pk_vector[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
-              M5.Lcd.setCursor(10,60);
-              M5.Lcd.println(String("In,")+String(pk_vector[i].hid_input) + ","+String(pk_vector[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
+              //M5.Lcd.setCursor(10,60);
+              //M5.Lcd.println(String("In,")+String(pk_vector[i].hid_input) + ","+String(pk_vector[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
               mc.execSF_HIDInputs(pk_vector[i].hid_inputs,(float)pk_vector[i].hid_input_acc_threshold,&acc_buffer);
               break;
             }
@@ -756,8 +774,8 @@ static void hidSessionLoop(void* arg) {
             //通常の場合
             else if(pks[i].roll_min < roll && roll < pks[i].roll_max){
               if(mc.serial_ON)Serial.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
-              M5.Lcd.setCursor(10,60);
-              M5.Lcd.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
+              //M5.Lcd.setCursor(10,60);
+              //M5.Lcd.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
               mc.execSF_HIDInputs(pks[i].hid_inputs,(float)pks[i].hid_input_acc_threshold,&acc_buffer);
               break;
             }
@@ -780,8 +798,8 @@ static void hidSessionLoop(void* arg) {
             //通常の場合
             else if(pks[i].roll_min < roll && roll < pks[i].roll_max){
               if(mc.serial_ON)Serial.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
-              M5.Lcd.setCursor(10,60);
-              M5.Lcd.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
+              //M5.Lcd.setCursor(10,60);
+              //M5.Lcd.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
               mc.execSF_HIDInputs(pks[i].hid_inputs,(float)pks[i].hid_input_acc_threshold,&acc_buffer);
               break;
             }
@@ -868,6 +886,7 @@ static void WriteSessionLoop(void* arg) {
 
     //if (xSemaphoreTake(serWriteMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) { // Only for 1 lin serial Input
       if(event==NO_EVENT){
+        #ifdef _M5STICKC_H_
         if(left_axis_trans){//左手系
           //if(mc.serial_ON)Serial.printf("%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, -(yaw-yO2),q_array[0],q_array[1],q_array[2],q_array[3]);
           if(mc.serial_ON)Serial.printf("sensor_data,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, -(yaw-yO2),q_array[0],q_array[1],q_array[2],q_array[3]);
@@ -879,14 +898,34 @@ static void WriteSessionLoop(void* arg) {
         }else{//右手系
           Serial.printf("%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, yaw-yO2);
         }
-        M5.Lcd.setCursor(30, 60);
+        ///M5.Lcd.setCursor(30, 60);
         if((abs(aOX) < 1 & abs(aOY) < 1 & abs(aOZ) < 1) & (abs(aOX) != 0 & abs(aOY) != 0 & abs(aOZ) != 0)){
-          M5.Lcd.println(String(pitch) + " " + String(roll) + " " + String(yaw-yO2));
+          //M5.Lcd.println(String(pitch) + " " + String(roll) + " " + String(yaw-yO2));
         }else{
+
           M5.lcd.println("Not calibrated properly");
+          Serial.println("Not calibrated properly");
         }
         //M5.Lcd.println(String(pitch) + " " + String(unwrpRoll) + " " + String(unwrpYaw-yO2));   
+  
+        #elif defined(ESP32C3)
+        if(left_axis_trans){//左手系
+          //if(mc.serial_ON)Serial.printf("%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, -(yaw-yO2),q_array[0],q_array[1],q_array[2],q_array[3]);
+          if(mc.serial_ON)Serial.printf("sensor_data,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", mc.ax, mc.ay, mc.az,mc.gx,mc.gy,mc.gz, pitch, roll, -(yaw-yO2),mc.q_array[0],mc.q_array[1],mc.q_array[2],mc.q_array[3]);
+          #ifdef BTSerial 
+            //if(mc.serial_ON)bts.printf("%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, -(yaw-yO2),q_array[0],q_array[1],q_array[2],q_array[3]);
+            if(mc.serial_ON)bts.printf("%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, yaw-yO2,q_array[0],q_array[1],q_array[2],q_array[3]);
+          #endif
+        }else{//右手系
+          //Serial.printf("%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, yaw-yO2);
         }
+        if((abs(aOX) < 1 & abs(aOY) < 1 & abs(aOZ) < 1) & (abs(aOX) != 0 & abs(aOY) != 0 & abs(aOZ) != 0)){
+          //M5.Lcd.println(String(pitch) + " " + String(roll) + " " + String(yaw-yO2));
+        }else{
+          Serial.println("Not calibrated properly");
+        }
+        #endif
+    } 
 
         //if(mc.serial_ON)Serial.println(acc_buffer.getMaxAbsAccel(5));
     //}
@@ -1079,6 +1118,7 @@ static void ReadSessionLoop(void* arg){
         //else if(input_serial == "QINIT") {mc.set_initial_quaternion = true;}
         else if(input_serial == "QINITU") {mc.set_initial_quaternion_upright = true;}
         else if(input_serial == "QINITH") {mc.set_initial_quaternion_horizontal = true;} 
+        else if(input_serial == "CAL") {calibrateMPU();} 
       }else if(mc.mode!=MODE_MOTION_MASSAGE){
         if(input_serial == "FLUSH") flushPKvector(pk_references,"MOTION_CONT");
         else if(input_serial == "READ")readPKvector("MOTION_CONT");
@@ -1091,6 +1131,7 @@ static void ReadSessionLoop(void* arg){
         //else if(input_serial == "QINIT") {mc.set_initial_quaternion = true;} //本来は起動時して姿勢が変わる前に実行
         else if(input_serial == "QINITU") {mc.set_initial_quaternion_upright = true;} 
         else if(input_serial == "QINITH") {mc.set_initial_quaternion_horizontal = true;} 
+        else if(input_serial == "CAL") {calibrateMPU();}         
       }
 
 
@@ -1123,13 +1164,14 @@ static void ButtonLoop(void* arg) {
   while (1) {
     uint32_t entryTime = millis();
 
+    #ifdef _M5STICKC_H_
     M5.update();
     if(M5.BtnA.wasReleasefor(2000)){
       yO2 = yaw; //yaw軸の手動補正
     }
     else if(M5.BtnA.wasReleasefor(1000)){
       if (xSemaphoreTake(imuDataMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) {
-        calibrateMPU6886();
+        calibrateMPU();
         xSemaphoreGive(imuDataMutex);
       }
     }
@@ -1141,7 +1183,6 @@ static void ButtonLoop(void* arg) {
     }
 
     if (M5.BtnB.wasReleasefor(3000)){
-      //event = REGISTRATION_ROLL_EVENT;
       mc.reConnect();
     }
     else if (M5.BtnB.wasReleasefor(2000)){
@@ -1208,7 +1249,8 @@ static void ButtonLoop(void* arg) {
           //Serial.println("!");
       }
     }
-    
+  #elif defined(ESP32C3)
+  #endif
 
 
 /*
@@ -1509,12 +1551,26 @@ void resetTask(TaskHandle_t *taskHandle) {
     }
 }
 
-void calibrateMPU6886(){
+void calibrateMPU(){
   float gyroSumX,gyroSumY,gyroSumZ;
   float accSumX,accSumY,accSumZ;
   float calibCount = 500;
-
   Serial.println("Calibrating...");
+
+  #ifdef ESP32C3
+    for (int i = 0; i < calibCount; i++) {
+      //mc.mpu.getMotion6(&mc.ax, &mc.ay, &mc.az, &mc.gx, &mc.gy, &mc.gz);
+      mc.mpu.getRealRotation(&mc.gx, &mc.gy, &mc.gz);
+      mc.mpu.getRealAcceleration(&mc.ax, &mc.ay, &mc.az);
+      gyroSumX += mc.gx;
+      gyroSumY += mc.gy;
+      gyroSumZ += mc.gz;
+      accSumX += mc.ax;
+      accSumY += mc.ay;
+      accSumZ += mc.az;
+      vTaskDelay(10);
+    }
+  #elif defiend(_M5STICKC_H_)
   digitalWrite(10, LOW);
   vTaskDelay(1000);
   digitalWrite(10, HIGH);
@@ -1532,6 +1588,9 @@ void calibrateMPU6886(){
       vTaskDelay(10);
       //Serial.printf("%6.2f, %6.2f, %6.2f\r\n", accX, accY, accZ);
   }
+  #endif
+
+
   gOX = gyroSumX/calibCount;
   gOY = gyroSumY/calibCount;
   gOZ = gyroSumZ/calibCount;
@@ -1573,6 +1632,28 @@ void calibrateMPU6886(){
       Serial.println("Calibration data committed to EEPROM");
   }
   
+  // EEPROMから読み直して確認
+  n = EEPROM_CAL_SPACE_START;
+  EEPROM.get(n, size); n += sizeof(size);
+  float readAOX, readAOY, readAOZ, readGOX, readGOY, readGOZ;
+  EEPROM.get(n, readAOX); n += sizeof(readAOX);
+  EEPROM.get(n, readAOY); n += sizeof(readAOY);
+  EEPROM.get(n, readAOZ); n += sizeof(readAOZ);
+  EEPROM.get(n, readGOX); n += sizeof(readGOX);
+  EEPROM.get(n, readGOY); n += sizeof(readGOY);
+  EEPROM.get(n, readGOZ); n += sizeof(readGOZ);
+
+  Serial.printf("Read from EEPROM: aOX=%f, aOY=%f, aOZ=%f, gOX=%f, gOY=%f, gOZ=%f\n", 
+                readAOX, readAOY, readAOZ, readGOX, readGOY, readGOZ);
+
+  // 読み取った値が正しいか確認
+  if (abs(readAOX - aOX) < 0.001 && abs(readAOY - aOY) < 0.001 && abs(readAOZ - aOZ) < 0.001 &&
+      abs(readGOX - gOX) < 0.001 && abs(readGOY - gOY) < 0.001 && abs(readGOZ - gOZ) < 0.001) {
+    Serial.println("Calibration data verified successfully");
+  } else {
+    Serial.println("ERROR: Calibration data verification failed");
+  }
+
   resetTask(&taskHandleIMU);
   //==Second, write pk array;
   /*
