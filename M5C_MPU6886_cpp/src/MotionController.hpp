@@ -1,4 +1,4 @@
-#ifndef MotionController_H
+
 #define MotionController_H
 #include <AccelRingBuffer.hpp>
 
@@ -54,6 +54,18 @@ boolean LEFT_DISPLAY = true;
 #define MODE_KEYBOARD 99
 //#define MODE_XXXXX 9
 #define MODE_TEST_BUTTONB 20
+
+
+#define NO_EVENT 0
+#define INPUT_EVENT 1
+#define INPUT1_EVENT 2
+#define INPUT2_EVENT 3
+#define INPUT3_EVENT 4
+#define REGISTRATION_ROLL_EVENT 5
+#define REGISTRATION_PITCH_EVENT 6
+#define REGISTRATION_ROLL_PITCH_EVENT 7
+#define xxxxx_EVENT 8
+
 
 
 struct SensorData {
@@ -128,22 +140,54 @@ class MotionController{
     private:
 
     public:
+        uint8_t event=0;
+        bool events_bool[4]; //events[0] = INPUT1_EVENT, events[1] = INPUT2_EVENT, events[2] = INPUT3_EVENT
+
         #ifdef ESP32C3
             MPU6050 mpu;
             //int16_t ax, ay, az;
             //int16_t gx, gy, gz;
             float ax, ay, az;
             float gx, gy, gz;
+            float aOX, aOY, aOZ;
+            float gOX, gOY, gOZ;
             uint8_t fifoBuffer[64]; // FIFO storage buffer
             Quaternion q;
         #elif defined(_M5STICKC_H_)
         #endif
+
+        #ifdef ILLUMITRACK_R
+          #ifdef ESP32C3
+            float lit;
+            uint8_t RIGHT_LITTLE = 2;
+            uint8_t button[1] = {RIGHT_LITTLE};
+            //uint8_t button[3] = {0,26};s
+            bool prev_button_state[1] = {false};
+            uint8_t pin_LED = 99;
+          #elif defined(ESP32S3)
+            float lit;
+            float rng;
+            float mid;
+            float idx;
+            uint8_t RIGHT_LITTLE = 2;
+            uint8_t RIGHT_RING = 3;
+            uint8_t RIGHT_MIDDLE = 4;
+            uint8_t RIGHT_INDEX = 5;
+            uint8_t button[4] = {RIGHT_LITTLE,RIGHT_LITTLE,RIGHT_MIDDLE,RIGHT_INDEX};
+            //uint8_t button[3] = {0,26};s
+            bool prev_button_state[4] = {false,false,false,false};
+            uint8_t pin_LED = 99;
+          #endif
+        #elif defined(_M5STICKC_H_)
+
 
         //float mouse_speed = 10;
         uint8_t button[3] = {0,36,26};
         //uint8_t button[3] = {0,26};s
         bool prev_button_state[3] = {false,false,false};
         uint8_t pin_LED = 10;
+        #endif 
+
         String game_modes[2] = {MODE_SF_P1,MODE_SF_P2};
         String current_game_mode = game_modes[0];
         uint8_t mode = 0;
@@ -195,9 +239,9 @@ class MotionController{
         void addSensorData(float accelX, float accelY, float accelZ, 
                                             float gyroX, float gyroY, float gyroZ, 
                                             float roll, float pitch, float yaw) {
-            rpyc[0] = roll;
-            rpyc[1] = pitch;
-            rpyc[2] = yaw;
+            //rpyc[0] = roll;
+            //rpyc[1] = pitch;
+            //rpyc[2] = yaw;
             // ローパスフィルタを適用してデータを更新
             applyLowPassFilter(sensorDataArray[currentDataIndex_].accelX, accelX);
             applyLowPassFilter(sensorDataArray[currentDataIndex_].accelY, accelY);
@@ -215,13 +259,46 @@ class MotionController{
 
 
         void begin() {
+        #ifdef ILLUMITRACK_R
+          #ifdef ESP32C3
+            pinMode(RIGHT_LITTLE, INPUT);
+          #elif defined(ESP32S3)
+            pinMode(RIGHT_LITTLE, INPUT);
+            pinMode(RIGHT_RING, INPUT);
+            pinMode(RIGHT_MIDDLE, INPUT);
+            pinMode(RIGHT_INDEX, INPUT);
+        #endif
+
         #ifdef ESP32C3
             Serial.begin(115200);
             Wire.begin();
             Serial.println("Initializing I2C devices...");
             mpu.initialize();
             delay(100);
-        #else
+            int devStatus; // Declaration of the devStatus variable
+            devStatus = mpu.dmpInitialize();      
+            if (devStatus == 0) {
+                mpu.setDMPEnabled(true);
+                uint16_t  packetSize = mpu.dmpGetFIFOPacketSize();
+                bool dmpReady = true;
+            } else {
+                // Handle DMP initialization failure
+                Serial.println("DMP initialization failed");
+            }
+
+            if(ble_enable){
+                bleCombo.setName("MC_XIAOC3");
+                bleCombo.begin();     
+                while(!bleCombo.isConnected()){
+                    vTaskDelay(100);
+                    Serial.println("BLE Connecting...");
+                }
+
+                    Serial.println("BLE Connected!");
+            }else{
+                Serial.println("BLE disabled");
+            }
+        #else 
             M5.begin();
 
             delay(500);
@@ -1095,5 +1172,140 @@ class MotionController{
     }
 
 
+    const char* calibrationFile = "/calibration.dat";
+
+    void saveCalibrationData() {
+    File file = LittleFS.open(calibrationFile, "w");
+    if(!file){
+        Serial.println("Failed to open calibration file for writing");
+        return;
+    }
+    
+    file.write((uint8_t*)&aOX, sizeof(aOX));
+    file.write((uint8_t*)&aOY, sizeof(aOY));
+    file.write((uint8_t*)&aOZ, sizeof(aOZ));
+    file.write((uint8_t*)&gOX, sizeof(gOX));
+    file.write((uint8_t*)&gOY, sizeof(gOY));
+    file.write((uint8_t*)&gOZ, sizeof(gOZ));
+    
+    file.close();
+    Serial.println("Calibration data saved to LittleFS");
+    }
+
+    bool loadCalibrationData() {
+    File file = LittleFS.open(calibrationFile, "r");
+    if(!file){
+        Serial.println("No calibration file found");
+        return false;
+    }
+    
+    if(file.read((uint8_t*)&aOX, sizeof(aOX)) &&
+        file.read((uint8_t*)&aOY, sizeof(aOY)) &&
+        file.read((uint8_t*)&aOZ, sizeof(aOZ)) &&
+        file.read((uint8_t*)&gOX, sizeof(gOX)) &&
+        file.read((uint8_t*)&gOY, sizeof(gOY)) &&
+        file.read((uint8_t*)&gOZ, sizeof(gOZ))) {
+        
+        file.close();
+        Serial.println("Calibration data loaded from LittleFS");
+        return true;
+    }
+    
+    file.close();
+    Serial.println("Failed to read calibration data");
+    return false;
+    }
+
+    void calibrateMPUtoLittleFS(){
+        float gyroSumX,gyroSumY,gyroSumZ;
+        float accSumX,accSumY,accSumZ;
+        float calibCount = 500;
+        Serial.println("Calibrating...");
+
+        #ifdef ESP32C3
+            for (int i = 0; i < calibCount; i++) {
+            //mc.mpu.getMotion6(&mc.ax, &mc.ay, &mc.az, &mc.gx, &mc.gy, &mc.gz);
+            mpu.getRealRotation(&gx, &gy, &gz);
+            mpu.getRealAcceleration(&ax, &ay, &az);
+            gyroSumX += gx;
+            gyroSumY += gy;
+            gyroSumZ += gz;
+            accSumX += ax;
+            accSumY += ay;
+            accSumZ += az;
+            vTaskDelay(10);
+            }
+        #endif
+
+            gOX = gyroSumX/calibCount;
+            gOY = gyroSumY/calibCount;
+            gOZ = gyroSumZ/calibCount;
+            aOX = accSumX/calibCount;
+            aOY = accSumY/calibCount;
+            aOZ = (accSumZ/calibCount) - 1.0;//重力加速度1G、つまりM5ボタンが上向きで行う想定
+        //aOZ = (accSumZ/calibCount) + 1.0;//重力加速度1G、つまりM5ボタンが下向きで行う想定
+        //aOZ = (accSumZ/calibCount);//
+        Serial.println("Calibrating...OK");
+        Serial.printf("%3.3f %3.3f %3.3f %3.3f %3.3f %3.3f", aOX, aOY, aOZ, gOX , gOY , gOZ);
+
+        // LittleFSにキャリブレーションデータを保存
+        saveCalibrationData();
+
+        // 保存されたデータを検証
+        float oldAOX = aOX, oldAOY = aOY, oldAOZ = aOZ, oldGOX = gOX, oldGOY = gOY, oldGOZ = gOZ;
+        if (loadCalibrationData()) {
+            if (oldAOX == aOX && oldAOY == aOY && oldAOZ == aOZ &&
+                oldGOX == gOX && oldGOY == gOY && oldGOZ == gOZ) {
+            Serial.println("Calibration data verified successfully");
+            } else {
+            Serial.println("ERROR: Calibration data verification failed");
+            }
+        } else {
+            Serial.println("ERROR: Failed to load calibration data for verification");
+        }
+
+        Serial.printf("Calibration values: aOX=%f, aOY=%f, aOZ=%f, gOX=%f, gOY=%f, gOZ=%f\n", 
+                        aOX, aOY, aOZ, gOX, gOY, gOZ);
+    }
+
+    void offsetSensorData(){
+        ax -= aOX; ay -= aOY; az -= aOZ;
+        gx -= gOX; gy -= gOY; gz -= gOZ;
+    }
+
+
+    //==========illumiTracka============
+    /*
+    void illmiTrack_sensor_read(){
+        lit = analogRead(RIGHT_LITTLE);
+        rng = analogRead(RIGHT_RING);
+        mid = analogRead(RIGHT_MIDDLE);
+        idx = analogRead(RIGHT_INDEX);
+        
+
+        //float tmb = analogRead(RIGHT_THUMB);
+        Serial.printf("%f,%f,%f,%f\r\n",lit,rng,mid,idx);
+    }*/
+
+    void illmiTrack_switch_sensing(){
+        float sensor_threshold = 1;
+        
+        for(uint8_t i=0; i<sizeof(events_bool); i++){
+            //ボタン押下判定
+            uint16_t sensor_val = analogRead(button[i]);
+            Serial.println(sensor_val);
+            if(prev_button_state[i] == false && sensor_val < sensor_threshold){
+                prev_button_state[i] = true;
+                events_bool[i] = true;
+                //Serial.println("..");
+                }
+            //ボタン離す判定
+            else if(prev_button_state[i] == true && sensor_val >= sensor_threshold){
+                prev_button_state[i] = false;
+                events_bool[i] = false;
+                //Serial.println("!");
+            }
+        }
+    }
 };
 #endif

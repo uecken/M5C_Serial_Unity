@@ -456,10 +456,10 @@ uint8_t MPU6050_6Axis_MotionApps20::dmpGetQuaternion(Quaternion *q, const uint8_
         q -> x = (float)qI[1] / 16384.0f;
         q -> y = (float)qI[2] / 16384.0f;
         q -> z = (float)qI[3] / 16384.0f;
-		q->q[0] = q->w;
-		q->q[1] = q->x;
-		q->q[2] = q->y;
-		q->q[3] = q->z;
+		q->q_array[0] = q->w;
+		q->q_array[1] = q->x;
+		q->q_array[2] = q->y;
+		q->q_array[3] = q->z;
         return 0;
     }
     return status; // int16 return value, indicates error if this line is reached

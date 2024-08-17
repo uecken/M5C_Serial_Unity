@@ -54,24 +54,14 @@ uint8_t task_sleep_hid_session_plus = 0;
 static void ImuLoop(void* arg);
 static void ReadSessionLoop(void* arg);
 static void WriteSessionLoop(void* arg);
-static void ButtonLoop(void* arg);
+static void ButtonSessionLoop(void* arg);
 static void hidSessionLoop(void* arg);
 static SemaphoreHandle_t serWriteMutex = NULL;
 static SemaphoreHandle_t imuDataMutex = NULL;
 static SemaphoreHandle_t btnDataMutex = NULL;
 
 
-uint8_t event=0;
-#define NO_EVENT 0
-#define INPUT_EVENT 1
-#define INPUT1_EVENT 2
-#define INPUT2_EVENT 3
-#define INPUT3_EVENT 4
-#define REGISTRATION_ROLL_EVENT 5
-#define REGISTRATION_PITCH_EVENT 6
-#define REGISTRATION_ROLL_PITCH_EVENT 7
-#define xxxxx_EVENT 8
-bool events_bool[3]; //events[0] = INPUT1_EVENT, events[1] = INPUT2_EVENT, events[2] = INPUT3_EVENT
+
 
 
 
@@ -82,6 +72,7 @@ const float CONVERT_G_TO_MS2 = 9.80665f;
 const boolean left_axis_trans = true; //Unityは左手系、M5Stackは右手系
 
 void calibrateMPU();
+void calibrateMPUtoLittleFS();
 int split(String,char,String*);
 
 float accX = 0.0F,accY = 0.0F,accZ = 0.0F;
@@ -99,7 +90,7 @@ float roll_prev,pitch_prev,yaw_prev;
 boolean DEBUG_EEPROM = true;
 boolean DEBUG_HID = true;
 boolean BLEHID_ENABLE = true;
-
+boolean DEBUG_0817 = true;
 
 
 
@@ -284,7 +275,8 @@ void setup() {
    bts.begin("M5C_BTSerial");
   #elif defined(MotionCont)
    //mc.mode=MODE_MOTION_MASSAGE;
-   mc.mode=MODE_STREET_FIGHTER_DIST;
+   //mc.mode=MODE_STREET_FIGHTER_DIST;
+   mc.mode=MODE_PK3;
    mc.begin();
   #endif
 
@@ -296,21 +288,25 @@ void setup() {
     xSemaphoreGive(imuDataMutex);
   }*/
  
-      // LittleFSの初期化
-    if (!LittleFS.begin()) {
-        Serial.println("An Error has occurred while mounting LittleFS");
-        Serial.println("Formatting LittleFS...");
-        if (LittleFS.format()) {
-            Serial.println("LittleFS formatted successfully");
-        } else {
-            Serial.println("Failed to format LittleFS");
-        }
-    } else {
-        Serial.println("LittleFS mounted successfully");
-    }
+  // LittleFSの初期化
+  if (!LittleFS.begin()) {
+      Serial.println("An Error has occurred while mounting LittleFS");
+      Serial.println("Formatting LittleFS...");
+      if (LittleFS.format()) {
+          Serial.println("LittleFS formatted successfully");
+      } else {
+          Serial.println("Failed to format LittleFS");
+      }
+  } else {
+      Serial.println("LittleFS mounted successfully");
+  }
 
+  #ifdef ESP32C3
+  mc.loadCalibrationData();
+  #endif
 
   //保存したPlayerkeyベクトルの読みだし
+  /*
   if(EEPROM_SIZE>EEPROM_MAX_SIZE){
     if(DEBUG_EEPROM)Serial.println("EEPROM_SIZE is over 4095(EEPROM_MAX_SIZE)");
   }else{
@@ -340,6 +336,7 @@ void setup() {
     Serial.println("Not calibrated properly. Reseted EEPROM. Push M5 button 1 seconds and release to calibrate.");
     deleteEEPROM("ALL");
   }
+  */
    
 
   serWriteMutex = xSemaphoreCreateMutex();
@@ -349,8 +346,8 @@ void setup() {
   xTaskCreatePinnedToCore(ImuLoop, TASK_NAME_IMU, TASK_STACK_DEPTH, NULL, 2, &taskHandleIMU, TASK_DEFAULT_CORE_ID); 
   xTaskCreatePinnedToCore(WriteSessionLoop, TASK_NAME_WRITE_SESSION, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
   xTaskCreatePinnedToCore(ReadSessionLoop, TASK_NAME_READ_SESSION, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
-  xTaskCreatePinnedToCore(ButtonLoop, TASK_NAME_BUTTON, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
-  xTaskCreatePinnedToCore(hidSessionLoop, TASK_NAME_HID, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
+  xTaskCreatePinnedToCore(ButtonSessionLoop, TASK_NAME_BUTTON, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
+  //xTaskCreatePinnedToCore(hidSessionLoop, TASK_NAME_HID, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
 
 
 
@@ -404,9 +401,24 @@ static void ImuLoop(void* arg) {
       if (mc.mpu.dmpGetCurrentFIFOPacket(mc.fifoBuffer)) { // Get a packet
         // Use DMP to get quaternion
         mc.mpu.dmpGetQuaternion(&mc.q, mc.fifoBuffer);
-        q_array = mc.q.q;
+        mc.q_array = mc.q.q_array; //w,x,y,z?
+        //Serial.printf("q:%f,%f,%f,%f\r\n",mc.q_array[0],mc.q_array[1],mc.q_array[2],mc.q_array[3]);
+        //q_array = mc.q_array;
+        // Get roll, pitch, yaw from DMP
+        VectorFloat gravity;
+        float ypr[3];
+        mc.mpu.dmpGetGravity(&gravity, &mc.q);
+        mc.mpu.dmpGetYawPitchRoll(ypr, &mc.q, &gravity);
+        
+        // Convert to degrees
+        mc.rpyc[2] = ypr[0] * 180/M_PI;
+        mc.rpyc[1] = ypr[1] * 180/M_PI;
+        mc.rpyc[0] = ypr[2] * 180/M_PI;
+        
       }
-      //mc.addSensorData(accX,accY,accZ,gyroX,gyroY,gyroZ,roll,pitch,yaw);
+      
+      mc.offsetSensorData();
+      mc.addSensorData(mc.ax,mc.ay,mc.az,mc.gx,mc.gy,mc.gz,mc.rpyc[0],mc.rpyc[1],mc.rpyc[2]);
 
       #else
       //if (xSemaphoreTake(imuDataMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) {
@@ -478,34 +490,34 @@ static void hidSessionLoop(void* arg) {
 
       //姿勢入力判定
       /*
-      if(event==INPUT_EVENT){
+      if(mc.event==INPUT_EVENT){
         if(pk1.roll_min < roll && roll < pk1.roll_max) Serial.println(String("In,")+String(pk1.hid_input)); // NG "In,"+pk1.input. Buffer Over
         else if(pk2.roll_min < pitch && pitch < pk2.roll_max) Serial.println(String("In,")+String(pk2.hid_input));
         M5.Lcd.setCursor(30, 120);
         M5.Lcd.println(pk1.hid_input);
-        event = NO_EVENT;
+        mc.event = NO_EVENT;
       }*/
 
 
       //pk3s = pk3_references;
       if(mc.mode==MODE_PK3){
         pk3 pk3_selected = mc.getClosestPK3(mc.pk3_ref_vector,"rp");
-        if(events_bool[0]==true){
+        if(mc.events_bool[0]==true){
 
           if(BLEHID_ENABLE)mc.inputKey(pk3_selected.inputs_msg[0]);
           //if(DEBUG_HID)Serial.printf("selected_pk,%c,%s,%d,%d, current_rp:%f,%f \r\n",pk_selected.hid_input,pk_selected.hid_inputs,pk_selected.rpy[0],pk_selected.rpy[1],roll,pitch);
           //if(DEBUG_HID) serialOutput(pk3_selected, "SELECTED_PK");
           if(DEBUG_HID)Serial.printf("selected_pk3,%c,%d,%d \r\n",pk3_selected.inputs_msg[0],pk3_selected.rpy[0],pk3_selected.rpy[1]);
-          events_bool[0]=false;
-        }else if(events_bool[1]==true){
+          mc.events_bool[0]=false;
+        }else if(mc.events_bool[1]==true){
           if(BLEHID_ENABLE)mc.execSF_HIDInputs((char*)pk3_selected.inputs_msg,static_cast<float>(pk3_selected.hid_input_acc_threshold),&acc_buffer);
           //if(BLEHID_ENABLE)mc.execSF_HIDInputs((char*)pk3_selected.inputs_msg,(float)pk3_selected.hid_input_acc_threshold,&acc_buffer);
-          events_bool[1]=false;
+          mc.events_bool[1]=false;
         }
         
 
       }else if(mc.mode==MODE_TEST_BUTTONB){
-        if(event==INPUT_EVENT){
+        if(mc.event==INPUT_EVENT){
           //登録キーから判定
           for(uint8_t i = 0; i < pk_vector.size(); i++){
             /*
@@ -539,17 +551,17 @@ static void hidSessionLoop(void* arg) {
       pk pk_selected;
       pks = pk_references;
       if(mc.mode==MODE_MOTION_CONTROLLER){
-        if(events_bool[0]==true){
+        if(mc.events_bool[0]==true){
           pk_selected = getClosestPK(pks);
           if(BLEHID_ENABLE)mc.inputKey(pk_selected.hid_input);
           //if(DEBUG_HID)Serial.printf("selected_pk,%c,%s,%d,%d, current_rp:%f,%f \r\n",pk_selected.hid_input,pk_selected.hid_inputs,pk_selected.rpy[0],pk_selected.rpy[1],roll,pitch);
           if(DEBUG_HID) serialOutput(pk_selected, "SELECTED_PK");
           //if(DEBUG_HID)Serial.printf("selected_pk,%c,%d,%d \r\n",pk_selected.hid_input,pk_selected.rpy[0],pk_selected.rpy[1]);
-          events_bool[0]=false;
+          mc.events_bool[0]=false;
         }
       }
       else if(mc.mode==MODE_MOTION_MASSAGE){
-        if(events_bool[0]==true){
+        if(mc.events_bool[0]==true){
           //if(DEBUG_HID)Serial.println("Sending_MASSAGE");
           message message_selected = getClosestMessage(message_vector);
 
@@ -569,15 +581,15 @@ static void hidSessionLoop(void* arg) {
           //String msg_space = message_selected.content + "                   ";
           //M5.Lcd.println(message_selected.content);
           
-          events_bool[0]=false;
+          mc.events_bool[0]=false;
         }
       /*
       else if(mc.mode==MODE_MOTION_MASSAGE){
-        if(events_bool[0]==true){
+        if(mc.events_bool[0]==true){
           pk_selected = getClosestPK(pks);
           if(BLEHID_ENABLE)mc.inputKeys(pk_selected.hid_inputs);
           if(DEBUG_HID)Serial.printf("selected_pk:%c,%s,%d,%d, current_rp:%f,%f \r\n",pk_selected.hid_input,pk_selected.hid_inputs,pk_selected.rpy[0],pk_selected.rpy[1],roll,pitch);
-          events_bool[0]=false;
+          mc.events_bool[0]=false;
         }
       */
       }
@@ -585,7 +597,7 @@ static void hidSessionLoop(void* arg) {
         float mouse_scale=5;
         float pitch_delta = mouse_scale*mc.mouse_scale2*(pitch - pitch_prev);
         float yaw_delta = mouse_scale*mc.mouse_scale2*(yaw - yaw_prev);
-        if(events_bool[0]==true && events_bool[1]==true){
+        if(mc.events_bool[0]==true && mc.events_bool[1]==true){
           if(!LEFT_DISPLAY){
             
           }
@@ -597,7 +609,7 @@ static void hidSessionLoop(void* arg) {
               bleCombo.move(0,0,-1);
             }
           }
-        }else if(events_bool[0]==true){
+        }else if(mc.events_bool[0]==true){
           if(!LEFT_DISPLAY){
             
           }
@@ -605,7 +617,7 @@ static void hidSessionLoop(void* arg) {
             //pitch_deltaがマイナスの場合、マウスの上下移動が逆になるので符号を反転させる
             mc.moveMouse(yaw_delta,pitch_delta);
           }
-        }else if(events_bool[1]==true){
+        }else if(mc.events_bool[1]==true){
           if(!LEFT_DISPLAY){
             
           }
@@ -625,7 +637,7 @@ static void hidSessionLoop(void* arg) {
             //mc.moveMouse(yaw_delta,pitch_delta);
             */
           }
-        }else if(events_bool[2]==true){
+        }else if(mc.events_bool[2]==true){
             bleCombo.click(MOUSE_RIGHT);
         }
       }else if(mc.mode==MODE_STREET_FIGHTER_DIST){
@@ -649,7 +661,7 @@ static void hidSessionLoop(void* arg) {
 
 
         //キーボードマウス入力(button2の場合)
-        if(events_bool[2]==true){
+        if(mc.events_bool[2]==true){
           //roll=-90度が基準
           /*
           if((roll<-120 & roll>-180) || (roll>90 && roll<180)) mc.inputKey(l);
@@ -697,7 +709,7 @@ static void hidSessionLoop(void* arg) {
           prev_events_bool[2] = true;
 
           //キャラ移動しながらボタン押す事で、必殺技を出せるようにする
-          if(events_bool[0]==true || events_bool[1]==true){
+          if(mc.events_bool[0]==true || mc.events_bool[1]==true){
             vTaskDelay(30);
             mc.keyboardReleaseAll();
             vTaskDelay(30);
@@ -720,16 +732,16 @@ static void hidSessionLoop(void* arg) {
 
 
         //キーボード設定
-        if(events_bool[0]==true){//キャラが左に居る場合
+        if(mc.events_bool[0]==true){//キャラが左に居る場合
           if(mc.current_game_mode==MODE_SF_P1){ pks = pk_vector_sf_left_character_dist;}
           else if(mc.current_game_mode==MODE_SF_P2) { pks = p2_pk_vector_sf_left_character_dist;}
-        }else if(events_bool[1]==true){ //キャラが右に居る場合
+        }else if(mc.events_bool[1]==true){ //キャラが右に居る場合
           if(mc.current_game_mode==MODE_SF_P1){ pks = pk_vector_sf_right_character_dist;}
           else if(mc.current_game_mode==MODE_SF_P2) { pks = p2_pk_vector_sf_right_character_dist;}
         }
 
         //キーボード入力(マウス押してない場合)
-        if((events_bool[0]==true || events_bool[1]==true) && events_bool[2]==false){  
+        if((mc.events_bool[0]==true || mc.events_bool[1]==true) && mc.events_bool[2]==false){  
           //キー判定
           pk_selected = getClosestPK(pks);
           if(BLEHID_ENABLE)mc.execSF_HIDInputs(pk_selected.hid_inputs,(float)pk_selected.hid_input_acc_threshold,&acc_buffer);
@@ -739,26 +751,26 @@ static void hidSessionLoop(void* arg) {
           if(DEBUG_HID)serialOutput(pk_selected,"SELECTED_PK");
 
           //if(DEBUG_HID)Serial.printf("selected_pk:%c,%d,%d \r\n",pk_selected.hid_input,pk_selected.rpy[0],pk_selected.rpy[1]);
-          events_bool[0]=false;
-          events_bool[1]=false;
+          mc.events_bool[0]=false;
+          mc.events_bool[1]=false;
         }//else
 
         //Release
-        if (prev_events_bool[2] == true && events_bool[2]==false){
+        if (prev_events_bool[2] == true && mc.events_bool[2]==false){
           mc.releaseKey(l);mc.releaseKey(r);mc.releaseKey(u);mc.releaseKey(d);
         }
 
         //button2をreleaesした時に、該当プレイヤーのキャラ移動停止
         /*
         else
-        if (mc.prev_button_state[2]==true && events_bool[2]==false){
+        if (mc.prev_button_state[2]==true && mc.events_bool[2]==false){
           mc.releaseKey(l);mc.releaseKey(r);mc.releaseKey(u);mc.releaseKey(d);
         }
         */
 
       }else if(mc.mode==MODE_STREET_FIGHTER_RANGE){
         std::vector<pk> pks;
-        if(events_bool[0]==true){
+        if(mc.events_bool[0]==true){
           if(mc.current_game_mode==MODE_SF_P1){ pks = pk_vector_sf_left_character;}
           else if(mc.current_game_mode==MODE_SF_P2) { pks = p2_pk_vector_sf_left_character;}
 
@@ -780,9 +792,9 @@ static void hidSessionLoop(void* arg) {
               break;
             }
           }
-          events_bool[0]=false;
+          mc.events_bool[0]=false;
         }
-        else if(events_bool[1]==true){
+        else if(mc.events_bool[1]==true){
           if(mc.current_game_mode==MODE_SF_P1){ pks = pk_vector_sf_right_character;}
           else if(mc.current_game_mode==MODE_SF_P2) { pks = p2_pk_vector_sf_right_character;}
 
@@ -804,7 +816,7 @@ static void hidSessionLoop(void* arg) {
               break;
             }
           }
-          events_bool[1]=false;
+          mc.events_bool[1]=false;
         }
       }
 
@@ -835,7 +847,7 @@ static void hidSessionLoop(void* arg) {
 */
 
       //modeに依存せず登録
-      if(event==REGISTRATION_ROLL_PITCH_EVENT){
+      if(mc.event==REGISTRATION_ROLL_PITCH_EVENT){
         //pk pk5 = {MODE_STREET_FIGHTER,5,'r',-30,30,-30,30,{0,0,0},{0,0,0,0},'1',{KEY_DOWN_ARROW,KEY_RIGHT_ARROW,'a','\0'},50,3}; //波動拳
         String s = input_serial;
         if(s==""){
@@ -870,7 +882,7 @@ static void hidSessionLoop(void* arg) {
       if(mc.mode!=MODE_STREET_FIGHTER_DIST){
         mc.keyboardReleaseAll(); //マルチプレイはPC共有のためReleaseAll()は使用禁止
       }
-      event = NO_EVENT;
+      mc.event = NO_EVENT;
     //}
     //xSemaphoreGive(serWriteMutex);
 
@@ -883,9 +895,11 @@ static void hidSessionLoop(void* arg) {
 static void WriteSessionLoop(void* arg) {
   while (1) {
     uint32_t entryTime = millis();
+    
+    //if(DEBUG_0817) Serial.println("WriteSessionLoop");
 
     //if (xSemaphoreTake(serWriteMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) { // Only for 1 lin serial Input
-      if(event==NO_EVENT){
+      if(mc.event==NO_EVENT){
         #ifdef _M5STICKC_H_
         if(left_axis_trans){//左手系
           //if(mc.serial_ON)Serial.printf("%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, -(yaw-yO2),q_array[0],q_array[1],q_array[2],q_array[3]);
@@ -911,7 +925,9 @@ static void WriteSessionLoop(void* arg) {
         #elif defined(ESP32C3)
         if(left_axis_trans){//左手系
           //if(mc.serial_ON)Serial.printf("%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, -(yaw-yO2),q_array[0],q_array[1],q_array[2],q_array[3]);
-          if(mc.serial_ON)Serial.printf("sensor_data,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", mc.ax, mc.ay, mc.az,mc.gx,mc.gy,mc.gz, pitch, roll, -(yaw-yO2),mc.q_array[0],mc.q_array[1],mc.q_array[2],mc.q_array[3]);
+          if(mc.serial_ON)Serial.printf("sensor_data,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", mc.ax, mc.ay, mc.az,mc.gx,mc.gy,mc.gz, mc.rpyc[0], mc.rpyc[1], mc.rpyc[2],mc.q_array[0],mc.q_array[1],mc.q_array[2],mc.q_array[3]);
+          //if(mc.serial_ON && DEBUG_0817)Serial.printf("sensor_data,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", mc.ax, mc.ay, mc.az,mc.gx,mc.gy,mc.gz,mc.q_array[0],mc.q_array[1],mc.q_array[2],mc.q_array[3]);
+          //if(mc.serial_ON && DEBUG_0817)Serial.printf("sensor_data,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f \r\n", mc.ax, mc.ay, mc.az,mc.gx,mc.gy,mc.gz);
           #ifdef BTSerial 
             //if(mc.serial_ON)bts.printf("%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, -(yaw-yO2),q_array[0],q_array[1],q_array[2],q_array[3]);
             if(mc.serial_ON)bts.printf("%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, yaw-yO2,q_array[0],q_array[1],q_array[2],q_array[3]);
@@ -919,7 +935,7 @@ static void WriteSessionLoop(void* arg) {
         }else{//右手系
           //Serial.printf("%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, yaw-yO2);
         }
-        if((abs(aOX) < 1 & abs(aOY) < 1 & abs(aOZ) < 1) & (abs(aOX) != 0 & abs(aOY) != 0 & abs(aOZ) != 0)){
+        if((abs(mc.aOX) < 1 & abs(mc.aOY) < 1 & abs(mc.aOZ) < 1) & (abs(mc.aOX) != 0 & abs(mc.aOY) != 0 & abs(mc.aOZ) != 0)){
           //M5.Lcd.println(String(pitch) + " " + String(roll) + " " + String(yaw-yO2));
         }else{
           Serial.println("Not calibrated properly");
@@ -1118,7 +1134,7 @@ static void ReadSessionLoop(void* arg){
         //else if(input_serial == "QINIT") {mc.set_initial_quaternion = true;}
         else if(input_serial == "QINITU") {mc.set_initial_quaternion_upright = true;}
         else if(input_serial == "QINITH") {mc.set_initial_quaternion_horizontal = true;} 
-        else if(input_serial == "CAL") {calibrateMPU();} 
+        else if(input_serial == "CAL") {mc.calibrateMPUtoLittleFS();} 
       }else if(mc.mode!=MODE_MOTION_MASSAGE){
         if(input_serial == "FLUSH") flushPKvector(pk_references,"MOTION_CONT");
         else if(input_serial == "READ")readPKvector("MOTION_CONT");
@@ -1131,7 +1147,7 @@ static void ReadSessionLoop(void* arg){
         //else if(input_serial == "QINIT") {mc.set_initial_quaternion = true;} //本来は起動時して姿勢が変わる前に実行
         else if(input_serial == "QINITU") {mc.set_initial_quaternion_upright = true;} 
         else if(input_serial == "QINITH") {mc.set_initial_quaternion_horizontal = true;} 
-        else if(input_serial == "CAL") {calibrateMPU();}         
+        else if(input_serial == "CAL") {mc.calibrateMPUtoLittleFS();}         
       }
 
 
@@ -1159,12 +1175,17 @@ static void ReadSessionLoop(void* arg){
   }
 }
 
-static void ButtonLoop(void* arg) {
+static void ButtonSessionLoop(void* arg) {
   uint8_t btnFlag = 0;
   while (1) {
     uint32_t entryTime = millis();
 
-    #ifdef _M5STICKC_H_
+    #ifdef ILLUMITRACK_R
+    //mc.illmiTrack_sensor_read();
+    mc.illmiTrack_switch_sensing();
+
+
+    #elif defined _M5STICKC_H_
     M5.update();
     if(M5.BtnA.wasReleasefor(2000)){
       yO2 = yaw; //yaw軸の手動補正
@@ -1186,10 +1207,10 @@ static void ButtonLoop(void* arg) {
       mc.reConnect();
     }
     else if (M5.BtnB.wasReleasefor(2000)){
-      //event = REGISTRATION_ROLL_EVENT;
+      //mc.event = REGISTRATION_ROLL_EVENT;
     }    
     else if (M5.BtnB.wasReleasefor(1000)){
-      event = REGISTRATION_ROLL_PITCH_EVENT;
+      mc.event = REGISTRATION_ROLL_PITCH_EVENT;
 
       digitalWrite(10, HIGH);
       vTaskDelay(100);
@@ -1201,7 +1222,7 @@ static void ButtonLoop(void* arg) {
       task_sleep_hid_session_plus += 5;
       task_sleep_hid_session_plus = task_sleep_hid_session_plus % 50;
       //BLEHID_ENABLE = !BLEHID_ENABLE;
-      //event = INPUT_EVENT;
+      //mc.event = INPUT_EVENT;
     }
     else{          
     }
@@ -1233,19 +1254,19 @@ static void ButtonLoop(void* arg) {
         bleCombo.setDelay(7);
       }
     }
-
+1
     //===ボタン判定===
-    for(uint8_t i=0; i<sizeof(events_bool); i++){
+    for(uint8_t i=0; i<sizeof(mc.events_bool); i++){
       //ボタン押下判定
       if(mc.prev_button_state[i] == false && mc.switchRead(mc.button[i])==true){
           mc.prev_button_state[i] = true;
-          events_bool[i] = true;
+          mc.events_bool[i] = true;
           //Serial.println("..");
         }
       //ボタン離す判定
       else if(mc.prev_button_state[i] == true && mc.switchRead(mc.button[i])==false){
           mc.prev_button_state[i] = false;
-          events_bool[i] = false;
+          mc.events_bool[i] = false;
           //Serial.println("!");
       }
     }
@@ -1671,6 +1692,57 @@ void calibrateMPU(){
 }
 
 
+void calibrateMPUtoLittleFS(){
+  float gyroSumX,gyroSumY,gyroSumZ;
+  float accSumX,accSumY,accSumZ;
+  float calibCount = 500;
+  Serial.println("Calibrating...");
+
+  #ifdef ESP32C3
+    for (int i = 0; i < calibCount; i++) {
+      //mc.mpu.getMotion6(&mc.ax, &mc.ay, &mc.az, &mc.gx, &mc.gy, &mc.gz);
+      mc.mpu.getRealRotation(&mc.gx, &mc.gy, &mc.gz);
+      mc.mpu.getRealAcceleration(&mc.ax, &mc.ay, &mc.az);
+      gyroSumX += mc.gx;
+      gyroSumY += mc.gy;
+      gyroSumZ += mc.gz;
+      accSumX += mc.ax;
+      accSumY += mc.ay;
+      accSumZ += mc.az;
+      vTaskDelay(10);
+    }
+  #endif
+
+    mc.gOX = gyroSumX/calibCount;
+    mc.gOY = gyroSumY/calibCount;
+    mc.gOZ = gyroSumZ/calibCount;
+    mc.aOX = accSumX/calibCount;
+    mc.aOY = accSumY/calibCount;
+    mc.aOZ = (accSumZ/calibCount) - 1.0;//重力加速度1G、つまりM5ボタンが上向きで行う想定
+  //aOZ = (accSumZ/calibCount) + 1.0;//重力加速度1G、つまりM5ボタンが下向きで行う想定
+  //aOZ = (accSumZ/calibCount);//
+  Serial.println("Calibrating...OK");
+  Serial.printf("%3.3f %3.3f %3.3f %3.3f %3.3f %3.3f", mc.aOX, mc.aOY, mc.aOZ, mc.gOX , mc.gOY , mc.gOZ);
+
+  // LittleFSにキャリブレーションデータを保存
+  mc.saveCalibrationData();
+
+  // 保存されたデータを検証
+  float oldAOX = mc.aOX, oldAOY = mc.aOY, oldAOZ = mc.aOZ, oldGOX = mc.gOX, oldGOY = mc.gOY, oldGOZ = mc.gOZ;
+  if (mc.loadCalibrationData()) {
+    if (oldAOX == mc.aOX && oldAOY == mc.aOY && oldAOZ == mc.aOZ &&
+        oldGOX == mc.gOX && oldGOY == mc.gOY && oldGOZ == mc.gOZ) {
+      Serial.println("Calibration data verified successfully");
+    } else {
+      Serial.println("ERROR: Calibration data verification failed");
+    }
+  } else {
+    Serial.println("ERROR: Failed to load calibration data for verification");
+  }
+
+  Serial.printf("Calibration values: aOX=%f, aOY=%f, aOZ=%f, gOX=%f, gOY=%f, gOZ=%f\n", 
+                mc.aOX, mc.aOY, mc.aOZ, mc.gOX, mc.gOY, mc.gOZ);
+}
 
 
 pk getClosestPK(std::vector<pk> pk_refs){

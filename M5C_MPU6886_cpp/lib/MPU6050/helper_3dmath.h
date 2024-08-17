@@ -40,7 +40,7 @@ class Quaternion {
         float x;
         float y;
         float z;
-        float q[4];
+        float q_array[4];
         
         Quaternion() {
             w = 1.0f;

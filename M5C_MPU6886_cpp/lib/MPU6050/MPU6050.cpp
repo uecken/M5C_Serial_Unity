@@ -1862,10 +1862,17 @@ void MPU6050_Base::getRealAcceleration(float* ax, float* ay, float* az) {
             break;
     }
 
-    // 重力加速度に変換（9.81 m/s^2）
+    // 重力加速度に変換（9.81 m/s^2
+    /*
     *ax = raw_ax * scale_factor * 9.81;
     *ay = raw_ay * scale_factor * 9.81;
     *az = raw_az * scale_factor * 9.81;
+    */
+
+    *ax = raw_ax * scale_factor;
+    *ay = raw_ay * scale_factor;
+    *az = raw_az * scale_factor;
+
 }
 
 
