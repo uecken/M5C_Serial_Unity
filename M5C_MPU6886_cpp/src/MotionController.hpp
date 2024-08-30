@@ -154,6 +154,12 @@ class MotionController{
             uint8_t fifoBuffer[64]; // FIFO storage buffer
             Quaternion q;
         #elif defined(_M5STICKC_H_)
+            float ax, ay, az;
+            float gx, gy, gz;
+            float aOX, aOY, aOZ;
+            float gOX, gOY, gOZ;
+            uint8_t fifoBuffer[64]; // FIFO storage buffer
+            //Quaternion q;
         #endif
 
         #ifdef ILLUMITRACK_R
@@ -203,15 +209,16 @@ class MotionController{
         float* q_offset = new float[4];
         boolean q_offset_enable = false;
         
-        float* initial_quat = new float[4];
         float initial_quat_horizontal[4] = {1,0,0,0}; // 寝かせ、ディスプレイ上の初期姿勢のクォータニオン
         float initial_quat_upright[4] = {0.444, 0.469, -0.532, -0.5}; // 右手持ち、ディスプレイ左の初期クォータニオン
+        float* initial_quat = initial_quat_horizontal; //wxyz,M5Cにおける初期クォータニオン. MahonyFilterで設定されている
+
         //bool initial_quat_set = false;
         bool set_initial_quaternion = false;
         bool set_initial_quaternion_horizontal = false;
         bool set_initial_quaternion_upright = false;
         
-        float rpyc[4];       
+        float rpy[3] = {0,0,0}; //Mahonyで初期値必要       
         float* q_array;
 
         std::vector<pk2> pk2_ref_vector;
@@ -238,10 +245,10 @@ class MotionController{
         // 取得したセンサデータを構造体に追加する関数
         void addSensorData(float accelX, float accelY, float accelZ, 
                                             float gyroX, float gyroY, float gyroZ, 
-                                            float roll, float pitch, float yaw) {
-            //rpyc[0] = roll;
-            //rpyc[1] = pitch;
-            //rpyc[2] = yaw;
+                                            float _roll, float _pitch, float _yaw) {
+            //rpy[0] = roll;
+            //rpy[1] = pitch;
+            //rpy[2] = yaw;
             // ローパスフィルタを適用してデータを更新
             applyLowPassFilter(sensorDataArray[currentDataIndex_].accelX, accelX);
             applyLowPassFilter(sensorDataArray[currentDataIndex_].accelY, accelY);
@@ -249,9 +256,9 @@ class MotionController{
             applyLowPassFilter(sensorDataArray[currentDataIndex_].gyroX, gyroX);
             applyLowPassFilter(sensorDataArray[currentDataIndex_].gyroY, gyroY);
             applyLowPassFilter(sensorDataArray[currentDataIndex_].gyroZ, gyroZ);
-            applyLowPassFilter(sensorDataArray[currentDataIndex_].roll, roll);
-            applyLowPassFilter(sensorDataArray[currentDataIndex_].pitch, pitch);
-            applyLowPassFilter(sensorDataArray[currentDataIndex_].yaw, yaw);
+            applyLowPassFilter(sensorDataArray[currentDataIndex_].roll, _roll);
+            applyLowPassFilter(sensorDataArray[currentDataIndex_].pitch, _pitch);
+            applyLowPassFilter(sensorDataArray[currentDataIndex_].yaw, _yaw);
 
             // インデックスを次に進める（ループする場合）
             currentDataIndex_ = (currentDataIndex_ + 1) % dataSize_;
@@ -267,6 +274,7 @@ class MotionController{
             //pinMode(RIGHT_RING, INPUT);
             //pinMode(RIGHT_MIDDLE, INPUT);
             //pinMode(RIGHT_INDEX, INPUT);
+          #endif
         #endif
 
         #if defined(ESP32C3) || defined(ESP32S3)
@@ -377,7 +385,8 @@ class MotionController{
             for (int i = 0; i < 4; ++i) {
                 initial_quat[i] = quat[i];
             }
-            set_initial_quaternion = true;
+            //set_initial_quaternion = true;
+            M5.IMU.setQuaternion(quat);
         }
 
 
@@ -1137,14 +1146,14 @@ class MotionController{
             short roll_ref = pk3_refs[i].rpy[0];
             short pitch_ref = pk3_refs[i].rpy[1];
 
-            float roll_diff = rpyc[0] - roll_ref;
-            if (rpyc[0] > 90 && roll_ref < -90) {
-                roll_diff = (180 - rpyc[0]) + (180 + roll_ref);
-            } else if (rpyc[0] < -90 && roll_ref > 90) {
-                roll_diff = -(-180 - rpyc[0]) + (180 - roll_ref);
+            float roll_diff = rpy[0] - roll_ref;
+            if (rpy[0] > 90 && roll_ref < -90) {
+                roll_diff = (180 - rpy[0]) + (180 + roll_ref);
+            } else if (rpy[0] < -90 && roll_ref > 90) {
+                roll_diff = -(-180 - rpy[0]) + (180 - roll_ref);
             }
 
-            float pitch_diff = rpyc[1] - pitch_ref;
+            float pitch_diff = rpy[1] - pitch_ref;
 
             distance = sqrt(roll_diff * roll_diff + pitch_diff * pitch_diff);
 
@@ -1236,14 +1245,33 @@ class MotionController{
             accSumZ += az;
             vTaskDelay(10);
             }
+        #elif defined(_M5STICKC_H_)
+        digitalWrite(10, LOW);
+        vTaskDelay(1000);
+        digitalWrite(10, HIGH);
+        vTaskDelay(100);
+        digitalWrite(10, LOW); 
+        for(int i = 0; i < calibCount; i++){
+            M5.IMU.getGyroData(&gx,&gy,&gz);
+            M5.IMU.getAccelData(&ax,&ay,&az);
+            gyroSumX += gx;
+            gyroSumY += gy;
+            gyroSumZ += gz;
+            accSumX += ax;
+            accSumY += ay;
+            accSumZ += az;
+            vTaskDelay(10);
+            //Serial.printf("%6.2f, %6.2f, %6.2f\r\n", accX, accY, accZ);
+        }
+        digitalWrite(10, HIGH);
         #endif
 
-            gOX = gyroSumX/calibCount;
-            gOY = gyroSumY/calibCount;
-            gOZ = gyroSumZ/calibCount;
-            aOX = accSumX/calibCount;
-            aOY = accSumY/calibCount;
-            aOZ = (accSumZ/calibCount) - 1.0;//重力加速度1G、つまりM5ボタンが上向きで行う想定
+        gOX = gyroSumX/calibCount;
+        gOY = gyroSumY/calibCount;
+        gOZ = gyroSumZ/calibCount;
+        aOX = accSumX/calibCount;
+        aOY = accSumY/calibCount;
+        aOZ = (accSumZ/calibCount) - 1.0;//重力加速度1G、つまりM5ボタンが上向きで行う想定
         //aOZ = (accSumZ/calibCount) + 1.0;//重力加速度1G、つまりM5ボタンが下向きで行う想定
         //aOZ = (accSumZ/calibCount);//
         Serial.println("Calibrating...OK");
@@ -1275,6 +1303,38 @@ class MotionController{
     }
 
 
+    void m5c_getGyroData(){
+        M5.IMU.getGyroData(&gx,&gy,&gz);
+    }
+
+    void m5c_getAccelData(){
+         M5.IMU.getAccelData(&ax,&ay,&az);
+    }
+
+    float* m5c_getAhrsData(){
+      float* quatanion = MahonyAHRSupdateIMU((gx-gOX) * DEG_TO_RAD, (gy-gOY) * DEG_TO_RAD, (gz-gOZ) * DEG_TO_RAD, (ax-aOX), (ay-aOY), (az-aOZ),&rpy[1],&rpy[0],&rpy[2],sampleFreq);
+      /*
+      float roll = 0;
+      float pitch = 0;
+      float yaw = 0;
+      float* quatanion = MahonyAHRSupdateIMU((gx-gOX) * DEG_TO_RAD, (gy-gOY) * DEG_TO_RAD, (gz-gOZ) * DEG_TO_RAD, (ax-aOX), (ay-aOY), (az-aOZ),&pitch,&roll,&yaw,sampleFreq);
+      rpy[0] = roll;
+      rpy[1] = pitch;
+      rpy[2] = yaw;
+      */
+
+      //上記引数の表示
+      //Serial.printf("%2.2f,%2.2f,%2.2f,%2.2f,%2.2f,%2.2f",gx,gy,gz,rpy[1],rpy[0],rpy[2]);
+      //Serial.printf("%2.2f,%2.2f,%2.2f,%2.2f,%2.2f,%2.2f",gx,gy,gz,pitch,roll,yaw);
+
+      //Serial.printf("%2.2f,%2.2f,%2.2f,%2.2f,%2.2f,%2.2f\r\n",rpy[1],rpy[0],rpy[2],pitch,roll,yaw);
+
+      //float* q_array = M5.IMU.getAhrsData(&rpy[1],&rpy[0],&rpy[2],aOX,aOY,aOZ,gOX,gOY,gOZ,); //w,x,y,z
+      return  quatanion;
+    }
+
+
+
     //==========illumiTracka============
     /*
     void illmiTrack_sensor_read(){
@@ -1288,6 +1348,7 @@ class MotionController{
         Serial.printf("%f,%f,%f,%f\r\n",lit,rng,mid,idx);
     }*/
 
+#ifdef ILLUMITRACK_R
     void illmiTrack_switch_sensing(){
         float sensor_threshold = 1;
         
@@ -1308,5 +1369,5 @@ class MotionController{
             }
         }
     }
+#endif    
 };
-#endif

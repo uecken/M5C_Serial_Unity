@@ -9,10 +9,10 @@
 #endif
 */
 
-
 #include <vector>
 #include <EEPROM.h>
-#include <LittleFS.h>
+#include <LittleFS.h> //need include in main.
+
 
 //Select BTserial or MotionController
 //#define BTSerial
@@ -30,16 +30,8 @@
   AccelRingBuffer acc_buffer(20);
 #endif
 
-
-
-
 #include <IMUReader.h>
 IMUReader imur;
-
-
-
-
-
 
 
 //Refered to AxisOrange https://github.com/naninunenoy/AxisOrange
@@ -70,27 +62,35 @@ static SemaphoreHandle_t btnDataMutex = NULL;
 
 
 
-
-
-
-
 const float CONVERT_G_TO_MS2 = 9.80665f;
 const boolean left_axis_trans = true; //Unityは左手系、M5Stackは右手系
 
-void calibrateMPU();
+//void calibrateMPU();
 void calibrateMPUtoLittleFS();
 int split(String,char,String*);
 
-float accX = 0.0F,accY = 0.0F,accZ = 0.0F;
-float gyroX = 0.0F,gyroY = 0.0F,gyroZ = 0.0F;
-float pitch = 0.0F,roll  = 0.0F,yaw   = 0.0F;
+//float accX = 0.0F,accY = 0.0F,accZ = 0.0F;
+//float gyroX = 0.0F,gyroY = 0.0F,gyroZ = 0.0F;
+//float pitch = 0.0F,roll  = 0.0F,yaw   = 0.0F;
 float unwrpRoll,unwrpYaw;
 float accABS;
 float* q_array = new float[4]; //quaternion
-float aOX = -0.003, aOY = +0.018, aOZ =  0.085 ;  //-0.00   0.01   0.07 
-float gOX = 3.516, gOY = -6.023 , gOZ = -5.14;  //3.36   9.66   4.11
+//float aOX = -0.003, aOY = +0.018, aOZ =  0.085 ;  //-0.00   0.01   0.07 
+//float gOX = 3.516, gOY = -6.023 , gOZ = -5.14;  //3.36   9.66   4.11
 float pO=0 , rO=0 , yO=-8.5, yO2=0;
 float roll_prev,pitch_prev,yaw_prev;
+
+
+float& accX = mc.ax;
+float& accY = mc.ay;
+float& accZ = mc.az;
+float& gyroX = mc.gx;
+float& gyroY = mc.gy;
+float& gyroZ = mc.gz;
+float& roll = mc.rpy[0];
+float& pitch= mc.rpy[1];
+float& yaw  = mc.rpy[2];
+
 
 
 boolean DEBUG_EEPROM = true;
@@ -307,8 +307,8 @@ void setup() {
       Serial.println("LittleFS mounted successfully");
   }
 
-  #if defined(ESP32C3) || defined(ESP32S3)
-  mc.loadCalibrationData();
+  #if defined(ESP32C3) || defined(ESP32S3) || defined(_M5STICKC_H_)
+    mc.loadCalibrationData();
   #endif
 
   //保存したPlayerkeyベクトルの読みだし
@@ -353,7 +353,7 @@ void setup() {
   xTaskCreatePinnedToCore(WriteSessionLoop, TASK_NAME_WRITE_SESSION, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
   xTaskCreatePinnedToCore(ReadSessionLoop, TASK_NAME_READ_SESSION, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
   xTaskCreatePinnedToCore(ButtonSessionLoop, TASK_NAME_BUTTON, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
-  //xTaskCreatePinnedToCore(hidSessionLoop, TASK_NAME_HID, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
+  xTaskCreatePinnedToCore(hidSessionLoop, TASK_NAME_HID, TASK_STACK_DEPTH, NULL, 1, NULL, TASK_DEFAULT_CORE_ID);
 
 
 
@@ -362,7 +362,7 @@ void setup() {
   }
  
   vTaskDelay(500);
-  mc.setInitialQuat(q_array);
+  mc.setInitialQuat(mc.initial_quat_horizontal);
   //TEST_ER.begin(EEPROM_SIZE/5); //8Byte * 100/20;
   /*
   USER1_ER.begin(EEPROM_SIZE/5);
@@ -417,33 +417,39 @@ static void ImuLoop(void* arg) {
         mc.mpu.dmpGetYawPitchRoll(ypr, &mc.q, &gravity);
         
         // Convert to degrees
-        mc.rpyc[2] = ypr[0] * 180/M_PI;
-        mc.rpyc[1] = ypr[1] * 180/M_PI;
-        mc.rpyc[0] = ypr[2] * 180/M_PI;
+        mc.rpy[2] = ypr[0] * 180/M_PI;
+        mc.rpy[1] = ypr[1] * 180/M_PI;
+        mc.rpy[0] = ypr[2] * 180/M_PI;
         
       }
       
       mc.offsetSensorData();
-      mc.addSensorData(mc.ax,mc.ay,mc.az,mc.gx,mc.gy,mc.gz,mc.rpyc[0],mc.rpyc[1],mc.rpyc[2]);
+      mc.addSensorData(mc.ax,mc.ay,mc.az,mc.gx,mc.gy,mc.gz,mc.rpy[0],mc.rpy[1],mc.rpy[2]);
 
       #else
       //if (xSemaphoreTake(imuDataMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) {
-      M5.IMU.getGyroData(&gyroX,&gyroY,&gyroZ);
-      M5.IMU.getAccelData(&accX,&accY,&accZ);
-      accX -= aOX; accY -= aOY; accZ -= aOZ; 
+      //M5.IMU.getGyroData(&mc.gx,&mc.gy,&mc.gz);
+      //M5.IMU.getAccelData(&mc.ax,&mc.ay,&mc.az);
+      mc.m5c_getGyroData();
+      mc.m5c_getAccelData();
+      mc.offsetSensorData();
+      q_array = mc.m5c_getAhrsData();
+
       //accABS = sqrt(accX*accX + accY*accY + accZ*accZ);
-      gyroX -=gOX; gyroY -=gOY; gyroZ -=gOZ;
 
 
       //クォータニオンの初期化. 
       //Roll/PitchもOffsetされるが、MafonyFilterによりすぐに正しい値となる
       //そのためYawだけOffsetされることになる
+      /*
       if(mc.set_initial_quaternion){
         mc.initial_quat = new float[4]; //WebGUUから設定する
-        M5.IMU.setQuaternion(mc.initial_quat);
+        //M5.IMU.setQuaternion(mc.initial_quat);
+        M5.IMU.setQuaternion(mc.initial_quat_horizontal);
         Serial.printf("%f,%f,%f,%f",mc.initial_quat[0],mc.initial_quat[1],mc.initial_quat[2],mc.initial_quat[3]);
         mc.set_initial_quaternion = false;
-      }else if(mc.set_initial_quaternion_horizontal){
+      }*/
+      if(mc.set_initial_quaternion_horizontal){
         mc.initial_quat = mc.initial_quat_horizontal; //wxyz,M5Cにおける初期クォータニオン. MahonyFilterで設定されている
         M5.IMU.setQuaternion(mc.initial_quat);
         Serial.printf("%f,%f,%f,%f",mc.initial_quat[0],mc.initial_quat[1],mc.initial_quat[2],mc.initial_quat[3]);
@@ -455,23 +461,28 @@ static void ImuLoop(void* arg) {
         mc.set_initial_quaternion_upright = false;
       }
 
-      q_array = M5.IMU.getAhrsData(&pitch,&roll,&yaw,aOX,aOY,aOZ,gOX,gOY,gOZ); //w,x,y,z
-      
+      //q_array = M5.IMU.getAhrsData(&pitch,&roll,&yaw,mc.aOX,mc.aOY,mc.aOZ,mc.gOX,mc.gOY,mc.gOZ); //w,x,y,z
+      //q_array = M5.IMU.getAhrsData2(&pitch,&roll,&yaw,mc.aOX,mc.aOY,mc.aOZ,mc.gOX,mc.gOY,mc.gOZ,accX,accY,accZ,gyroX,gyroY,gyroZ); //w,x,y,z
+      //q_array = M5.IMU.getAhrsData2(&mc.rpy[1],&mc.rpy[0],&mc.rpy[2],mc.aOX,mc.aOY,mc.aOZ,mc.gOX,mc.gOY,mc.gOZ,mc.ax,mc.ay,mc.az,mc.gx,mc.gy,mc.gz); //w,x,y,z
+
+
       if(mc.q_offset_enable){
         mc.quatMultiply(q_array,mc.q_offset);
       }
 
       mc.q_array = q_array;
-      mc.addSensorData(accX,accY,accZ,gyroX,gyroY,gyroZ,roll,pitch,yaw);
+      mc.addSensorData(mc.ax,mc.ay,mc.az,mc.gz,mc.gy,mc.gz,roll,pitch,yaw);
       #endif
 
       //q_array = M5.IMU.getAhrsData2(&pitch,&roll,&yaw,aOX,aOY,aOZ,gOX,gOY,gOZ);
+      
       pitch -=pO;  roll -= rO;  yaw -= yO;//★最小値-188.5。原因はgyroZの補正ができていないからか？一時的に+8.5して補正する。
       if(LEFT_DISPLAY){
         pitch = -pitch;
         roll = -roll;
         yaw = -yaw;
       }
+      
 
 
 
@@ -920,7 +931,7 @@ static void WriteSessionLoop(void* arg) {
           Serial.printf("%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, yaw-yO2);
         }
         ///M5.Lcd.setCursor(30, 60);
-        if((abs(aOX) < 1 & abs(aOY) < 1 & abs(aOZ) < 1) & (abs(aOX) != 0 & abs(aOY) != 0 & abs(aOZ) != 0)){
+        if((abs(mc.aOX) < 1 & abs(mc.aOY) < 1 & abs(mc.aOZ) < 1) & (abs(mc.aOX) != 0 & abs(mc.aOY) != 0 & abs(mc.aOZ) != 0)){
           //M5.Lcd.println(String(pitch) + " " + String(roll) + " " + String(yaw-yO2));
         }else{
 
@@ -932,7 +943,7 @@ static void WriteSessionLoop(void* arg) {
         #elif defined(ESP32C3)
         if(left_axis_trans){//左手系
           //if(mc.serial_ON)Serial.printf("%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%3.1f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", accX, accY, accZ,gyroX, gyroY, gyroZ, pitch, roll, -(yaw-yO2),q_array[0],q_array[1],q_array[2],q_array[3]);
-          if(mc.serial_ON)Serial.printf("sensor_data,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", mc.ax, mc.ay, mc.az,mc.gx,mc.gy,mc.gz, mc.rpyc[0], mc.rpyc[1], mc.rpyc[2],mc.q_array[0],mc.q_array[1],mc.q_array[2],mc.q_array[3]);
+          if(mc.serial_ON)Serial.printf("sensor_data,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", mc.ax, mc.ay, mc.az,mc.gx,mc.gy,mc.gz, mc.rpy[0], mc.rpy[1], mc.rpy[2],mc.q_array[0],mc.q_array[1],mc.q_array[2],mc.q_array[3]);
           //if(mc.serial_ON && DEBUG_0817)Serial.printf("sensor_data,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%1.3f,%1.3f,%1.3f,%1.3f \r\n", mc.ax, mc.ay, mc.az,mc.gx,mc.gy,mc.gz,mc.q_array[0],mc.q_array[1],mc.q_array[2],mc.q_array[3]);
           //if(mc.serial_ON && DEBUG_0817)Serial.printf("sensor_data,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f,%3.3f \r\n", mc.ax, mc.ay, mc.az,mc.gx,mc.gy,mc.gz);
           #ifdef BTSerial 
@@ -1199,7 +1210,7 @@ static void ButtonSessionLoop(void* arg) {
     }
     else if(M5.BtnA.wasReleasefor(1000)){
       if (xSemaphoreTake(imuDataMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) {
-        calibrateMPU();
+        mc.calibrateMPUtoLittleFS();
         xSemaphoreGive(imuDataMutex);
       }
     }
@@ -1261,7 +1272,7 @@ static void ButtonSessionLoop(void* arg) {
         bleCombo.setDelay(7);
       }
     }
-1
+
     //===ボタン判定===
     for(uint8_t i=0; i<sizeof(mc.events_bool); i++){
       //ボタン押下判定
@@ -1579,6 +1590,7 @@ void resetTask(TaskHandle_t *taskHandle) {
     }
 }
 
+#if defined(M5STICKC_BEFORE202408)
 void calibrateMPU(){
   float gyroSumX,gyroSumY,gyroSumZ;
   float accSumX,accSumY,accSumZ;
@@ -1697,6 +1709,7 @@ void calibrateMPU(){
   }
   */
 }
+#endif
 
 
 void calibrateMPUtoLittleFS(){
@@ -1718,6 +1731,25 @@ void calibrateMPUtoLittleFS(){
       accSumZ += mc.az;
       vTaskDelay(10);
     }
+  #elif defined(_M5STICKC_H_)
+  digitalWrite(10, LOW);
+  vTaskDelay(1000);
+  digitalWrite(10, HIGH);
+  vTaskDelay(100);
+  digitalWrite(10, LOW); 
+  for(int i = 0; i < calibCount; i++){
+    M5.IMU.getGyroData(&gyroX,&gyroY,&gyroZ);
+    M5.IMU.getAccelData(&accX,&accY,&accZ);
+      gyroSumX += gyroX;
+      gyroSumY += gyroY;
+      gyroSumZ += gyroZ;
+      accSumX += accX;
+      accSumY += accY;
+      accSumZ += accZ;
+      vTaskDelay(10);
+      //Serial.printf("%6.2f, %6.2f, %6.2f\r\n", accX, accY, accZ);
+  }
+  digitalWrite(10, HIGH);
   #endif
 
     mc.gOX = gyroSumX/calibCount;
