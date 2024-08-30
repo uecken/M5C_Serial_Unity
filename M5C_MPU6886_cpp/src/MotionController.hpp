@@ -1,16 +1,16 @@
-
 #define MotionController_H
 #include <AccelRingBuffer.hpp>
 
-#define ESP32C3
-//#define _M5STICKC_H_
+//#define ESP32C3
+#define M5STICKC_H
 
-#ifdef ESP32C3
+#if defined(ESP32C3) || defined(ESP32S3)
   #include <Arduino.h>
   #include "I2Cdev.h"
   #include "MPU6050_6Axis_MotionApps20.h"
-  #include "Wire.h"
-#elif defined(_M5STICKC_H_)
+  #include <Wire.h>
+#elif defined(M5STICKC_H)
+  //#include <Arduino.h>
   #include <M5StickC.h>
 #endif
 
@@ -143,7 +143,7 @@ class MotionController{
         uint8_t event=0;
         bool events_bool[4]; //events[0] = INPUT1_EVENT, events[1] = INPUT2_EVENT, events[2] = INPUT3_EVENT
 
-        #ifdef ESP32C3
+        #if defined(ESP32C3) || defined(ESP32S3)
             MPU6050 mpu;
             //int16_t ax, ay, az;
             //int16_t gx, gy, gz;
@@ -176,7 +176,7 @@ class MotionController{
             uint8_t button[4] = {RIGHT_LITTLE,RIGHT_LITTLE,RIGHT_MIDDLE,RIGHT_INDEX};
             //uint8_t button[3] = {0,26};s
             bool prev_button_state[4] = {false,false,false,false};
-            uint8_t pin_LED = 99;
+            uint8_t pin_LED = LED_BUILTIN;
           #endif
         #elif defined(_M5STICKC_H_)
 
@@ -192,7 +192,7 @@ class MotionController{
         String current_game_mode = game_modes[0];
         uint8_t mode = 0;
         bool serial_ON=false;
-        bool ble_enable=true;
+        bool ble_enable=false;
 
         SensorData* sensorDataArray;
         int dataSize_;
@@ -264,17 +264,18 @@ class MotionController{
             pinMode(RIGHT_LITTLE, INPUT);
           #elif defined(ESP32S3)
             pinMode(RIGHT_LITTLE, INPUT);
-            pinMode(RIGHT_RING, INPUT);
-            pinMode(RIGHT_MIDDLE, INPUT);
-            pinMode(RIGHT_INDEX, INPUT);
+            //pinMode(RIGHT_RING, INPUT);
+            //pinMode(RIGHT_MIDDLE, INPUT);
+            //pinMode(RIGHT_INDEX, INPUT);
         #endif
 
-        #ifdef ESP32C3
+        #if defined(ESP32C3) || defined(ESP32S3)
             Serial.begin(115200);
             Wire.begin();
             Serial.println("Initializing I2C devices...");
             mpu.initialize();
-            delay(100);
+            Serial.println(mpu.testConnection() ? "MPU6050 connection successful" : "MPU6050 connection failed");
+
             int devStatus; // Declaration of the devStatus variable
             devStatus = mpu.dmpInitialize();      
             if (devStatus == 0) {
@@ -1222,7 +1223,7 @@ class MotionController{
         float calibCount = 500;
         Serial.println("Calibrating...");
 
-        #ifdef ESP32C3
+        #if defined(ESP32C3) || defined(ESP32S3)
             for (int i = 0; i < calibCount; i++) {
             //mc.mpu.getMotion6(&mc.ax, &mc.ay, &mc.az, &mc.gx, &mc.gy, &mc.gz);
             mpu.getRealRotation(&gx, &gy, &gz);
@@ -1293,7 +1294,7 @@ class MotionController{
         for(uint8_t i=0; i<sizeof(events_bool); i++){
             //ボタン押下判定
             uint16_t sensor_val = analogRead(button[i]);
-            Serial.println(sensor_val);
+            //Serial.println(sensor_val);
             if(prev_button_state[i] == false && sensor_val < sensor_threshold){
                 prev_button_state[i] = true;
                 events_bool[i] = true;

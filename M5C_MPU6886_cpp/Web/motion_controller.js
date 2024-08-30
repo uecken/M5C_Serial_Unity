@@ -455,7 +455,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     const renderer = new THREE.WebGLRenderer();
-    renderer.setSize(400, 400);
+    renderer.setSize(500, 400);
     document.getElementById('threejsContainer').appendChild(renderer.domElement);
 
     const sphereGeometry = new THREE.SphereGeometry(1, 32, 32);

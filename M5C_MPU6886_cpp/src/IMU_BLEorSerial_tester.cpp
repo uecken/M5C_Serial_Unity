@@ -9,10 +9,10 @@
 #endif
 */
 
+
 #include <vector>
 #include <EEPROM.h>
 #include <LittleFS.h>
-
 
 //Select BTserial or MotionController
 //#define BTSerial
@@ -30,8 +30,14 @@
   AccelRingBuffer acc_buffer(20);
 #endif
 
+
+
+
 #include <IMUReader.h>
 IMUReader imur;
+
+
+
 
 
 
@@ -301,7 +307,7 @@ void setup() {
       Serial.println("LittleFS mounted successfully");
   }
 
-  #ifdef ESP32C3
+  #if defined(ESP32C3) || defined(ESP32S3)
   mc.loadCalibrationData();
   #endif
 
@@ -394,7 +400,7 @@ static void ImuLoop(void* arg) {
       pitch_prev = pitch;
       yaw_prev = yaw;
 
-      #ifdef ESP32C3
+      #if defined(ESP32C3) || defined(ESP32S3)
       //mc.mpu.getMotion6(&mc.ax, &mc.ay, &mc.az, &mc.gx, &mc.gy, &mc.gz);
       mc.mpu.getRealAcceleration(&mc.ax, &mc.ay, &mc.az);
       mc.mpu.getRealRotation(&mc.gx, &mc.gy, &mc.gz);
@@ -504,13 +510,14 @@ static void hidSessionLoop(void* arg) {
         pk3 pk3_selected = mc.getClosestPK3(mc.pk3_ref_vector,"rp");
         if(mc.events_bool[0]==true){
 
-          if(BLEHID_ENABLE)mc.inputKey(pk3_selected.inputs_msg[0]);
+          
+          if(BLEHID_ENABLE && bleCombo.isConnected())mc.inputKey(pk3_selected.inputs_msg[0]);
           //if(DEBUG_HID)Serial.printf("selected_pk,%c,%s,%d,%d, current_rp:%f,%f \r\n",pk_selected.hid_input,pk_selected.hid_inputs,pk_selected.rpy[0],pk_selected.rpy[1],roll,pitch);
           //if(DEBUG_HID) serialOutput(pk3_selected, "SELECTED_PK");
           if(DEBUG_HID)Serial.printf("selected_pk3,%c,%d,%d \r\n",pk3_selected.inputs_msg[0],pk3_selected.rpy[0],pk3_selected.rpy[1]);
           mc.events_bool[0]=false;
         }else if(mc.events_bool[1]==true){
-          if(BLEHID_ENABLE)mc.execSF_HIDInputs((char*)pk3_selected.inputs_msg,static_cast<float>(pk3_selected.hid_input_acc_threshold),&acc_buffer);
+          if(BLEHID_ENABLE && bleCombo.isConnected())mc.execSF_HIDInputs((char*)pk3_selected.inputs_msg,static_cast<float>(pk3_selected.hid_input_acc_threshold),&acc_buffer);
           //if(BLEHID_ENABLE)mc.execSF_HIDInputs((char*)pk3_selected.inputs_msg,(float)pk3_selected.hid_input_acc_threshold,&acc_buffer);
           mc.events_bool[1]=false;
         }
@@ -1578,7 +1585,7 @@ void calibrateMPU(){
   float calibCount = 500;
   Serial.println("Calibrating...");
 
-  #ifdef ESP32C3
+  #if defined(ESP32C3) || defined(ESP32S3)
     for (int i = 0; i < calibCount; i++) {
       //mc.mpu.getMotion6(&mc.ax, &mc.ay, &mc.az, &mc.gx, &mc.gy, &mc.gz);
       mc.mpu.getRealRotation(&mc.gx, &mc.gy, &mc.gz);
@@ -1591,7 +1598,7 @@ void calibrateMPU(){
       accSumZ += mc.az;
       vTaskDelay(10);
     }
-  #elif defiend(_M5STICKC_H_)
+  #elif defined(_M5STICKC_H_)
   digitalWrite(10, LOW);
   vTaskDelay(1000);
   digitalWrite(10, HIGH);
@@ -1698,7 +1705,7 @@ void calibrateMPUtoLittleFS(){
   float calibCount = 500;
   Serial.println("Calibrating...");
 
-  #ifdef ESP32C3
+  #if defined(ESP32C3) || defined(ESP32S3)
     for (int i = 0; i < calibCount; i++) {
       //mc.mpu.getMotion6(&mc.ax, &mc.ay, &mc.az, &mc.gx, &mc.gy, &mc.gz);
       mc.mpu.getRealRotation(&mc.gx, &mc.gy, &mc.gz);

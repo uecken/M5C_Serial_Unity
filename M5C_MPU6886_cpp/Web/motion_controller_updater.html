@@ -83,6 +83,23 @@
                         <input type="text" id="serialInput" class="form-control" placeholder="Enter command">
                         <button id="sendBtn" class="btn btn-secondary mt-2">Send</button>
                     </div>
+
+                    <div class="mt-2">
+                        <h5>Information</h5>
+                        <div>
+                        Pitch: <span id="pitch">0</span>
+                        Roll: <span id="roll">0</span>
+                        Yaw: <span id="yaw">0</span>
+                        Quaternion: <span id="quaternion">0, 0, 0, 1</span>
+                        </div>
+                        <div>
+                        Profile: <span id="current_profile"> </span>
+                        Serial: <span id="current_serial"> </span>
+                        </div>
+                    </div>
+
+                    <div id="referencesTableContainer" class="mt-2"></div>
+
                     <div class="mt-2">
                         <button id="flushBtn" class="btn btn-secondary">FLUSH</button>
                         <button id="readBtn" class="btn btn-secondary">READ</button>
@@ -90,6 +107,7 @@
                         <button id="showBtn" class="btn btn-secondary">SHOW</button>
                         <button id="showReferencesBtn" class="btn btn-secondary">SHOW_REFERENCES</button>
                         <button id="rebootBtn" class="btn btn-secondary">REBOOT</button>
+                        <button id="calBtn" class="btn btn-secondary">CALIBRATION</button>
                         <button id="resetBtn" class="btn btn-secondary">FACTORY RESET</button>
                         <button id="qoffsetBtn" class="btn btn-secondary">Q OFFSET</button>
                         <button id="qinitializeBtn" class="btn btn-secondary">Q INIT</button>
@@ -98,21 +116,10 @@
                         <button id="addpk2Btn" class="btn btn-secondary">AddPK2</button>
             
                     </div>
-                    <div id="referencesTableContainer" class="mt-2"></div>
-
-                    <div class="mt-2">
-                        <p>Pitch: <span id="pitch">0</span></p>
-                        <p>Roll: <span id="roll">0</span></p>
-                        <p>Yaw: <span id="yaw">0</span></p>
-                        <p>Quaternion: <span id="quaternion">0, 0, 0, 1</span></p>
-                    </div>
-                    <div class="mt-2">
-                        <input type="checkbox" id="eulerToQuaternion" class="form-check-input">
-                    </div>
 
                 </div>
                 <div class="col-md-6 controls">
-                    <h4>3D Quaternion Display</h4>
+                    <h4>Motion Viewer</h4>
                     <button id="initYawBtn" class="btn btn-secondary">Init Yaw</button>
                     <div class="form-check">
                         <input class="form-check-input" type="checkbox" id="baseUprightCheckbox">
@@ -121,7 +128,9 @@
                         </label>
                     </div>
                     <div id="threejsContainer" class="threejs-canvas mt-2"></div>
-                    <canvas id="pitchRollCanvas" class="mt-2"></canvas>
+                    <div>
+                      <canvas id="pitchRollCanvas" class="mt-2"></canvas>
+                    </div>
                 </div>
             </div>
         </div>
@@ -216,36 +225,54 @@
             </div>
             <div class="controls mt-4">
                 <h4>基本情報書き込み</h4>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="communicationMode" value="ble_hid_usb_serial" id="bleHidUsbSerial">
-                    <label class="form-check-label" for="bleHidUsbSerial">
-                        BLE HID & USB Serial
-                    </label>
-                </div>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="communicationMode" value="usb_hid_bluetooth_serial" id="usbHidBluetoothSerial">
-                    <label class="form-check-label" for="usbHidBluetoothSerial">
-                        USB HID & Bluetooth Serial (ESP32S3 or RP2040 Wのみ対応予定)
-                    </label>
-                </div>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="communicationMode" value="ble_hid_bluetooth_serial" id="bleHidBluetoothSerial" disabled>
-                    <label class="form-check-label" for="bleHidBluetoothSerial">
-                        BLE HID & Bluetooth Serial (未サポートのためチェック付加にする)
+
+                <div class="form-group mt-2">
+                    姿勢判定方法
+                    <ul class="radios">
+                        <label><input type="radio" name="howtoMotionJudge" value="ble_hid_usb_serial" checked>  BLE HID & USB Serial</label></br>
+                        <label><input type="radio" name="howtoMotionJudge" value="usb_hid_bluetooth_serial"> USB HID & Bluetooth Serial (ESP32S3 or RP2040 Wのみ対応予定)</label></br>
+                        <label><input type="radio" name="howtoMotionJudge" value="usb_hid_bluetooth_serial" disabled> BLE HID & Bluetooth Serial (未サポートのためチェック付加にする)</label></br>
+
+                    </div>
+s
+                <div class="form-group mt-2">
+                    <label class="form-check-label" for="initialProfile">
+                        初期プロファイル
                     </label>
                 </div>
                 <div class="form-group mt-2">
+                    姿勢判定方法
+                    <ul class="radios">
+                        <label><input type="radio" name="howtoMotionJudge" value="Oyler" checked> Oyler</label>
+                        <label><input type="radio" name="howtoMotionJudge" value="Quaternion"> Quaternion</label>
+                </div>
+                <div class="form-group mt-2">
+                    シリアル出力
+                    <ul class="radios">
+                        <label><input type="radio" name="initial_serial_on" value="initial_serial_on" checked> ON </label>
+                        <label><input type="radio" name="initial_serial_off" value="initial_serial_off"> OFF </label>
+                </div>
+                <div class="form-group mt-2">
+                    持ち手
+                    <ul cl  ass="radios">
+                        <label><input type="radio" name="initial_right_handed" value="initial_right_handed" checked> right-handed </label>
+                        
+                        <label><input type="radio" name="initial_left_handed" value="initial_left_handed"> left-handed </label>
+                </div>
+                
+                <div class="form-group mt-2">
                     <label for="usbHidName">USB HID 名称</label>
-                    <input type="text" class="form-control" id="usbHidName" placeholder="Enter USB HID Name">
+                    <input type="text" class="form-control" id="usbHidName" value="burst-motion">　
                 </div>
                 <div class="form-group mt-2">
                     <label for="bleHidName">BLE HID 名称</label>
-                    <input type="text" class="form-control" id="bleHidName" placeholder="Enter BLE HID Name">
+                    <input type="text" class="form-control" id="bleHidName" value="burst-motion">
                 </div>
                 <div class="form-group mt-2">
                     <label for="bluetoothSerialName">Bluetooth Serial 名称</label>
-                    <input type="text" class="form-control" id="bluetoothSerialName" placeholder="Enter Bluetooth Serial Name">
+                    <input type="text" class="form-control" id="bluetoothSerialName"  value="burst-motion">
                 </div>
+
                 <button id="writeBasicInfoBtn" class="btn btn-secondary mt-2">基本情報書き込み</button>
                 <p class="mt-2">USB HIDとBluetooth Serialはサポート予定です。ESP32S3またはRP2040Wに限ります。</p>
             </div>
