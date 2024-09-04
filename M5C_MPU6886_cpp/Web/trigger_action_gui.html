@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>トリガーアクションGUI</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .condition { border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
+        .trigger { margin-bottom: 5px; }
+        input[type="text"] { width: 150px; }
+        button { margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>トリガーアクションGUI</h1>
+    <div id="conditions">
+        <div class="condition">
+            <div class="triggers">
+                <div class="trigger">
+                    <select class="device">
+                        <option value="body">本体</option>
+                        <option value="sensor">センサ</option>
+                    </select>
+                    <select class="type">
+                        <option value="button">ボタン</option>
+                        <option value="posture">姿勢</option>
+                        <option value="acceleration">加速度</option>
+                        <option value="gyro">ジャイロ</option>
+                    </select>
+                    <input type="text" placeholder="入力値" style="display: none;">
+                    <div class="button-options" style="display: inline;">
+                        <input type="radio" name="button1" value="1"> 1
+                        <input type="radio" name="button1" value="2"> 2
+                        <input type="radio" name="button1" value="3"> 3
+                    </div>
+                    <button onclick="removeTrigger(this)">削除</button>
+                    <span class="posture-warning" style="display: none; color: red;">姿勢のみは未対応</span>
+                </div>
+            </div>
+            <select class="trigger-logic">
+                <option value="and">AND</option>
+                <option value="or">OR</option>
+            </select>
+            <button onclick="addTrigger(this)">トリガー追加</button>
+            <div class="action">
+                <select>
+                    <option value="keyboard">キーボード入力</option>
+                    <option value="gamepad">ゲームパッド入力</option>
+                    <option value="mouse">マウス入力</option>
+                </select>
+                <input type="text" class="hex-input" placeholder="16進数入力">
+                <input type="number" class="delay" placeholder="遅延量" min="0">
+            </div>
+        </div>
+    </div>
+    <button onclick="addCondition()">条件追加</button>
+    <button onclick="send()">送信</button>
+
+    <script>
+        function addTrigger(button) {
+            const triggersDiv = button.parentElement.querySelector('.triggers');
+            if (triggersDiv.children.length < 3) {
+                const newTrigger = triggersDiv.children[0].cloneNode(true);
+                newTrigger.querySelector('input[type="text"]').value = '';
+                newTrigger.querySelector('.button-options').style.display = 'none';
+                newTrigger.querySelector('input[type="text"]').style.display = 'inline';
+                newTrigger.querySelector('.posture-warning').style.display = 'none';
+                newTrigger.querySelector('.button-options').querySelectorAll('input[type="radio"]').forEach(radio => {
+                    radio.name = 'button' + (triggersDiv.children.length + 1);
+                });
+                if (triggersDiv.children.length === 1) {
+                    newTrigger.querySelector('.type').value = 'posture';
+                } else if (triggersDiv.children.length === 2) {
+                    newTrigger.querySelector('.type').value = 'acceleration';
+                }
+                triggersDiv.appendChild(newTrigger);
+                updateTriggerLogic(button.parentElement);
+            }
+        }
+
+        function removeTrigger(button) {
+            const triggersDiv = button.closest('.triggers');
+            if (triggersDiv.children.length > 1) {
+                button.closest('.trigger').remove();
+                updateTriggerLogic(triggersDiv.closest('.condition'));
+            }
+        }
+
+        function updateTriggerLogic(condition) {
+            const triggers = condition.querySelectorAll('.trigger');
+            const logicSelect = condition.querySelector('.trigger-logic');
+            logicSelect.style.display = triggers.length > 1 ? 'inline' : 'none';
+        }
+
+        function addCondition() {
+            const conditionsDiv = document.getElementById('conditions');
+            const newCondition = conditionsDiv.children[0].cloneNode(true);
+            newCondition.querySelectorAll('input[type="text"]').forEach(input => input.value = '');
+            newCondition.querySelector('.button-options').style.display = 'inline';
+            newCondition.querySelector('.posture-warning').style.display = 'none';
+            conditionsDiv.appendChild(newCondition);
+            updateTriggerLogic(newCondition);
+        }
+
+        function send() {
+            const conditions = document.querySelectorAll('.condition');
+            const data = Array.from(conditions).map(condition => {
+                const triggers = condition.querySelectorAll('.trigger');
+                const action = condition.querySelector('.action');
+                return {
+                    triggers: Array.from(triggers).map(trigger => ({
+                        device: trigger.querySelector('.device').value,
+                        type: trigger.querySelector('.type').value,
+                        value: trigger.querySelector('input[type="text"]').value,
+                        buttonValue: trigger.querySelector('.button-options:not([style*="display: none"]) input:checked')?.value
+                    })),
+                    logic: condition.querySelector('.trigger-logic').value,
+                    action: {
+                        type: action.querySelector('select').value,
+                        input: action.querySelector('.hex-input').value,
+                        delay: action.querySelector('.delay').value
+                    }
+                };
+            });
+
+            console.log('送信データ:', data);
+            // ここでマイコンへの送信処理を実装する
+        }
+
+        document.addEventListener('keydown', function(e) {
+            if (document.activeElement.classList.contains('hex-input')) {
+                e.preventDefault();
+                const input = document.activeElement;
+                if (e.key === 'Backspace') {
+                    input.value = input.value.slice(0, -3);
+                } else {
+                    const hexValue = e.keyCode.toString(16).toUpperCase().padStart(2, '0');
+                    input.value += hexValue + ' ';
+                }
+            }
+        });
+
+        document.addEventListener('change', function(e) {
+            if (e.target.classList.contains('type')) {
+                const trigger = e.target.closest('.trigger');
+                const buttonOptions = trigger.querySelector('.button-options');
+                const textInput = trigger.querySelector('input[type="text"]');
+                const postureWarning = trigger.querySelector('.posture-warning');
+                
+                buttonOptions.style.display = e.target.value === 'button' ? 'inline' : 'none';
+                textInput.style.display = e.target.value === 'button' ? 'none' : 'inline';
+                
+                if (e.target.value === 'posture') {
+                    const triggers = e.target.closest('.triggers');
+                    postureWarning.style.display = triggers.children.length === 1 ? 'inline' : 'none';
+                } else {
+                    postureWarning.style.display = 'none';
+                }
+            }
+            
+            if (e.target.tagName === 'SELECT' && e.target.closest('.action')) {
+                const hexInput = e.target.nextElementSibling;
+                if (e.target.value === 'mouse') {
+                    hexInput.value = '未実装';
+                    hexInput.disabled = true;
+                } else {
+                    hexInput.value = '';
+                    hexInput.disabled = false;
+                }
+            }
+        });
+    </script>
+</body>
+</html>
