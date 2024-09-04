@@ -9,6 +9,7 @@
 #endif
 */
 
+//#include <Arduino.h>
 #include <vector>
 #include <EEPROM.h>
 #include <LittleFS.h> //need include in main.
@@ -32,6 +33,11 @@
 
 #include <IMUReader.h>
 IMUReader imur;
+
+#include "MPU6886_external.hpp"
+MPU6886_External IMU_External(32, 33);
+
+
 
 
 //Refered to AxisOrange https://github.com/naninunenoy/AxisOrange
@@ -72,15 +78,13 @@ int split(String,char,String*);
 //float accX = 0.0F,accY = 0.0F,accZ = 0.0F;
 //float gyroX = 0.0F,gyroY = 0.0F,gyroZ = 0.0F;
 //float pitch = 0.0F,roll  = 0.0F,yaw   = 0.0F;
+//float aOX = -0.003, aOY = +0.018, aOZ =  0.085 ;  //-0.00   0.01   0.07 
+//float gOX = 3.516, gOY = -6.023 , gOZ = -5.14;  //3.36   9.66   4.11
 float unwrpRoll,unwrpYaw;
 float accABS;
 float* q_array = new float[4]; //quaternion
-//float aOX = -0.003, aOY = +0.018, aOZ =  0.085 ;  //-0.00   0.01   0.07 
-//float gOX = 3.516, gOY = -6.023 , gOZ = -5.14;  //3.36   9.66   4.11
 float pO=0 , rO=0 , yO=-8.5, yO2=0;
 float roll_prev,pitch_prev,yaw_prev;
-
-
 float& accX = mc.ax;
 float& accY = mc.ay;
 float& accZ = mc.az;
@@ -90,8 +94,6 @@ float& gyroZ = mc.gz;
 float& roll = mc.rpy[0];
 float& pitch= mc.rpy[1];
 float& yaw  = mc.rpy[2];
-
-
 
 boolean DEBUG_EEPROM = true;
 boolean DEBUG_HID = true;
@@ -162,13 +164,22 @@ pk pk6_leftdisp_dist = {MODE_STREET_FIGHTER_DIST,5,'r',0,0,0,0,{180,0,0},{0,0,0,
 pk pk7_leftdisp_dist = {MODE_STREET_FIGHTER_DIST,5,'r',0,0,0,0,{0,0,0},{0,0,0,0},'1',{KEY_RIGHT_ARROW,KEY_DOWN_ARROW,KEY_RIGHT_ARROW,'a','\0'},50,3}; //昇竜拳(roll判定は150-180,-150-180にするべき)
 pk pk8_leftdisp_dist = {MODE_STREET_FIGHTER_DIST,5,'r',0,0,0,0,{0,0,0},{0,0,0,0},'1',{KEY_LEFT_ARROW,KEY_DOWN_ARROW,KEY_LEFT_ARROW,'a','\0'},50,3}; //昇竜拳(roll判定は150-180,-150-180にするべき)
 pk pk_a_leftdisp_dist = {MODE_STREET_FIGHTER_DIST,5,'r',0,0,0,0,{-90,0,0},{0,0,0,0},'1',{'v','a','\0'},50,2}; //パンチ
+pk pk9_extIMU_leftdisp_dist = {MODE_STREET_FIGHTER_DIST,5,'r',0,0,0,0,{180,0,0},{0,0,0,0},'1',{KEY_DOWN_ARROW,KEY_LEFT_ARROW,'x','\0'},50,2.5}; //竜巻旋風脚
+pk pk10_extIMU_leftdisp_dist = {MODE_STREET_FIGHTER_DIST,5,'r',0,0,0,0,{180,0,0},{0,0,0,0},'1',{KEY_DOWN_ARROW,KEY_RIGHT_ARROW,'x','\0'},50,2.5}; //竜巻旋風脚
+
 
 pk p2_pk5_leftdisp_dist = {MODE_STREET_FIGHTER_DIST,5,'r',-30,30,-30,30,{180,0,0},{0,0,0,0},'1',{P2_KEY_DOWN_ARROW,P2_KEY_RIGHT_ARROW,'y','\0'},50,3}; //波動拳
 pk p2_pk6_leftdisp_dist = {MODE_STREET_FIGHTER_DIST,5,'r',-30,30,-30,30,{180,0,0},{0,0,0,0},'1',{P2_KEY_DOWN_ARROW,P2_KEY_LEFT_ARROW,'y','\0'},50,3}; //波動拳
 pk p2_pk7_leftdisp_dist = {MODE_STREET_FIGHTER_DIST,5,'r',150,210,-30,30,{0,0,0},{0,0,0,0},'1',{P2_KEY_RIGHT_ARROW,P2_KEY_DOWN_ARROW,P2_KEY_RIGHT_ARROW,'y','\0'},50,3}; //昇竜拳(roll判定は150-180,-150-180にするべき)
 pk p2_pk8_leftdisp_dist = {MODE_STREET_FIGHTER_DIST,5,'r',150,210,-30,30,{0,0,0},{0,0,0,0},'1',{P2_KEY_LEFT_ARROW,P2_KEY_DOWN_ARROW,P2_KEY_LEFT_ARROW,'y','\0'},50,3}; //昇竜拳(roll判定は150-180,-150-180にするべき)
 pk p2_pk_y_leftdisp_dist = {MODE_STREET_FIGHTER_DIST,5,'r',-30,30,-30,30,{-90,0,0},{0,0,0,0},'1',{'v','y','\0'},50,2}; //パンチ
+pk p2_pk9_extIMU_leftdisp_dist = {MODE_STREET_FIGHTER_DIST,5,'r',0,0,0,0,{180,0,0},{0,0,0,0},'1',{P2_KEY_DOWN_ARROW,P2_KEY_LEFT_ARROW,'x','\0'},50,2.5}; //竜巻旋風脚
+pk p2_pk10_extIMU_leftdisp_dist = {MODE_STREET_FIGHTER_DIST,5,'r',0,0,0,0,{180,0,0},{0,0,0,0},'1',{P2_KEY_DOWN_ARROW,P2_KEY_RIGHT_ARROW,'g','\0'},50,2.5}; //竜巻旋風脚
 
+
+
+pk pk_selected;
+pk pk_selected_ExternalIMU=pk9_extIMU_leftdisp_dist;
 
 
 
@@ -285,8 +296,7 @@ void setup() {
    mc.mode=MODE_PK3;
    mc.begin();
   #endif
-
-
+  
 
   //calibrate
   /*if (xSemaphoreTake(imuDataMutex, MUTEX_DEFAULT_WAIT) == pdTRUE) {
@@ -309,6 +319,7 @@ void setup() {
 
   #if defined(ESP32C3) || defined(ESP32S3) || defined(_M5STICKC_H_)
     mc.loadCalibrationData();
+    mc.loadBasicInfo();
   #endif
 
   //保存したPlayerkeyベクトルの読みだし
@@ -357,34 +368,20 @@ void setup() {
 
 
 
-  if(LEFT_DISPLAY){
+  if(mc.LEFT_DISPLAY){
     Serial.println("LEFT_DISPLAY,");
   }
  
   vTaskDelay(500);
   mc.setInitialQuat(mc.initial_quat_horizontal);
-  //TEST_ER.begin(EEPROM_SIZE/5); //8Byte * 100/20;
-  /*
-  USER1_ER.begin(EEPROM_SIZE/5);
-  USER2_ER.begin(EEPROM_SIZE/5); 
-  PRES1_ER.begin(EEPROM_SIZE/5); 
-  PRES2_ER.begin(EEPROM_SIZE/5); 
-  */
-  //flushPKarray(pk_array);
-  //readPKarray();
-  
-  //flushPKvector(pk_vector);
-  //readPKvector();
 
-/*
-EEPROM.put(0,pk_array);
-EEPROM.commit();
-pk pk_array;
-
-EEPROM.get(1,pk_array);
-int i =0;
-Serial.println(String(pk_array[i].rpy_priority) +"," +String(pk_array[i].roll_min) + "," + String(pk_array[i].roll_max) + "," +String(pk_array[i].hid_input));
-*/
+  // 外部MPU6886の検出と初期化
+  if (IMU_External.begin()) {
+    Serial.println("External MPU6886 initialized successfully");
+    IMU_External.accEventTh = 3.5;
+  } else {
+    Serial.println("External MPU6886 not found");
+  }
 
 }
 
@@ -435,6 +432,15 @@ static void ImuLoop(void* arg) {
       mc.offsetSensorData();
       q_array = mc.m5c_getAhrsData();
 
+      if (IMU_External.isInitialized){
+        IMU_External.getAccelData();
+        //合成加速度が2.5以上の場合AccEventをtrueにする
+        if (IMU_External.accABS > IMU_External.accEventTh) {
+          IMU_External.accEvent = true;
+        }
+      }
+
+
       //accABS = sqrt(accX*accX + accY*accY + accZ*accZ);
 
 
@@ -477,7 +483,7 @@ static void ImuLoop(void* arg) {
       //q_array = M5.IMU.getAhrsData2(&pitch,&roll,&yaw,aOX,aOY,aOZ,gOX,gOY,gOZ);
       
       pitch -=pO;  roll -= rO;  yaw -= yO;//★最小値-188.5。原因はgyroZの補正ができていないからか？一時的に+8.5して補正する。
-      if(LEFT_DISPLAY){
+      if(mc.LEFT_DISPLAY){
         pitch = -pitch;
         roll = -roll;
         yaw = -yaw;
@@ -528,7 +534,7 @@ static void hidSessionLoop(void* arg) {
           if(DEBUG_HID)Serial.printf("selected_pk3,%c,%d,%d \r\n",pk3_selected.inputs_msg[0],pk3_selected.rpy[0],pk3_selected.rpy[1]);
           mc.events_bool[0]=false;
         }else if(mc.events_bool[1]==true){
-          if(BLEHID_ENABLE && bleCombo.isConnected())mc.execSF_HIDInputs((char*)pk3_selected.inputs_msg,static_cast<float>(pk3_selected.hid_input_acc_threshold),&acc_buffer);
+          if(BLEHID_ENABLE && bleCombo.isConnected())mc.execSF_HIDInputs((char*)pk3_selected.inputs_msg,static_cast<float>(pk3_selected.hid_input_acc_threshold),&acc_buffer,false);
           //if(BLEHID_ENABLE)mc.execSF_HIDInputs((char*)pk3_selected.inputs_msg,(float)pk3_selected.hid_input_acc_threshold,&acc_buffer);
           mc.events_bool[1]=false;
         }
@@ -549,7 +555,7 @@ static void hidSessionLoop(void* arg) {
             if(pk_vector[i].roll_min < 180 && pk_vector[i].roll_max > 180){
             //例えばRoll 150 ~ 210の場合、150°以上または-150°以下の場合に入力を受け付ける
               if((pk_vector[i].roll_min < roll) && (-1 *(180 - (180 - pk_vector[i].roll_max)) < roll )){
-                mc.execSF_HIDInputs(pk_vector[i].hid_inputs,(float)pk_vector[i].hid_input_acc_threshold,&acc_buffer);
+                mc.execSF_HIDInputs(pk_vector[i].hid_inputs,(float)pk_vector[i].hid_input_acc_threshold,&acc_buffer,false);
               }
             } 
             
@@ -558,7 +564,7 @@ static void hidSessionLoop(void* arg) {
               if(mc.serial_ON)Serial.println(String("In,")+String(pk_vector[i].hid_input) + ","+String(pk_vector[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
               //M5.Lcd.setCursor(10,60);
               //M5.Lcd.println(String("In,")+String(pk_vector[i].hid_input) + ","+String(pk_vector[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
-              mc.execSF_HIDInputs(pk_vector[i].hid_inputs,(float)pk_vector[i].hid_input_acc_threshold,&acc_buffer);
+              mc.execSF_HIDInputs(pk_vector[i].hid_inputs,(float)pk_vector[i].hid_input_acc_threshold,&acc_buffer,false);
               break;
             }
           }
@@ -616,10 +622,10 @@ static void hidSessionLoop(void* arg) {
         float pitch_delta = mouse_scale*mc.mouse_scale2*(pitch - pitch_prev);
         float yaw_delta = mouse_scale*mc.mouse_scale2*(yaw - yaw_prev);
         if(mc.events_bool[0]==true && mc.events_bool[1]==true){
-          if(!LEFT_DISPLAY){
+          if(!mc.LEFT_DISPLAY){
             
           }
-          else if(LEFT_DISPLAY){
+          else if(mc.LEFT_DISPLAY){
             //pitch変化が負の場合スクロールアップ、正の場合スクロールダウン
             if(pitch_delta < 0){
               bleCombo.move(0,0,1);
@@ -628,18 +634,18 @@ static void hidSessionLoop(void* arg) {
             }
           }
         }else if(mc.events_bool[0]==true){
-          if(!LEFT_DISPLAY){
+          if(!mc.LEFT_DISPLAY){
             
           }
-          else if(LEFT_DISPLAY){
+          else if(mc.LEFT_DISPLAY){
             //pitch_deltaがマイナスの場合、マウスの上下移動が逆になるので符号を反転させる
             mc.moveMouse(yaw_delta,pitch_delta);
           }
         }else if(mc.events_bool[1]==true){
-          if(!LEFT_DISPLAY){
+          if(!mc.LEFT_DISPLAY){
             
           }
-          else if(LEFT_DISPLAY){
+          else if(mc.LEFT_DISPLAY){
             //bleCombo.press(MOUSE_LEFT);
             bleCombo.click(MOUSE_LEFT);
             /*
@@ -657,10 +663,9 @@ static void hidSessionLoop(void* arg) {
           }
         }else if(mc.events_bool[2]==true){
             bleCombo.click(MOUSE_RIGHT);
-        }
+        }        
       }else if(mc.mode==MODE_STREET_FIGHTER_DIST){
         std::vector<pk> pks;
-        pk pk_selected;
         static boolean prev_events_bool[3] = {false,false,false};
 
         //キャラ移動設定
@@ -678,91 +683,64 @@ static void hidSessionLoop(void* arg) {
         }
 
 
-        //キーボードマウス入力(button2の場合)
+        //====キャラ移動====
         if(mc.events_bool[2]==true){
-          //roll=-90度が基準
-          /*
-          if((roll<-120 & roll>-180) || (roll>90 && roll<180)) mc.inputKey(l);
-          else if((roll>-60 & roll<0) || (roll>0 && roll<90)) mc.inputKey(r);
-          //else{mc.releaseKey(l);mc.releaseKey(r);}
+            //手前に倒すと下ボタン
+            if(pitch<-30 && roll<-120){ mc.pressKey(d); vTaskDelay(30); mc.pressKey(l);}
+            else if(pitch<-30 && roll>-60){ mc.pressKey(d); vTaskDelay(30); mc.pressKey(r);}
+            else{
+              //1キー選択
+              //pitch=0度が基準
+              if(pitch<-30) {mc.pressKey(d); }//mc.pressKey(u); }
+              else if(pitch>30) {mc.pressKey(u); }//mc.pressKey(d);}
+              else{mc.releaseKey(u);mc.releaseKey(d);}          
 
-          //pitch=0度が基準
-          if(pitch<-40) mc.inputKey(u);
-          else if(pitch>40) mc.inputKey(d);
-          //else{mc.releaseKey(u);mc.releaseKey(d);}
-          */
-
-          /*
-          if((roll<-120 && roll>-180) || (roll>90 && roll<180)) mc.pressKey(l);
-          else {mc.releaseKey(l);}
-          if((roll>-60 && roll<0) || (roll>0 && roll<90)) mc.pressKey(r);
-          else{mc.releaseKey(r);}
-
-          if(pitch<-40) mc.pressKey(u);
-
-          else if(pitch>40) mc.pressKey(d);
-          else{mc.releaseKey(u);mc.releaseKey(d);}
-          */
-
-          
-          //2キー選択
-          //if(pitch>30 && roll<-120){ mc.pressKey(d); mc.pressKey(l);}
-          //else if(pitch>30 && roll>-60){ mc.pressKey(d); mc.pressKey(r);}
-
-          //手前に倒すと下ボタン
-          if(pitch<-30 && roll<-120){ mc.pressKey(d); vTaskDelay(30); mc.pressKey(l);}
-          else if(pitch<-30 && roll>-60){ mc.pressKey(d); vTaskDelay(30); mc.pressKey(r);}
-          else{
-            //1キー選択
-            //pitch=0度が基準
-            if(pitch<-30) {mc.pressKey(d); }//mc.pressKey(u); }
-            else if(pitch>30) {mc.pressKey(u); }//mc.pressKey(d);}
-            else{mc.releaseKey(u);mc.releaseKey(d);}          
-
-            //roll=-90度が基準
-            if((roll<-120 && roll>-180) || (roll>90 && roll<180)) mc.pressKey(l);
-            else if((roll>-60 && roll<0) || (roll>0 && roll<90)) mc.pressKey(r);
-            else{mc.releaseKey(l);mc.releaseKey(r);}
-          }
-          prev_events_bool[2] = true;
-
-          //キャラ移動しながらボタン押す事で、必殺技を出せるようにする
-          if(mc.events_bool[0]==true || mc.events_bool[1]==true){
-            vTaskDelay(30);
-            mc.keyboardReleaseAll();
-            vTaskDelay(30);
-
-            if(mc.current_game_mode==MODE_SF_P1){
-              //mc.inputKey('a');
-              mc.pressKey('a');
-              //mc.pressKey('h');
-              vTaskDelay(30);
-            }else
-            if(mc.current_game_mode==MODE_SF_P2){
-              //mc.inputKey('y');
-              mc.pressKey('y');
-              //mc.pressKey('h');
-              vTaskDelay(30);
+              //roll=-90度が基準
+              if((roll<-120 && roll>-180) || (roll>90 && roll<180)) mc.pressKey(l);
+              else if((roll>-60 && roll<0) || (roll>0 && roll<90)) mc.pressKey(r);
+              else{mc.releaseKey(l);mc.releaseKey(r);}
             }
-            mc.keyboardReleaseAll();
-          }
+            prev_events_bool[2] = true;
+
+            //キャラ移動しながらボタン押す事で、必殺技を出せるようにする(代わりに投げはできないs)
+            //01true
+            if(mc.events_bool[0]==true || mc.events_bool[1]==true){
+              vTaskDelay(30);
+              mc.keyboardReleaseAll();
+              vTaskDelay(30);
+
+              if(mc.current_game_mode==MODE_SF_P1){
+                //mc.inputKey('a');
+                mc.pressKey('a');
+                //mc.pressKey('h');
+                vTaskDelay(30);
+              }else
+              if(mc.current_game_mode==MODE_SF_P2){
+                //mc.inputKey('y');
+                mc.pressKey('t');
+                //mc.pressKey('h');
+                vTaskDelay(30);
+              }
+              mc.keyboardReleaseAll();
+            }
         }
 
 
         //キーボード設定
         if(mc.events_bool[0]==true){//キャラが左に居る場合
-          if(mc.current_game_mode==MODE_SF_P1){ pks = pk_vector_sf_left_character_dist;}
-          else if(mc.current_game_mode==MODE_SF_P2) { pks = p2_pk_vector_sf_left_character_dist;}
+          if(mc.current_game_mode==MODE_SF_P1){ pks = pk_vector_sf_left_character_dist;pk_selected_ExternalIMU=pk9_extIMU_leftdisp_dist;}
+          else if(mc.current_game_mode==MODE_SF_P2) { pks = p2_pk_vector_sf_left_character_dist;pk_selected_ExternalIMU=p2_pk9_extIMU_leftdisp_dist;}
         }else if(mc.events_bool[1]==true){ //キャラが右に居る場合
-          if(mc.current_game_mode==MODE_SF_P1){ pks = pk_vector_sf_right_character_dist;}
-          else if(mc.current_game_mode==MODE_SF_P2) { pks = p2_pk_vector_sf_right_character_dist;}
+          if(mc.current_game_mode==MODE_SF_P1){ pks = pk_vector_sf_right_character_dist;pk_selected_ExternalIMU=pk10_extIMU_leftdisp_dist;}
+          else if(mc.current_game_mode==MODE_SF_P2) { pks = p2_pk_vector_sf_right_character_dist;pk_selected_ExternalIMU=p2_pk10_extIMU_leftdisp_dist;}
         }
 
         //キーボード入力(マウス押してない場合)
+        //01true
         if((mc.events_bool[0]==true || mc.events_bool[1]==true) && mc.events_bool[2]==false){  
           //キー判定
           pk_selected = getClosestPK(pks);
-          if(BLEHID_ENABLE)mc.execSF_HIDInputs(pk_selected.hid_inputs,(float)pk_selected.hid_input_acc_threshold,&acc_buffer);
+          if(BLEHID_ENABLE)mc.execSF_HIDInputs(pk_selected.hid_inputs,(float)pk_selected.hid_input_acc_threshold,&acc_buffer,false);
           //if(DEBUG_HID)Serial.printf("SF,selected_pk:%s,%d,%d, current_rp:%f,%f \r\n",pk_selected.hid_inputs,pk_selected.rpy[0],pk_selected.rpy[1],roll,pitch);
           //unityでsplitするため、selected_pkにする必要がある
           //if(DEBUG_HID)Serial.printf("selected_pk,%c,%d,%d, current_rp:%f,%f \r\n",pk_selected.hid_input,pk_selected.rpy[0],pk_selected.rpy[1],roll,pitch);
@@ -776,6 +754,13 @@ static void hidSessionLoop(void* arg) {
         //Release
         if (prev_events_bool[2] == true && mc.events_bool[2]==false){
           mc.releaseKey(l);mc.releaseKey(r);mc.releaseKey(u);mc.releaseKey(d);
+        }
+
+        //竜巻旋風脚
+        if(IMU_External.accEvent){
+          mc.execSF_HIDInputs(pk_selected_ExternalIMU.hid_inputs,0,&acc_buffer,true);
+          vTaskDelay(1000);
+          IMU_External.accEvent = false;
         }
 
         //button2をreleaesした時に、該当プレイヤーのキャラ移動停止
@@ -797,7 +782,7 @@ static void hidSessionLoop(void* arg) {
             if(pks[i].roll_min < 180 && pks[i].roll_max > 180){
             //例えばRoll 150 ~ 210の場合、150°以上または-150°以下の場合に入力を受け付ける
               if((pks[i].roll_min < roll) && (-1 *(180 - (pks[i].roll_max - 180)) < roll )){
-                mc.execSF_HIDInputs(pks[i].hid_inputs,(float)pks[i].hid_input_acc_threshold,&acc_buffer);
+                mc.execSF_HIDInputs(pks[i].hid_inputs,(float)pks[i].hid_input_acc_threshold,&acc_buffer,false);
               }
             }
             
@@ -806,7 +791,7 @@ static void hidSessionLoop(void* arg) {
               if(mc.serial_ON)Serial.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
               //M5.Lcd.setCursor(10,60);
               //M5.Lcd.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
-              mc.execSF_HIDInputs(pks[i].hid_inputs,(float)pks[i].hid_input_acc_threshold,&acc_buffer);
+              mc.execSF_HIDInputs(pks[i].hid_inputs,(float)pks[i].hid_input_acc_threshold,&acc_buffer,false);
               break;
             }
           }
@@ -821,7 +806,7 @@ static void hidSessionLoop(void* arg) {
             if(pks[i].roll_min < 180 && pks[i].roll_max > 180){
             //例えばRoll 150 ~ 210の場合、150°以上または-150°以下の場合に入力を受け付ける
               if((pks[i].roll_min < roll) && (-1 *(180 - (pks[i].roll_max - 180)) < roll )){
-                mc.execSF_HIDInputs(pks[i].hid_inputs,(float)pks[i].hid_input_acc_threshold,&acc_buffer);
+                mc.execSF_HIDInputs(pks[i].hid_inputs,(float)pks[i].hid_input_acc_threshold,&acc_buffer,false);
               }
             }
             
@@ -830,7 +815,7 @@ static void hidSessionLoop(void* arg) {
               if(mc.serial_ON)Serial.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
               //M5.Lcd.setCursor(10,60);
               //M5.Lcd.println(String("In,")+String(pks[i].hid_input) + ","+String(pks[i].rpy_priority) + "," + String(roll)); // NG "In,"+pk1.input. Buffer Over
-              mc.execSF_HIDInputs(pks[i].hid_inputs,(float)pks[i].hid_input_acc_threshold,&acc_buffer);
+              mc.execSF_HIDInputs(pks[i].hid_inputs,(float)pks[i].hid_input_acc_threshold,&acc_buffer,false);
               break;
             }
           }
@@ -1014,8 +999,9 @@ static void ReadSessionLoop(void* arg){
           for (int i = 1; i <= 4; i++) {
               mc.initial_quat[i] = inputs[i + 1].toFloat();
           }
-          mc.set_initial_quaternion = true;
-        }
+          M5.IMU.setQuaternion(mc.initial_quat);
+        }else if(command == "FINFO") mc.flushBasicInfo(inputs);
+        else if(command == "PINFO") mc.serialOutBasicInfo();
         else if(command == "addpk2" || command == "pk2"){
           Serial.println("4:");
           mc.addPK2ToVector(mc.pk2_array2struct(inputs,1),mc.pk2_ref_vector);
@@ -1038,7 +1024,6 @@ static void ReadSessionLoop(void* arg){
           Serial.printf("Received command to save pk3 vector. File: %s, Length: %d, Size: %d bytes\n", 
                         fileName.c_str(), pk3VectorLength, totalSize);
 
-          std::vector<pk3> receivedPK3Vector(pk3VectorLength);
           unsigned long startTime = millis();
           unsigned long timeout = 1000; // 2秒のタイムアウト
 
@@ -1076,6 +1061,7 @@ static void ReadSessionLoop(void* arg){
           }
 */
 
+          std::vector<pk3> receivedPK3Vector(pk3VectorLength);
           for (size_t i = 0; i < pk3VectorLength; i++) {
             Serial.readBytes((char *)&receivedPK3Vector[i], sizeof(pk3));
             Serial.print("Received PK3 ");
@@ -1279,7 +1265,11 @@ static void ButtonSessionLoop(void* arg) {
       if(mc.prev_button_state[i] == false && mc.switchRead(mc.button[i])==true){
           mc.prev_button_state[i] = true;
           mc.events_bool[i] = true;
-          //Serial.println("..");
+          //Serial.println(mc.button[i]); //If serial print, BT will be unstable.
+          Serial.print("i:");
+          Serial.println(i);
+          Serial.print("button:");
+          Serial.println(mc.button[i]);
         }
       //ボタン離す判定
       else if(mc.prev_button_state[i] == true && mc.switchRead(mc.button[i])==false){

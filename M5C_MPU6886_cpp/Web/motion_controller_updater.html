@@ -53,6 +53,9 @@
     <script src="motion_controller.js"></script>
 </head>
 <body>
+    <header>
+        <h1>eSports-Controller</h1>
+    </header>
 <div class="container-fluid">
     <!-- サイドバー -->
     <div class="sidebar">
@@ -97,9 +100,7 @@
                         Serial: <span id="current_serial"> </span>
                         </div>
                     </div>
-
                     <div id="referencesTableContainer" class="mt-2"></div>
-
                     <div class="mt-2">
                         <button id="flushBtn" class="btn btn-secondary">FLUSH</button>
                         <button id="readBtn" class="btn btn-secondary">READ</button>
@@ -110,27 +111,33 @@
                         <button id="calBtn" class="btn btn-secondary">CALIBRATION</button>
                         <button id="resetBtn" class="btn btn-secondary">FACTORY RESET</button>
                         <button id="qoffsetBtn" class="btn btn-secondary">Q OFFSET</button>
-                        <button id="qinitializeBtn" class="btn btn-secondary">Q INIT</button>
-                        <button id="qinitializeHorizontalBtn" class="btn btn-secondary">Q INIT H</button>
-                        <button id="qinitializeUprightBtn" class="btn btn-secondary">Q INIT U</button>
+                        <!--<button id="qinitializeBtn" class="btn btn-secondary">Q INIT</button>-->
+
                         <button id="addpk2Btn" class="btn btn-secondary">AddPK2</button>
-            
+                        <button id="pinfoBtn" class="btn btn-secondary">PINFO</button>
                     </div>
+                    <div id="basicInfoContainer"></div>
 
                 </div>
                 <div class="col-md-6 controls">
+
                     <h4>Motion Viewer</h4>
-                    <button id="initYawBtn" class="btn btn-secondary">Init Yaw</button>
-                    <div class="form-check">
+                    <button id="qinitializeHorizontalBtn" class="btn btn-secondary">Q INIT H</button>
+                    <button id="qinitializeUprightBtn" class="btn btn-secondary">Q INIT U</button>
+                    <!--button id="initYawBtn" class="btn btn-secondary">Init Yaw</button>
+                    <div class="form-check">-->
+                    <!--
                         <input class="form-check-input" type="checkbox" id="baseUprightCheckbox">
                         <label class="form-check-label" for="baseUprightCheckbox">
                             Use Base Upright
                         </label>
-                    </div>
+                    -->
                     <div id="threejsContainer" class="threejs-canvas mt-2"></div>
-                    <div>
-                      <canvas id="pitchRollCanvas" class="mt-2"></canvas>
-                    </div>
+                    <div><canvas id="pitchRollCanvas" class="mt-2"></canvas></div>
+                    
+
+
+        
                 </div>
             </div>
         </div>

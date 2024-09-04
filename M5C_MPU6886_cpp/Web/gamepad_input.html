@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ゲームパッド入力表示</title>
+</head>
+<body>
+    <h1>USBゲームパッドの入力値</h1>
+    <div id="gamepadInput" style="width: 100%; height: 300px; overflow-y: scroll; border: 1px solid #000;"></div>
+
+    <script>
+        let previousState = {
+            buttons: [],
+            axes: []
+        };
+
+        window.addEventListener("gamepadconnected", (event) => {
+            console.log("ゲームパッドが接続されました:", event.gamepad);
+            requestAnimationFrame(updateGamepadStatus);
+        });
+
+        function updateGamepadStatus() {
+            const gamepads = navigator.getGamepads();
+            const gamepad = gamepads[0];
+
+            if (gamepad) {
+                const inputValues = [];
+                gamepad.buttons.forEach((button, index) => {
+                    if (previousState.buttons[index] !== button.value) {
+                        inputValues.push(`Button ${index.toString(16)}: ${button.value.toString(16)}`);
+                        previousState.buttons[index] = button.value;
+                    }
+                });
+                gamepad.axes.forEach((axis, index) => {
+                    if (previousState.axes[index] !== axis) {
+                        inputValues.push(`Axis ${index.toString(16)}: ${axis.toFixed(2)}`);
+                        previousState.axes[index] = axis;
+                    }
+                });
+
+                if (inputValues.length > 0) {
+                    console.log(inputValues.join("\n"));
+                }
+            }
+
+            requestAnimationFrame(updateGamepadStatus);
+        }
+    </script>
+</body>
+</html>

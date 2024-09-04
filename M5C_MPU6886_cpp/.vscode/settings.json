@@ -1,3 +1,7 @@
 {
-    "cmake.sourceDirectory": "C:/googledrive/マイドライブ/unity/M5C_Serial_Unity/M5C_MPU6886_cpp/.pio/libdeps/m5stick-c/M5StickC"
+    "cmake.sourceDirectory": "C:/googledrive/マイドライブ/unity/M5C_Serial_Unity/M5C_MPU6886_cpp/.pio/libdeps/m5stick-c/M5StickC",
+    "files.associations": {
+        "cstdint": "cpp",
+        "string": "cpp"
+    }
 }

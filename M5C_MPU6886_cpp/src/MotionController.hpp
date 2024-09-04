@@ -14,8 +14,6 @@
   #include <M5StickC.h>
 #endif
 
-
-
 //#include "MotionController.h"
 #define USE_NIMBLE
 #ifdef USE_NIMBLE
@@ -37,17 +35,18 @@ const uint8_t P2_KEY_RIGHT_ARROW = 'l';
 const String MODE_SF_P1 = "SF_P1";
 const String MODE_SF_P2 = "SF_P2";
 
-boolean LEFT_DISPLAY = true;
+
 
 
 //Mode設定
-#define NUM_OF_MODE 5
+#define NUM_OF_MODE 6
 #define MODE_STREET_FIGHTER_DIST 0
-#define MODE_PK3 1
-#define MODE_MOTION_CONTROLLER 2  //MOTION INPUT
-#define MODE_MOTION_MASSAGE 3  //MOTION MESSAGE
-#define MODE_MOUSE 4
-#define MODE_MOUSE_KEYBOARD 4
+#define MODE_STREET_FIGHTER_FOOT 1
+#define MODE_PK3 2
+#define MODE_MOTION_CONTROLLER 3  //MOTION INPUT
+#define MODE_MOTION_MASSAGE 4  //MOTION MESSAGE
+#define MODE_MOUSE 5
+#define MODE_MOUSE_KEYBOARD 6
 #define MODE_STREET_FIGHTER_RANGE 5 //not used
 
 
@@ -65,6 +64,7 @@ boolean LEFT_DISPLAY = true;
 #define REGISTRATION_PITCH_EVENT 6
 #define REGISTRATION_ROLL_PITCH_EVENT 7
 #define xxxxx_EVENT 8
+
 
 
 
@@ -109,11 +109,32 @@ struct pk2{
   uint8_t msg_format; //0:deafult 1:Gamepad
 };
 
+
 struct basicInfo {
-    String binary_version;//v0.1...
-    String hw_version;    //v0.1...
-    String hw_type;       //BurstMotion,M5StickC,M5Atom,Adapter_RP2040
-    uint8_t initial_mode; //BLEHID_USBSerial, USBHID_BTSerial,BLEHID_BTSerial
+    String software_version;   // v0.1...
+    String hardware_type;      // BurstMotion, M5StickC, M5Atom, Adapter_RP2040
+    String hardware_version;   // v0.1...
+    String initial_communication_mode;   // BLEHID_USBSerial, USBHID_BTSerial, BLEHID_BTSerial
+    String motion_judge_way;   // Oyler, Quaternion
+    String controller_hand;    // left-handed, right-handed
+    bool serial_ON;            // 0, 1
+    String Name_USB_HID;       // burstmotion
+    String Name_BLE_HID;       // burstmotion
+    String Name_BLE_Serial;    // burstmotion
+};
+
+// グローバル変数として basicInfo を定義
+basicInfo info = {
+    .software_version = SOFTWARE_VERSION,
+    .hardware_type = HARDWARE_TYPE,
+    .hardware_version = HARDWARE_VERSION,
+    .initial_communication_mode = INITIAL_COMMUNICATION_MODE,
+    .motion_judge_way = MOTION_JUDGE_WAY,
+    .controller_hand = CONTROLLER_HAND,
+    .serial_ON = SERIAL_ON,
+    .Name_USB_HID = "burstmotion",
+    .Name_BLE_HID = "burstmotion",
+    .Name_BLE_Serial = "burstmotion"
 };
 
 
@@ -141,8 +162,7 @@ class MotionController{
 
     public:
         uint8_t event=0;
-        bool events_bool[4]; //events[0] = INPUT1_EVENT, events[1] = INPUT2_EVENT, events[2] = INPUT3_EVENT
-
+        bool events_bool[3]; 
         #if defined(ESP32C3) || defined(ESP32S3)
             MPU6050 mpu;
             //int16_t ax, ay, az;
@@ -188,7 +208,11 @@ class MotionController{
 
 
         //float mouse_speed = 10;
-        uint8_t button[3] = {0,36,26};
+        uint8_t button[3] = {0,36,26};//LEFT_DISPLAY-> (26,36,0)
+        boolean LEFT_DISPLAY = true; //0,26 button反
+        //uint8_t button[3] = {};
+
+
         //uint8_t button[3] = {0,26};s
         bool prev_button_state[3] = {false,false,false};
         uint8_t pin_LED = 10;
@@ -198,7 +222,7 @@ class MotionController{
         String current_game_mode = game_modes[0];
         uint8_t mode = 0;
         bool serial_ON=false;
-        bool ble_enable=false;
+        bool ble_enable=true;
 
         SensorData* sensorDataArray;
         int dataSize_;
@@ -265,6 +289,7 @@ class MotionController{
         }
 
 
+
         void begin() {
         #ifdef ILLUMITRACK_R
           #ifdef ESP32C3
@@ -309,6 +334,7 @@ class MotionController{
             }
         #else 
             M5.begin();
+            M5.Axp.ScreenBreath(8);//省電力化
 
             delay(500);
             M5.Imu.Init(sampleFreq);  //Init IMU.  
@@ -555,7 +581,7 @@ class MotionController{
 
 
         //For Street Fighter
-        void execSF_HIDInputs(char* inputs,float acc_threshold, AccelRingBuffer* acc_buffer){
+        void execSF_HIDInputs(char* inputs,float acc_threshold, AccelRingBuffer* acc_buffer, bool pre_acc_flag){
             //文字列終端までfor文を実行する
             int i = 0;
             bool acc_flag = false;
@@ -571,8 +597,9 @@ class MotionController{
             if(!bleCombo.isConnected()){
                 Serial.println("BLE is not connected.");
             }
+
             while(inputs[i]!='\0'){
-                if((acc_buffer->getMaxAbsAccel(5)) >= acc_threshold ) acc_flag = true;
+                if((acc_buffer->getMaxAbsAccel(5)) >= acc_threshold || pre_acc_flag) acc_flag = true;
                 
                 //過去入力ボタンのリリース
                 //(波動拳等のコマンド入力で初期入力の↓がリリースされている必要がある)
@@ -612,6 +639,7 @@ class MotionController{
 
         }
 
+
         void changeMCMode(boolean init){
             /*
             if(mc.mode==MODE_MOUSE){
@@ -632,6 +660,7 @@ class MotionController{
             String mode_str;
             switch(mode){
                 case MODE_STREET_FIGHTER_DIST: mode_str="STREET FIGHTER      "; break;
+                case MODE_STREET_FIGHTER_FOOT: mode_str="STREET FIGHTER FOOT     "; break;
                 case MODE_PK3: mode_str                ="PK3                 "; break;                
                 case MODE_MOTION_CONTROLLER: mode_str  ="MOTION CONTROLLER   "; break;
                 case MODE_MOTION_MASSAGE: mode_str     ="MOTION_MASSAGE      "; break;  
@@ -941,12 +970,39 @@ class MotionController{
 
 
         //========= basicInfo =============
-        //Webから受信したbasicInfoをbasic_info.binへ書き込む
-        void flushBasicInformation() {
+        //Webから受信したbasicInfo配列をbasic_info.binへ書き込む
+        //Format:Software Version,Hardware Type,Hardware Version,Initial Communication Mode,Motion Judge Way,Controller Hand,Serial ON,Name USB HID,Name BLE HID,Name BLE Serial
+        void flushBasicInfo(String infos[]) {
+            // Create or open the file for writing
+            File file = LittleFS.open("/basic_info.bin", "w");
+            if (!file) {
+                Serial.println("Failed to open basic_info.bin for writing");
+                return;
+            }
+            Serial.println("Succeed writing basic_info.bin");
+
+            // Write the basicInfo structure to the file
+            //basicInfo info;
+            info.software_version = infos[1].toInt();
+            info.hardware_type = infos[2].toInt();
+            info.hardware_version = infos[3].toInt();
+            info.initial_communication_mode = infos[4].toInt();
+            info.motion_judge_way = infos[5].toInt();
+            info.controller_hand = infos[6].toInt();
+            info.serial_ON = infos[7].toInt();
+            info.Name_USB_HID = infos[7];
+            info.Name_BLE_HID = infos[8];
+            info.Name_BLE_Serial = infos[9];
+
+            file.write((uint8_t*)&info, sizeof(info));
+
+            // Close the file
+            file.close();
+            Serial.println("basicInfo written to LittleFS successfully");
         }
 
-
-        void serialPrintBasicInformation() {
+        //basic_info.binからBasinInfoを読み込に、infoに格納する
+        void loadBasicInfo(){
             // Open the file for reading
             File file = LittleFS.open("/basic_info.bin", "r");
             if (!file) {
@@ -955,20 +1011,45 @@ class MotionController{
             }
 
             // Read the basicInfo structure from the file
-            basicInfo info;
+            //basicInfo info;
             file.read((uint8_t*)&info, sizeof(info));
 
             // Close the file
             file.close();
-
-            // Output the information to the serial
-            Serial.printf("Binary Version: %s\n", info.binary_version.c_str());
-            Serial.printf("Hardware Version: %s\n", info.hw_version.c_str());
-            Serial.printf("Hardware Type: %s\n", info.hw_type.c_str());
-            Serial.printf("Initial Mode: %u\n", info.initial_mode);
         }
 
-        
+        void serialPrintBasicInformation() {
+            // Print the basicInfo structure
+            Serial.println("Basic Information:");
+            Serial.printf("Software Version: %d\n", info.software_version);
+            Serial.printf("Hardware Type: %d\n", info.hardware_type);
+            Serial.printf("Hardware Version: %d\n", info.hardware_version);
+            Serial.printf("Initial Communication Mode: %d\n", info.initial_communication_mode);
+            Serial.printf("Motion Judge Way: %d\n", info.motion_judge_way);
+            Serial.printf("Controller Hand: %d\n", info.controller_hand);
+            Serial.printf("Serial ON: %d\n", info.serial_ON);
+            Serial.printf("Name USB HID: %s\n", info.Name_USB_HID);
+            Serial.printf("Name BLE HID: %s\n", info.Name_BLE_HID);
+            Serial.printf("Name BLE Serial: %s\n", info.Name_BLE_Serial);
+        }
+
+        void serialOutBasicInfo() {
+            //String csvHeader = "Software Version,Hardware Type,Hardware Version,Initial Communication Mode,Motion Judge Way,Controller Hand,Serial ON,Name USB HID,Name BLE HID,Name BLE Serial";
+            String csvHeader = "BasicInfo";
+            String csvData = info.software_version + "," + 
+                            info.hardware_type + "," + 
+                            info.hardware_version + "," + 
+                            info.initial_communication_mode + "," + 
+                            info.motion_judge_way + "," + 
+                            info.controller_hand + "," + 
+                            (info.serial_ON ? "1" : "0") + "," + 
+                            info.Name_USB_HID + "," + 
+                            info.Name_BLE_HID + "," + 
+                            info.Name_BLE_Serial;
+
+            // シリアルモニタに出力
+            Serial.println(csvHeader+","+csvData);
+        }        
 
         // LittleFSにpk3ベクトルを保存する関数
         bool savePk3VectorToLittleFS(const char* path, const std::vector<pk3>& data) {
@@ -1218,6 +1299,8 @@ class MotionController{
         
         file.close();
         Serial.println("Calibration data loaded from LittleFS");
+        Serial.printf("Calibration values: aOX=%f, aOY=%f, aOZ=%f, gOX=%f, gOY=%f, gOZ=%f\n", 
+                        aOX, aOY, aOZ, gOX, gOY, gOZ);
         return true;
     }
     
@@ -1312,7 +1395,9 @@ class MotionController{
     }
 
     float* m5c_getAhrsData(){
-      float* quatanion = MahonyAHRSupdateIMU((gx-gOX) * DEG_TO_RAD, (gy-gOY) * DEG_TO_RAD, (gz-gOZ) * DEG_TO_RAD, (ax-aOX), (ay-aOY), (az-aOZ),&rpy[1],&rpy[0],&rpy[2],sampleFreq);
+      //float* quatanion = MahonyAHRSupdateIMU((gx-gOX) * DEG_TO_RAD, (gy-gOY) * DEG_TO_RAD, (gz-gOZ) * DEG_TO_RAD, (ax-aOX), (ay-aOY), (az-aOZ),&rpy[1],&rpy[0],&rpy[2],sampleFreq);
+      float* quatanion = MahonyAHRSupdateIMU((gx) * DEG_TO_RAD, (gy) * DEG_TO_RAD, (gz) * DEG_TO_RAD, (ax), (ay), (az),&rpy[1],&rpy[0],&rpy[2],sampleFreq);
+
       /*
       float roll = 0;
       float pitch = 0;
@@ -1369,5 +1454,6 @@ class MotionController{
             }
         }
     }
-#endif    
+#endif
+
 };

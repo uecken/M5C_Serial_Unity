@@ -34,10 +34,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const rebootBtn = document.getElementById('rebootBtn');
     const resetBtn = document.getElementById('resetBtn');
     const qoffsetBtn = document.getElementById('qoffsetBtn');
-    const qinitializeBtn = document.getElementById('qinitializeBtn');
+    //const qinitializeBtn = document.getElementById('qinitializeBtn');
     const qinitializeHorizontalBtn = document.getElementById('qinitializeHorizontalBtn');
     const qinitializeUprightBtn = document.getElementById('qinitializeUprightBtn');
     const addpk2Btn = document.getElementById('addpk2Btn');
+    const pinfoBtn = document.getElementById('pinfoBtn');
 
     let savedPort = null; // 以前選択したポートを保存する変数
 
@@ -85,7 +86,7 @@ document.addEventListener('DOMContentLoaded', () => {
         rebootBtn.addEventListener('click', () => sendCommand('REBOOT'));
         resetBtn.addEventListener('click', () => sendCommand('RESET'));
         qoffsetBtn.addEventListener('click', () => sendCommand('QOFFSET'));
-        qinitializeBtn.addEventListener('click', () => sendCommand('QINIT'));
+        //qinitializeBtn.addEventListener('click', () => sendCommand('QINIT'));
         qinitializeHorizontalBtn.addEventListener('click', () => sendCommand('QINITH'));
         qinitializeUprightBtn.addEventListener('click', () => sendCommand('QINITU'));
         addpk2Btn.addEventListener('click', () => {
@@ -103,6 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log("Sending command:", command);
             sendCommand(command);
         });
+        pinfoBtn.addEventListener('click', () => sendCommand('PINFO,'));
 
         function sendCommand(command) {
             const serialInput = document.getElementById('serialInput');
@@ -111,6 +113,8 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log(serialInput.value);
             document.getElementById('sendBtn').click();
         }
+
+        sendCommand('PINFO,');
     }
 
     async function readLoop() {
@@ -198,6 +202,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 lastPitch = pitch;
                 lastRoll = roll;
             }
+        }else if (line.startsWith('BasicInfo')){
+        //String csvHeader = "BasicInfo,Software Version,Hardware Type,Hardware Version,Initial Communication Mode,Motion Judge Way,Controller Hand,Serial ON,Name USB HID,Name BLE HID,Name BLE Serial";
+        const parts = line.split(',');
+        if (parts.length >= 10) { // Ensure we have all expected fields
+            const basicInfo = {
+                softwareVersion: parts[1],
+                hardwareType: parts[2],
+                hardwareVersion: parts[3],
+                initialCommunicationMode: parts[4],
+                motionJudgeWay: parts[5],
+                controllerHand: parts[6],
+                serialOn: parts[7],
+                nameUsbHid: parts[8],
+                nameBleHid: parts[9],
+                nameBleSerial: parts[10]
+            };
+            displayBasicInfo(basicInfo);
+
+        }
+
+
+        
         } else if (line.startsWith('selected_pk')) {
             const parts = line.split(',');
             const roll = parseFloat(parts[1]);
@@ -381,7 +407,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let isCalibrated = false;
     const calibrationStatusElem = document.createElement('span');
     calibrationStatusElem.textContent = 'not GUI calibrated';
-    document.getElementById('initYawBtn').insertAdjacentElement('afterend', calibrationStatusElem);
+    //document.getElementById('initYawBtn').insertAdjacentElement('afterend', calibrationStatusElem);
 
 
     document.getElementById('sendBtn').addEventListener('click', async () => {
@@ -391,12 +417,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    /*
     document.getElementById('initYawBtn').addEventListener('click', () => {
         console.log("pushed initYawBtn");
         base_q.copy(quaternion);
         isCalibrated = true;
         calibrationStatusElem.textContent = '';
     });
+    */
 
     uploadSelectedFilesButton.addEventListener('click', uploadSelectedFiles);
 
@@ -494,8 +522,8 @@ document.addEventListener('DOMContentLoaded', () => {
     camera.position.z = -2;
     camera.lookAt(0, 0, 0);
 
-    const baseUprightCheckbox = document.getElementById('baseUprightCheckbox');
-
+    //const baseUprightCheckbox = document.getElementById('baseUprightCheckbox');
+    const baseUprightCheckbox = false;
     function animate() {
         requestAnimationFrame(animate);
         if (baseUprightCheckbox.checked) {
@@ -704,7 +732,29 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+
+            
+    function displayBasicInfo(basicInfo) {
+        const infoContainer = document.getElementById('basicInfoContainer');
+        infoContainer.innerHTML = `
+            <h3>Device Information</h3>
+            <table class="table table-striped">
+                <tr><td>Software Version:</td><td>${basicInfo.softwareVersion}</td></tr>
+                <tr><td>Hardware Type:</td><td>${basicInfo.hardwareType}</td></tr>
+                <tr><td>Hardware Version:</td><td>${basicInfo.hardwareVersion}</td></tr>
+                <tr><td>Initial Communication Mode:</td><td>${basicInfo.initialCommunicationMode}</td></tr>
+                <tr><td>Motion Judge Way:</td><td>${basicInfo.motionJudgeWay}</td></tr>
+                <tr><td>Controller Hand:</td><td>${basicInfo.controllerHand}</td></tr>
+                <tr><td>Serial ON:</td><td>${basicInfo.serialOn}</td></tr>
+                <tr><td>USB HID Name:</td><td>${basicInfo.nameUsbHid}</td></tr>
+                <tr><td>BLE HID Name:</td><td>${basicInfo.nameBleHid}</td></tr>
+                <tr><td>BLE Serial Name:</td><td>${basicInfo.nameBleSerial}</td></tr>
+            </table>
+        `;
+    }
+
+
 });
 
 
-    

@@ -66,6 +66,7 @@ class MPU6886 {
       };
 
       Gscale Gyscale = GFS_2000DPS;
+      //Gscale Gyscale = GFS_1000DPS;
       Ascale Acscale = AFS_8G;
     public:
       MPU6886();
