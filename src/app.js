@@ -7,6 +7,7 @@ import htm from 'htm';
 import { SerialClient } from './lib/SerialClient.js';
 import { BleClient }    from './lib/BleClient.js';
 import { IMUViewer }    from './lib/IMUViewer.js';
+import { PitchRollGrid } from './lib/PitchRollGrid.js';
 
 const html = htm.bind(h);
 
@@ -84,7 +85,18 @@ function App() {
   const logRef = useRef(null);
   const canvasRef = useRef(null);
   const viewerRef = useRef(null);
+  const gridCanvasRef = useRef(null);
+  const gridRef = useRef(null);
   const hidTimerRef = useRef(null);
+
+  // 3D 表示オプション (旧 UI 互換)
+  const [showWorldAxes, setShowWorldAxes] = useState(false);
+  const [showBodyAxes, setShowBodyAxes] = useState(false);
+  const [showGravity, setShowGravity] = useState(false);
+
+  // ルール姿勢から計算した登録参照点
+  const [ruleReferences, setRuleReferences] = useState([]);  // [{id, name, roll, pitch, yaw, qw, qx, qy, qz}]
+  const [closestRuleIdx, setClosestRuleIdx] = useState(-1);
 
   // 3D viewer 初期化
   useEffect(() => {
@@ -99,12 +111,102 @@ function App() {
     };
   }, [canvasRef.current]);
 
-  // sensor 受信時に 3D viewer 更新
+  // 2D グリッド初期化
   useEffect(() => {
-    if (sensor && viewerRef.current && sensor.qw !== undefined) {
+    if (!gridCanvasRef.current) return;
+    if (gridRef.current) return;
+    gridRef.current = new PitchRollGrid(gridCanvasRef.current);
+    gridRef.current.resize();
+    const onResize = () => gridRef.current?.resize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [gridCanvasRef.current]);
+
+  // 3D viewer の軸表示切替
+  useEffect(() => { viewerRef.current?.setShowWorldAxes(showWorldAxes); }, [showWorldAxes]);
+  useEffect(() => { viewerRef.current?.setShowBodyAxes(showBodyAxes); }, [showBodyAxes]);
+  useEffect(() => { viewerRef.current?.setShowGravity(showGravity); }, [showGravity]);
+
+  // sensor 受信時に 3D viewer + 2D グリッド + 最近傍ルール更新
+  useEffect(() => {
+    if (!sensor || !viewerRef.current) return;
+    if (sensor.qw !== undefined) {
       viewerRef.current.setQuaternion(sensor.qw, sensor.qx, sensor.qy, sensor.qz);
+      // 球面の現在位置 dot
+      viewerRef.current.setCurrentDot(sensor.qw, sensor.qx, sensor.qy, sensor.qz);
     }
-  }, [sensor]);
+    if (sensor.ax !== undefined) {
+      viewerRef.current.setGravityVector(sensor.ax, sensor.ay, sensor.az);
+    }
+    // 2D グリッド
+    if (gridRef.current && sensor.roll !== undefined) {
+      gridRef.current.setCurrent(sensor.roll, sensor.pitch);
+    }
+    // 最近傍ルール計算 (Quaternion angleTo)
+    if (ruleReferences.length > 0 && sensor.qw !== undefined) {
+      const findClosest = () => {
+        let minAngle = Infinity;
+        let idx = -1;
+        const cur = { w: sensor.qw, x: sensor.qx, y: sensor.qy, z: sensor.qz };
+        ruleReferences.forEach((r, i) => {
+          if (r.qw === undefined) return;
+          // 内積
+          let dot = cur.w*r.qw + cur.x*r.qx + cur.y*r.qy + cur.z*r.qz;
+          if (dot < 0) dot = -dot;
+          if (dot > 1) dot = 1;
+          const angle = 2 * Math.acos(dot);
+          if (angle < minAngle) { minAngle = angle; idx = i; }
+        });
+        return idx;
+      };
+      const idx = findClosest();
+      if (idx !== closestRuleIdx) setClosestRuleIdx(idx);
+      if (idx >= 0) {
+        const r = ruleReferences[idx];
+        viewerRef.current.setClosestDot(r.qw, r.qx, r.qy, r.qz);
+        gridRef.current?.setClosest(idx);
+      }
+    } else {
+      viewerRef.current.setClosestDot(null);
+      gridRef.current?.setClosest(-1);
+    }
+  }, [sensor, ruleReferences]);
+
+  // ruleList 更新時に reference 座標を更新
+  // 優先: FW rule.list 応答の posture (新 FW)、フォールバック: localStorage (姿勢キャプチャ時保存)
+  useEffect(() => {
+    const stored = JSON.parse(localStorage.getItem('burst_motion_rule_postures') || '{}');
+    const refs = ruleList.map((r) => {
+      // 1. FW 応答に posture が含まれていれば優先
+      if (r.posture && r.posture.euler) {
+        const local = stored[r.id];
+        return {
+          id: r.id, name: r.name,
+          roll: r.posture.euler[0], pitch: r.posture.euler[1], yaw: r.posture.euler[2],
+          qw: local?.quat?.[0], qx: local?.quat?.[1], qy: local?.quat?.[2], qz: local?.quat?.[3],
+        };
+      }
+      // 2. localStorage から
+      const p = stored[r.id];
+      if (!p) return null;
+      return { id: r.id, name: r.name,
+               roll: p.euler[0], pitch: p.euler[1], yaw: p.euler[2],
+               qw: p.quat?.[0], qx: p.quat?.[1], qy: p.quat?.[2], qz: p.quat?.[3] };
+    }).filter(Boolean);
+    setRuleReferences(refs);
+    if (gridRef.current) {
+      gridRef.current.setReferences(refs);
+    }
+    if (viewerRef.current) {
+      const quats = refs.filter(r => r.qw !== undefined).map(r => ({
+        w: r.qw, x: r.qx, y: r.qy, z: r.qz
+      }));
+      import('three').then((THREE) => {
+        const tquats = quats.map(q => new THREE.Quaternion(-q.x, q.z, q.y, q.w));
+        viewerRef.current?.setReferenceQuaternions(tquats);
+      });
+    }
+  }, [ruleList]);
 
   const addLog = useCallback((dir, text) => {
     setLog((prev) => {
@@ -383,13 +485,14 @@ function App() {
     if (hidTimerRef.current) clearInterval(hidTimerRef.current);
   }, []);
 
-  // 姿勢キャプチャ (現在の sensor から)
+  // 姿勢キャプチャ (現在の sensor から、quat も保存)
   const captureStartPosture = () => {
     if (!sensor) { alert('センサーストリーム ON にしてから姿勢を取得してください'); return; }
     const tol = parseInt(postureTol) || 15;
     setStartPosture({
       euler: [sensor.roll, sensor.pitch, sensor.yaw],
-      euler_tol: [tol, tol, tol * 6]  // yaw は許容大きめ
+      euler_tol: [tol, tol, tol * 6],
+      quat: [sensor.qw, sensor.qx, sensor.qy, sensor.qz],
     });
   };
   const captureEndPosture = () => {
@@ -397,7 +500,8 @@ function App() {
     const tol = parseInt(postureTol) || 15;
     setEndPosture({
       euler: [sensor.roll, sensor.pitch, sensor.yaw],
-      euler_tol: [tol, tol, tol * 6]
+      euler_tol: [tol, tol, tol * 6],
+      quat: [sensor.qw, sensor.qx, sensor.qy, sensor.qz],
     });
   };
   const clearStartPosture = () => setStartPosture(null);
@@ -416,21 +520,34 @@ function App() {
 
   // Rule
   const handleAddRule = () => {
+    const id = Date.now() & 0xffff;
     const r = {
-      id: Date.now() & 0xffff,
+      id,
       name: ruleName || `${ruleMode}_${ruleKey}`,
       ui_mode: ruleMode,
       key: ruleKey,
       cooldown_ms: 500,
     };
+    // 追加時の姿勢を localStorage に保存 (3D/2D 表示で使う、FW へは送らない)
+    if (startPosture && sensor) {
+      const stored = JSON.parse(localStorage.getItem('burst_motion_rule_postures') || '{}');
+      stored[id] = {
+        euler: startPosture.euler,
+        euler_tol: startPosture.euler_tol,
+        quat: [sensor.qw, sensor.qx, sensor.qy, sensor.qz],
+      };
+      localStorage.setItem('burst_motion_rule_postures', JSON.stringify(stored));
+    }
     if (ruleAccelEnabled && parseFloat(ruleAccelTh) > 0) {
       r.accel_abs_threshold = parseFloat(ruleAccelTh);
     }
     if (startPosture) {
       r.posture = { euler: startPosture.euler, euler_tol: startPosture.euler_tol };
+      if (startPosture.quat) r.posture.quat = startPosture.quat;
     }
     if (ruleMode === 'hold_start_end' && endPosture) {
       r.end_posture = { euler: endPosture.euler, euler_tol: endPosture.euler_tol };
+      if (endPosture.quat) r.end_posture.quat = endPosture.quat;
     }
     const mods = buildModifiers();
     if (mods > 0) r.modifiers = mods;
@@ -558,9 +675,26 @@ function App() {
       <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4">
         <div class="flex justify-between items-center mb-2">
           <h2 class="font-semibold">📊 センサー / 🎨 3D 姿勢</h2>
-          <button onClick=${() => viewerRef.current?.reset()} class="text-xs px-2 py-1 bg-slate-200 rounded">3D Reset</button>
+          <div class="flex gap-1">
+            <button onClick=${() => { viewerRef.current?.initBase(); }} class="text-xs px-2 py-1 bg-blue-200 hover:bg-blue-300 rounded">Init Yaw</button>
+            <button onClick=${() => { viewerRef.current?.resetBase(); }} class="text-xs px-2 py-1 bg-slate-200 rounded">Reset Base</button>
+          </div>
         </div>
-        <canvas ref=${canvasRef} style="width:100%; height:200px; display:block; border-radius:6px; background:#f1f5f9;"></canvas>
+        <div class="flex flex-wrap gap-2 mb-2 text-xs">
+          <label class="flex items-center gap-1 cursor-pointer">
+            <input type="checkbox" checked=${showWorldAxes} onChange=${(e) => setShowWorldAxes(e.target.checked)} />
+            <span>World 軸 (赤=X 緑=Y 青=Z)</span>
+          </label>
+          <label class="flex items-center gap-1 cursor-pointer">
+            <input type="checkbox" checked=${showBodyAxes} onChange=${(e) => setShowBodyAxes(e.target.checked)} />
+            <span>Body 軸</span>
+          </label>
+          <label class="flex items-center gap-1 cursor-pointer">
+            <input type="checkbox" checked=${showGravity} onChange=${(e) => setShowGravity(e.target.checked)} />
+            <span>重力ベクトル (水色)</span>
+          </label>
+        </div>
+        <canvas ref=${canvasRef} style="width:100%; height:240px; display:block; border-radius:6px; background:#000;"></canvas>
         ${sensor ? html`
           <div class="grid grid-cols-3 gap-2 text-xs font-mono mt-2">
             <div class="bg-sky-50 rounded p-2">
@@ -583,6 +717,23 @@ function App() {
             </div>
           </div>
         ` : html`<p class="text-xs text-slate-400 mt-2 text-center">${streamRate === 0 ? 'Stream OFF (3D は QW/Q* 受信で動作)' : '待機中…'}</p>`}
+      </div>
+
+      <!-- Roll/Pitch 2D グリッド -->
+      <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 lg:col-span-2">
+        <div class="flex justify-between items-center mb-2">
+          <h2 class="font-semibold">📐 Roll / Pitch 2D マップ</h2>
+          <span class="text-xs text-slate-500">
+            🔴 現在  🟠 登録ルール  🟢 最近傍
+            ${closestRuleIdx >= 0 && ruleReferences[closestRuleIdx] ?
+              html` (最近傍: <b>${ruleReferences[closestRuleIdx].name}</b>)` : null}
+          </span>
+        </div>
+        <canvas ref=${gridCanvasRef} style="width:100%; height:180px; display:block; border-radius:6px; background:#f1f5f9;"></canvas>
+        <p class="text-xs text-slate-500 mt-1">
+          現在の姿勢と登録ルール姿勢を 2D 平面に投影 (Roll: -180~180°、Pitch: -90~90°)。
+          ルール追加時に「📷 開始姿勢」キャプチャ後の姿勢が橙ドットで表示される。
+        </p>
       </div>
 
       <!-- HID テスト -->

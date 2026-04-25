@@ -1,101 +1,182 @@
-// Burst Motion - IMUViewer
-// Three.js でクォータニオンに合わせて 3D box を回転させる
+// Burst Motion - IMUViewer (Phase 4.1 拡張版)
+// 旧版 (findradio.jp) の機能を移植:
+// - 球体ワイヤーフレーム (基準スケール)
+// - M5StickC モデル (球と一緒に回転)
+// - World/Body 座標軸切替
+// - 重力ベクトル矢印
+// - 球面に登録ルール姿勢の点を表示 (橙)、最近傍 (緑)、現在 (赤)
 import * as THREE from 'three';
 
 export class IMUViewer {
   constructor(canvas, opts = {}) {
     this.canvas = canvas;
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xf1f5f9);
+    this.scene.background = new THREE.Color(0x000000);   // 旧版互換、黒背景
 
-    // カメラ
     const w = canvas.clientWidth || 320;
     const h = canvas.clientHeight || 240;
-    this.camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 100);
-    this.camera.position.set(0, 1.5, 3.5);
+    this.camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 100);
+    this.camera.position.z = -2.5;
     this.camera.lookAt(0, 0, 0);
 
-    // レンダラ
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setSize(w, h, false);
     this.renderer.setPixelRatio(window.devicePixelRatio || 1);
 
-    // ライト
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-    const dir = new THREE.DirectionalLight(0xffffff, 0.8);
-    dir.position.set(2, 4, 2);
-    this.scene.add(dir);
+    // ライト (mesh は MeshBasicMaterial なので無くても可、念のため)
+    this.scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
-    // 床グリッド
-    const grid = new THREE.GridHelper(4, 8, 0x94a3b8, 0xcbd5e1);
-    grid.position.y = -0.6;
-    this.scene.add(grid);
+    // ---- 球体ワイヤーフレーム ----
+    const sphereGeo = new THREE.SphereGeometry(1, 24, 24);
+    const sphereMat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true });
+    this.sphere = new THREE.Mesh(sphereGeo, sphereMat);
+    this.scene.add(this.sphere);
 
-    // 座標軸 (X=赤, Y=緑, Z=青) ワールド
-    this.scene.add(new THREE.AxesHelper(2));
+    // ---- World 軸 (固定) ----
+    this.worldAxes = new THREE.AxesHelper(1.8);
+    this.worldAxes.visible = false;
+    this.scene.add(this.worldAxes);
 
-    // M5StickC を模した直方体 (LCD 面 = +Y)
-    const m5Group = new THREE.Group();
-    // 本体
-    const bodyGeo = new THREE.BoxGeometry(1.2, 0.5, 2.4);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xff7a00, roughness: 0.4 });
-    const body = new THREE.Mesh(bodyGeo, bodyMat);
-    m5Group.add(body);
-    // LCD 面 (+Y、表面)
-    const lcdGeo = new THREE.PlaneGeometry(1.0, 1.6);
-    const lcdMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.2 });
-    const lcd = new THREE.Mesh(lcdGeo, lcdMat);
-    lcd.rotation.x = -Math.PI / 2;
-    lcd.position.y = 0.26;
-    m5Group.add(lcd);
-    // 矢印 (LCD 上方向 = +Z 方向 of body frame)
-    const arrowGeo = new THREE.ConeGeometry(0.15, 0.4, 16);
-    const arrowMat = new THREE.MeshStandardMaterial({ color: 0x10b981 });
-    const arrow = new THREE.Mesh(arrowGeo, arrowMat);
-    arrow.position.set(0, 0.26 + 0.001, 1.0);  // LCD 面の上端
-    arrow.rotation.x = Math.PI / 2;
-    arrow.rotation.z = Math.PI;
-    m5Group.add(arrow);
+    // ---- M5StickC モデル (球の子: 球と一緒に回転) ----
+    const stickGeo = new THREE.BoxGeometry(0.24, 0.12, 0.48);
+    const orange = new THREE.MeshBasicMaterial({ color: 0xffa500 });
+    const black  = new THREE.MeshBasicMaterial({ color: 0x000000 });
+    const white  = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    this.m5StickC = new THREE.Mesh(stickGeo, [orange, orange, black, orange, orange, white]);
+    // LCD 黒面
+    const lcdGeo = new THREE.PlaneGeometry(0.2, 0.05);
+    const lcd = new THREE.Mesh(lcdGeo, new THREE.MeshBasicMaterial({ color: 0x111111 }));
+    lcd.position.set(0, 0.061, 0.24);
+    this.m5StickC.add(lcd);
+    // LED マーク
+    const markGeo = new THREE.PlaneGeometry(0.04, 0.02);
+    const mark = new THREE.Mesh(markGeo, new THREE.MeshBasicMaterial({ color: 0x33ff33 }));
+    mark.position.set(0, -0.061, 0.24);
+    this.m5StickC.add(mark);
+    this.sphere.add(this.m5StickC);
 
-    // ボディ自体のローカル軸表示
-    const localAxes = new THREE.AxesHelper(1.5);
-    m5Group.add(localAxes);
+    // ---- Body 軸 (M5StickC の子: 一緒に回転) ----
+    this.bodyAxes = new THREE.AxesHelper(0.7);
+    this.bodyAxes.visible = false;
+    this.m5StickC.add(this.bodyAxes);
 
-    this.deviceGroup = m5Group;
-    this.scene.add(m5Group);
+    // ---- 重力ベクトル矢印 (水色シリンダー + 円錐先端) ----
+    this.gravityArrow = new THREE.Group();
+    const gShaftGeo = new THREE.CylinderGeometry(0.018, 0.018, 1, 8);
+    const gMat = new THREE.MeshBasicMaterial({ color: 0x00aaff });
+    this.gShaft = new THREE.Mesh(gShaftGeo, gMat);
+    this.gShaft.position.y = 0.5;
+    const gTipGeo = new THREE.ConeGeometry(0.05, 0.12, 12);
+    this.gTip = new THREE.Mesh(gTipGeo, gMat);
+    this.gTip.position.y = 1.06;
+    this.gravityArrow.add(this.gShaft);
+    this.gravityArrow.add(this.gTip);
+    this.gravityArrow.visible = false;
+    this.scene.add(this.gravityArrow);
+
+    // ---- 球面ドット (現在姿勢、登録、最近傍) ----
+    this.dots = {
+      current: this._makeDot(0xff0000, 0.06),   // 赤
+      closest: this._makeDot(0x00ff00, 0.07),   // 緑
+    };
+    this.dots.current.visible = false;
+    this.dots.closest.visible = false;
+    this.scene.add(this.dots.current);
+    this.scene.add(this.dots.closest);
+
+    this.referenceDots = [];   // 登録ルール用、橙
 
     // 状態
     this.targetQuat = new THREE.Quaternion();
-    this.smoothing = opts.smoothing ?? 0.25;  // 0..1, 1=即時、0=動かない
+    this.smoothing = opts.smoothing ?? 0.3;
+    this.qRef = new THREE.Quaternion();   // base 姿勢 (Init Yaw 用)
 
-    // resize 監視
+    // resize
     this._resizeObserver = new ResizeObserver(() => this._onResize());
     this._resizeObserver.observe(canvas);
-
-    // animation loop
     this._running = true;
     this._tick = this._tick.bind(this);
     requestAnimationFrame(this._tick);
   }
 
-  /**
-   * sensor.stream から得た quaternion を入力
-   * 注意: Mahony の出力は body frame で (qw, qx, qy, qz)
-   * Three.js の Quaternion は (x, y, z, w) の順
-   */
-  setQuaternion(qw, qx, qy, qz) {
-    this.targetQuat.set(qx, qy, qz, qw);
+  _makeDot(color, radius) {
+    const g = new THREE.SphereGeometry(radius, 16, 16);
+    const m = new THREE.MeshBasicMaterial({ color });
+    return new THREE.Mesh(g, m);
   }
 
-  /** Euler 直接指定 (deg) */
-  setEuler(roll_deg, pitch_deg, yaw_deg) {
-    const e = new THREE.Euler(
-      THREE.MathUtils.degToRad(roll_deg),
-      THREE.MathUtils.degToRad(pitch_deg),
-      THREE.MathUtils.degToRad(yaw_deg),
-      'XYZ',
-    );
-    this.targetQuat.setFromEuler(e);
+  /** Quaternion 設定 (M5StickC IMU 軸 → Three.js 軸の変換含む) */
+  setQuaternion(qw, qx, qy, qz) {
+    // 旧版互換: THREE.Quaternion(-qx, qz, qy, qw)
+    // 軸変換: M5C(X,Y,Z) → Three(-X, Z, Y)
+    this.targetQuat.set(-qx, qz, qy, qw);
+  }
+
+  /** 軸表示切替 */
+  setShowWorldAxes(v) { this.worldAxes.visible = v; }
+  setShowBodyAxes(v)  { this.bodyAxes.visible = v; }
+  setShowGravity(v)   { this.gravityArrow.visible = v; }
+
+  /** 重力ベクトル更新 (3D 矢印を重力方向に向ける)
+   * accel は m/s^2、ノルムで正規化して向きベクトルに */
+  setGravityVector(ax, ay, az) {
+    if (!this.gravityArrow.visible) return;
+    // 軸変換: M5C(ax,ay,az) → Three(-ax, az, ay)
+    const v = new THREE.Vector3(-ax, az, ay).normalize();
+    // gravityArrow は +Y 方向に伸びる前提 → v に向ける
+    const up = new THREE.Vector3(0, 1, 0);
+    const q = new THREE.Quaternion().setFromUnitVectors(up, v);
+    this.gravityArrow.quaternion.copy(q);
+  }
+
+  /** 登録ルール姿勢を球面に橙ドットで配置 */
+  setReferenceQuaternions(quats) {
+    // 既存ドット消去
+    for (const d of this.referenceDots) {
+      this.scene.remove(d);
+      d.geometry.dispose();
+    }
+    this.referenceDots = [];
+    for (const q of quats) {
+      const d = this._makeDot(0xff8c00, 0.05);   // 橙
+      d.position.copy(this._quatToSpherePoint(q));
+      this.scene.add(d);
+      this.referenceDots.push(d);
+    }
+  }
+
+  /** 現在姿勢のドット位置 (赤) */
+  setCurrentDot(qw, qx, qy, qz) {
+    this.dots.current.visible = true;
+    const q = new THREE.Quaternion(-qx, qz, qy, qw);
+    this.dots.current.position.copy(this._quatToSpherePoint(q));
+  }
+
+  /** 最近傍ドット位置 (緑) */
+  setClosestDot(qw, qx, qy, qz) {
+    if (qw === undefined || qw === null) {
+      this.dots.closest.visible = false;
+      return;
+    }
+    this.dots.closest.visible = true;
+    const q = new THREE.Quaternion(-qx, qz, qy, qw);
+    this.dots.closest.position.copy(this._quatToSpherePoint(q));
+  }
+
+  /** quaternion から球面上の点を計算 (z=1 単位ベクトルを quat で回転) */
+  _quatToSpherePoint(q) {
+    const dir = new THREE.Vector3(0, 0, 1);
+    dir.applyQuaternion(q).normalize();
+    return dir;
+  }
+
+  /** Init Yaw: 現在の姿勢を base にする */
+  initBase() {
+    this.qRef.copy(this.targetQuat).invert();
+  }
+  /** base リセット (恒等) */
+  resetBase() {
+    this.qRef.identity();
   }
 
   reset() {
@@ -104,8 +185,9 @@ export class IMUViewer {
 
   _tick() {
     if (!this._running) return;
-    // smoothing で targetQuat に補間
-    this.deviceGroup.quaternion.slerp(this.targetQuat, this.smoothing);
+    // base からの相対回転
+    const q = this.qRef.clone().multiply(this.targetQuat);
+    this.sphere.quaternion.slerp(q, this.smoothing);
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame(this._tick);
   }
