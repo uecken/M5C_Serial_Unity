@@ -60,6 +60,30 @@ export class PitchRollGrid {
     ctx.fillStyle = '#f1f5f9';
     ctx.fillRect(0, 0, W, H);
 
+    // ジンバルロック領域 (Pitch ≥ +65° / ≤ -65°) を薄赤で可視化
+    // ZYX intrinsic Euler は Pitch = asin で ±90° で縮退、±65° 以上は不安定
+    const yPitch65pos = this._pitchToY(65);
+    const yPitch90pos = this._pitchToY(90);
+    const yPitch65neg = this._pitchToY(-65);
+    const yPitch90neg = this._pitchToY(-90);
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.10)';
+    ctx.fillRect(0, yPitch90pos - 2, W, yPitch65pos - yPitch90pos + 2);
+    ctx.fillRect(0, yPitch65neg, W, yPitch90neg - yPitch65neg + 2);
+    // 境界線 (破線)
+    ctx.strokeStyle = 'rgba(220, 38, 38, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(0, yPitch65pos); ctx.lineTo(W, yPitch65pos);
+    ctx.moveTo(0, yPitch65neg); ctx.lineTo(W, yPitch65neg);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // 警告ラベル
+    ctx.fillStyle = '#dc2626';
+    ctx.font = 'bold 9px sans-serif';
+    ctx.fillText('⚠ Pitch ≥ +65° ジンバルロック領域 (Euler 判定不安定)', 30, yPitch90pos + 11);
+    ctx.fillText('⚠ Pitch ≤ -65° ジンバルロック領域 (Euler 判定不安定)', 30, yPitch90neg - 4);
+
     this._drawGrid();
 
     // 登録参照点 (橙)、発火中=緑フラッシュ、最近傍=緑

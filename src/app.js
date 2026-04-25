@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-073151';
-import { BleClient }    from './lib/BleClient.js?v=20260426-073151';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-073151';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-073151';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-073151';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-074153';
+import { BleClient }    from './lib/BleClient.js?v=20260426-074153';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-074153';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-074153';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-074153';
 
 const html = htm.bind(h);
 
@@ -714,6 +714,20 @@ function App() {
         '姿勢なしルールは Closest-only モードで lock 機構を抜けて誤発火しやすいため、推奨されません。\n' +
         '可能なら姿勢キャプチャしてからルール追加してください。\n\n' +
         'それでも姿勢なしで追加しますか?'
+      );
+      if (!ok) return;
+    }
+    // ジンバルロック領域 (|Pitch| > 65°) チェック — Euler 判定が不安定になる
+    if (startPosture && Math.abs(startPosture.euler[1]) > 65) {
+      const ok = confirm(
+        '⚠ ジンバルロック領域です\n\n' +
+        `Pitch = ${startPosture.euler[1].toFixed(1)}° は |Pitch| > 65° のジンバルロック領域に該当します。\n` +
+        'Mahony フィルタの Euler 出力は Pitch = asin で ±90° で縮退するため、\n' +
+        'Roll/Yaw が安定して取れず、ルール判定が不安定になります。\n\n' +
+        '推奨対応:\n' +
+        ' ・姿勢を Pitch < ±65° の範囲で取り直す\n' +
+        ` ・判定方法を「Quaternion 内積」に切替 (現在の判定: ${postureJudgeBy})\n\n` +
+        'このまま登録しますか?'
       );
       if (!ok) return;
     }
