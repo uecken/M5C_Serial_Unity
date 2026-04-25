@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-084324';
-import { BleClient }    from './lib/BleClient.js?v=20260426-084324';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-084324';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-084324';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-084324';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-084515';
+import { BleClient }    from './lib/BleClient.js?v=20260426-084515';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-084515';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-084515';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-084515';
 
 const html = htm.bind(h);
 
@@ -1298,7 +1298,18 @@ function App() {
           </div>
         ` : null}
         ${connected ? html`
-          <span class="chip bg-green-100 text-green-700 mr-2">${transport === 'usb' ? 'USB' : 'BLE'} 接続中</span>
+          <div class="flex items-center gap-1 flex-wrap">
+            <span class="chip bg-green-100 text-green-700">${transport === 'usb' ? 'USB' : 'BLE'} 接続中</span>
+            ${deviceInfo ? html`
+              <span class="chip bg-emerald-200 text-emerald-900 font-mono font-semibold"
+                    title="${deviceInfo.fw_build || ''}">
+                FW ${deviceInfo.fw}${deviceInfo.fw_phase ? ` Phase ${deviceInfo.fw_phase}` : ''}
+              </span>
+              ${deviceInfo.board ? html`
+                <span class="chip bg-slate-200 text-slate-700 font-mono">${deviceInfo.board}</span>
+              ` : null}
+            ` : html`<span class="chip bg-amber-100 text-amber-700">FW 取得中…</span>`}
+          </div>
           <button onClick=${handleDisconnect} class="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg">切断</button>
         ` : html`
           <button onClick=${handleConnect}
