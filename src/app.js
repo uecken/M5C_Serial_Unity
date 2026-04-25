@@ -98,6 +98,16 @@ function App() {
   const [ruleReferences, setRuleReferences] = useState([]);  // [{id, name, roll, pitch, yaw, qw, qx, qy, qz}]
   const [closestRuleIdx, setClosestRuleIdx] = useState(-1);
 
+  // Closest-only モード: FW 側で最近傍ルールだけ発火させる
+  const [closestOnlyMode, setClosestOnlyMode] = useState(false);
+
+  // 初回 device.info 取得時に FW の状態を反映
+  useEffect(() => {
+    if (deviceInfo && typeof deviceInfo.closest_only === 'boolean') {
+      setClosestOnlyMode(deviceInfo.closest_only);
+    }
+  }, [deviceInfo?.closest_only]);
+
   // 3D viewer 初期化
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -291,6 +301,9 @@ function App() {
       }
       if (d.cmd === 'profile.save' || d.cmd === 'profile.delete' || d.cmd === 'profile.load') {
         if (activeClient) activeClient.send({ cmd: 'profile.list' }).catch(() => {});
+      }
+      if (d.cmd === 'engine.closest_only' && typeof d.enabled === 'boolean') {
+        setClosestOnlyMode(d.enabled);
       }
     };
 
@@ -730,6 +743,24 @@ function App() {
           </span>
         </div>
         <canvas ref=${gridCanvasRef} style="width:100%; height:180px; display:block; border-radius:6px; background:#f1f5f9;"></canvas>
+        <div class="flex items-center justify-between mt-2 p-2 bg-emerald-50 rounded">
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked=${closestOnlyMode}
+              onChange=${(e) => {
+                const v = e.target.checked;
+                setClosestOnlyMode(v);
+                sendCmd({ cmd: 'engine.closest_only', enabled: v });
+              }}
+              disabled=${!connected} />
+            <b>Closest-only モード</b>
+            <span class="text-xs text-slate-500">
+              (姿勢条件マッチが複数あっても、最近傍 1 件だけ発火)
+            </span>
+          </label>
+          <span class="text-xs ${closestOnlyMode ? 'text-emerald-700 font-semibold' : 'text-slate-400'}">
+            ${closestOnlyMode ? 'ON: 旧 getClosestPK3 互換' : 'OFF: 全マッチ並列発火'}
+          </span>
+        </div>
         <p class="text-xs text-slate-500 mt-1">
           現在の姿勢と登録ルール姿勢を 2D 平面に投影 (Roll: -180~180°、Pitch: -90~90°)。
           ルール追加時に「📷 開始姿勢」キャプチャ後の姿勢が橙ドットで表示される。
