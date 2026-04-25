@@ -52,6 +52,11 @@ function App() {
   const [triggerFlash, setTriggerFlash] = useState(null);  // {id, phase, name, t}
   const [watchEnabled, setWatchEnabled] = useState(false);
 
+  // Profile 状態
+  const [profileList, setProfileList] = useState([]);
+  const [profileName, setProfileName] = useState('default');
+  const [activeProfile, setActiveProfile] = useState('');
+
   const logRef = useRef(null);
   const canvasRef = useRef(null);
   const viewerRef = useRef(null);
@@ -113,6 +118,11 @@ function App() {
     const onPong = (ev) => setDeviceInfo((prev) => ({ ...prev, ...ev.detail }));
 
     const onRuleList = (ev) => setRuleList(ev.detail.rules || []);
+    const onProfileList = (ev) => {
+      setProfileList(ev.detail.profiles || []);
+      if (ev.detail.active) setActiveProfile(ev.detail.active);
+    };
+    const onProfileActive = (ev) => setActiveProfile(ev.detail.name || '');
     const onTriggerHit = (ev) => {
       const d = ev.detail;
       setTriggerFlash({ id: d.id, name: d.rule_name, phase: d.phase, t: Date.now() });
@@ -120,10 +130,12 @@ function App() {
       setTimeout(() => setTriggerFlash((cur) => cur && cur.t === d.t ? null : cur), 1000);
     };
     const onAck = (ev) => {
-      // rule.add / rule.clear の ack を受けたら自動で rule.list 再取得
       const d = ev.detail;
       if (d.cmd === 'rule.add' || d.cmd === 'rule.clear' || d.cmd === 'rule.remove') {
         if (activeClient) activeClient.send({ cmd: 'rule.list' }).catch(() => {});
+      }
+      if (d.cmd === 'profile.save' || d.cmd === 'profile.delete' || d.cmd === 'profile.load') {
+        if (activeClient) activeClient.send({ cmd: 'profile.list' }).catch(() => {});
       }
     };
 
@@ -139,6 +151,8 @@ function App() {
       c.addEventListener('type:rule.list', onRuleList);
       c.addEventListener('type:trigger.hit', onTriggerHit);
       c.addEventListener('type:ack', onAck);
+      c.addEventListener('type:profile.list', onProfileList);
+      c.addEventListener('type:profile.active', onProfileActive);
     });
 
     return () => {
@@ -154,6 +168,8 @@ function App() {
         c.removeEventListener('type:rule.list', onRuleList);
         c.removeEventListener('type:trigger.hit', onTriggerHit);
         c.removeEventListener('type:ack', onAck);
+        c.removeEventListener('type:profile.list', onProfileList);
+        c.removeEventListener('type:profile.active', onProfileActive);
       });
     };
   }, [addLog]);
@@ -298,17 +314,33 @@ function App() {
     setWatchEnabled(next);
     sendCmd({ cmd: 'watch.set', enabled: next });
   };
-  // 接続成功時に自動で rule.list + watch を要求
+  // 接続成功時に自動で rule.list + profile.list + watch を要求
   useEffect(() => {
     if (connected && activeClient) {
       const t = setTimeout(() => {
         activeClient.send({ cmd: 'rule.list' }).catch(() => {});
+        activeClient.send({ cmd: 'profile.list' }).catch(() => {});
         activeClient.send({ cmd: 'watch.set', enabled: true }).catch(() => {});
         setWatchEnabled(true);
       }, 500);
       return () => clearTimeout(t);
     }
   }, [connected]);
+
+  // Profile 操作
+  const handleProfileSave = () => {
+    const name = profileName.trim();
+    if (!name) { alert('プロファイル名を入力してください'); return; }
+    sendCmd({ cmd: 'profile.save', name });
+  };
+  const handleProfileLoad = (name) => {
+    sendCmd({ cmd: 'profile.load', name });
+    setProfileName(name);
+  };
+  const handleProfileDelete = (name) => {
+    if (!confirm(`プロファイル '${name}' を削除します。OK?`)) return;
+    sendCmd({ cmd: 'profile.delete', name });
+  };
 
   const usbSupported = 'serial' in navigator;
   const bleSupported = 'bluetooth' in navigator;
@@ -537,6 +569,55 @@ function App() {
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- プロファイル管理 -->
+    <div class="mt-4 bg-white rounded-lg shadow-sm border border-slate-200 p-4">
+      <div class="flex justify-between items-center mb-3">
+        <h2 class="font-semibold">📁 プロファイル (LittleFS 永続化)</h2>
+        ${activeProfile ? html`<span class="chip bg-blue-100 text-blue-700">アクティブ: ${activeProfile}</span>` : null}
+      </div>
+      <p class="text-xs text-slate-500 mb-2">登録済みルールを名前付きで保存。次回起動時に自動ロード。</p>
+      <div class="flex items-center gap-2 mb-3 flex-wrap">
+        <label class="text-sm">名前:</label>
+        <input type="text" value=${profileName} onInput=${(e) => setProfileName(e.target.value)}
+          class="border rounded px-2 py-1 font-mono text-sm" placeholder="default" />
+        <button onClick=${handleProfileSave} disabled=${!connected}
+          class="px-3 py-1 text-sm bg-emerald-200 hover:bg-emerald-300 rounded disabled:opacity-40">
+          💾 現在のルールを保存
+        </button>
+      </div>
+      ${profileList.length > 0 ? html`
+        <div class="border rounded">
+          <table class="w-full text-xs">
+            <thead class="bg-slate-100">
+              <tr>
+                <th class="px-2 py-1 text-left">プロファイル名</th>
+                <th class="px-2 py-1 text-center">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${profileList.map((name) => html`
+                <tr class="${activeProfile === name ? 'bg-blue-50' : ''} border-t">
+                  <td class="px-2 py-1">
+                    ${activeProfile === name ? '⭐ ' : ''}${name}
+                  </td>
+                  <td class="px-2 py-1 text-center">
+                    <button onClick=${() => handleProfileLoad(name)} disabled=${!connected}
+                      class="px-2 py-0.5 text-xs bg-blue-200 hover:bg-blue-300 rounded disabled:opacity-40 mr-1">
+                      📥 Load
+                    </button>
+                    <button onClick=${() => handleProfileDelete(name)} disabled=${!connected}
+                      class="px-2 py-0.5 text-xs bg-red-200 hover:bg-red-300 rounded disabled:opacity-40">
+                      🗑 Delete
+                    </button>
+                  </td>
+                </tr>
+              `)}
+            </tbody>
+          </table>
+        </div>
+      ` : html`<p class="text-xs text-slate-400 mt-2">保存済みプロファイルなし</p>`}
     </div>
 
     <!-- ログペイン -->
