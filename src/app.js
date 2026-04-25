@@ -4,10 +4,10 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260425-223134';
-import { BleClient }    from './lib/BleClient.js?v=20260425-223134';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-223134';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-223134';
+import { SerialClient } from './lib/SerialClient.js?v=20260425-223642';
+import { BleClient }    from './lib/BleClient.js?v=20260425-223642';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-223642';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-223642';
 
 const html = htm.bind(h);
 
@@ -910,7 +910,7 @@ function App() {
         </div>
         <canvas ref=${canvasRef} style="width:100%; height:240px; display:block; border-radius:6px; background:#000;"></canvas>
         ${sensor ? html`
-          <div class="grid grid-cols-3 gap-2 text-xs font-mono mt-2">
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-mono mt-2">
             <div class="bg-sky-50 rounded p-2">
               <div class="text-slate-500">Accel [m/s²]</div>
               <div>X: ${sensor.ax?.toFixed(2)}</div>
@@ -928,6 +928,22 @@ function App() {
               <div>R: ${sensor.roll?.toFixed(1)}</div>
               <div>P: ${sensor.pitch?.toFixed(1)}</div>
               <div>Y: ${sensor.yaw?.toFixed(1)}</div>
+            </div>
+            <div class="bg-violet-50 rounded p-2">
+              <div class="text-slate-500">Btn (FW bitmap)</div>
+              ${sensor.btn === undefined ? html`
+                <div class="text-amber-600 text-[10px]">btn 未受信<br/>FW 古い?</div>
+              ` : html`
+                <div class="font-mono">0x${(sensor.btn).toString(16).padStart(2,'0')} = ${(sensor.btn).toString(2).padStart(Math.max(3, currentButtons.length), '0')}b</div>
+                <div class="flex gap-1 mt-1 flex-wrap">
+                  ${currentButtons.map((b) => {
+                    const pressed = ((sensor.btn >> (b.idx - 1)) & 1) === 1;
+                    return html`<span class="px-1 rounded ${pressed ? 'bg-violet-500 text-white font-bold' : 'bg-slate-200 text-slate-500'}">
+                      ${b.idx}=${pressed ? '🔴' : '⚪'}
+                    </span>`;
+                  })}
+                </div>
+              `}
             </div>
           </div>
         ` : html`<p class="text-xs text-slate-400 mt-2 text-center">${streamRate === 0 ? 'Stream OFF (3D は QW/Q* 受信で動作)' : '待機中…'}</p>`}
@@ -1105,27 +1121,57 @@ function App() {
 
         <!-- 登録済みルール一覧 -->
         ${ruleList.length > 0 ? html`
-          <div class="mb-3 max-h-32 overflow-y-auto border rounded">
+          <div class="mb-3 max-h-48 overflow-y-auto border rounded">
             <table class="w-full text-xs">
               <thead class="bg-slate-100 sticky top-0">
                 <tr>
                   <th class="px-2 py-1 text-left">ID</th>
                   <th class="px-2 py-1 text-left">Name</th>
-                  <th class="px-2 py-1 text-center">States</th>
+                  <th class="px-2 py-1 text-center">St.</th>
                   <th class="px-2 py-1 text-center">Loop</th>
+                  <th class="px-2 py-1 text-left">Btn</th>
+                  <th class="px-2 py-1 text-left">Posture</th>
+                  <th class="px-2 py-1 text-left">Accel</th>
                 </tr>
               </thead>
               <tbody>
-                ${ruleList.map((r) => html`
-                  <tr class="${triggerFlash && triggerFlash.id === r.id ? 'bg-yellow-100' : ''} border-t">
-                    <td class="px-2 py-1 font-mono">${r.id}</td>
-                    <td class="px-2 py-1">${r.name}</td>
-                    <td class="px-2 py-1 text-center">${r.states_count}</td>
-                    <td class="px-2 py-1 text-center">${r.loop ? '🔁' : '➡️'}</td>
-                  </tr>
-                `)}
+                ${ruleList.map((r) => {
+                  // ボタン条件評価 (sensor.btn と r.button.idx を比較)
+                  let btnEval = '';
+                  if (r.button) {
+                    const idx = r.button.idx;
+                    const wantPressed = r.button.state === 0;
+                    const wantReleased = r.button.state === 1;
+                    const isPressed = sensor && sensor.btn !== undefined ? ((sensor.btn >> (idx - 1)) & 1) === 1 : null;
+                    const ok = (r.button.state === 2) ||
+                              (wantPressed && isPressed === true) ||
+                              (wantReleased && isPressed === false);
+                    btnEval = `idx${idx}${r.button.state===0?'押':r.button.state===1?'離':'?'}${isPressed===null?'':ok?'✓':'✗'}`;
+                  }
+                  return html`
+                    <tr class="${triggerFlash && triggerFlash.id === r.id ? 'bg-yellow-100' : ''} border-t">
+                      <td class="px-2 py-1 font-mono">${r.id}</td>
+                      <td class="px-2 py-1">${r.name}</td>
+                      <td class="px-2 py-1 text-center">${r.states_count}${r.current_state >= 0 ? `🟢${r.current_state}` : ''}</td>
+                      <td class="px-2 py-1 text-center">${r.loop ? '🔁' : '➡️'}</td>
+                      <td class="px-2 py-1 font-mono ${r.button ? (btnEval.endsWith('✓') ? 'text-emerald-700' : btnEval.endsWith('✗') ? 'text-red-600' : '') : 'text-slate-300'}">
+                        ${btnEval || '-'}
+                      </td>
+                      <td class="px-2 py-1 font-mono ${r.posture ? '' : 'text-slate-300'}">
+                        ${r.posture ? `R${r.posture.euler[0]?.toFixed(0)}P${r.posture.euler[1]?.toFixed(0)}±${r.posture.euler_tol[0]?.toFixed(0)}` : '-'}
+                      </td>
+                      <td class="px-2 py-1 font-mono ${r.accel ? '' : 'text-slate-300'}">
+                        ${r.accel ? `≥${r.accel.abs_threshold?.toFixed(1)}g` : '-'}
+                      </td>
+                    </tr>
+                  `;
+                })}
               </tbody>
             </table>
+          </div>
+          <div class="text-xs text-slate-500 mb-2">
+            St.列の 🟢N は state[N] 滞在中。Btn列の ✓=条件成立、✗=不成立 (現在 sensor.btn で判定)。
+            <button onClick=${handleListRules} disabled=${!connected} class="ml-2 px-2 py-0.5 bg-slate-200 hover:bg-slate-300 rounded text-xs">🔄 rule.list</button>
           </div>
         ` : html`<p class="text-xs text-slate-400 mb-2">未登録 — 下のフォームから追加</p>`}
 
