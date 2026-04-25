@@ -2,7 +2,7 @@
   "schema": "burst_motion_sample_v1",
   "id": "street_fighter",
   "title": "🥊 ストリートファイター 風",
-  "description": "Btn3 (G26) を押しながら傾ける/振る → 攻撃。右傾け→p (パンチ)、左傾け→k (キック)、振り下ろし (>3g)→h (ハードアタック)。Btn3 を選ぶ理由: G0 は BOOT 兼用で長押し非推奨、G26 は独立専用ボタン (active_low + 内部 PU) で押下しっぱなしに最適。誤発火防止のためボタン押下中のみ動作。Closest-only ON 推奨: ボタン押下瞬間の姿勢で punch/kick が確定 (lock)、400ms 以内に振って 1.8g 超で発火。",
+  "description": "Btn3 (G26) を押しながら傾ける/振る → 攻撃。右傾け→p (パンチ)、左傾け→k (キック)。ボタン押下瞬間の姿勢で lock → 400ms 以内に 1.8g 超の振りで発火。発火後 300ms cooldown で連発防止。姿勢なしルール (旧 hard_attack) は廃止 — 姿勢ありを推奨。",
   "hardware_required": ["m5stickc", "m5stickc_plus", "m5stickc_2"],
   "engine": {
     "closest_only": true,
@@ -29,15 +29,6 @@
       "accel_abs_threshold": 1.8,
       "key": "k",
       "cooldown_ms": 400
-    },
-    {
-      "name": "hard_attack",
-      "ui_mode": "oneshot",
-      "button_idx": 3,
-      "button_state": 0,
-      "accel_abs_threshold": 3.0,
-      "key": "h",
-      "cooldown_ms": 800
     }
   ]
 }

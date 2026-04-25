@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260425-232348';
-import { BleClient }    from './lib/BleClient.js?v=20260425-232348';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-232348';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-232348';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260425-232348';
+import { SerialClient } from './lib/SerialClient.js?v=20260425-234010';
+import { BleClient }    from './lib/BleClient.js?v=20260425-234010';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-234010';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-234010';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260425-234010';
 
 const html = htm.bind(h);
 
@@ -672,6 +672,16 @@ function App() {
 
   // Rule
   const handleAddRule = () => {
+    // 姿勢ありルール推奨ガード (姿勢なしは Closest-only モードで lock を抜けて誤発火しやすい)
+    if (!startPosture) {
+      const ok = confirm(
+        '姿勢条件 (📷 開始姿勢) が未取得です。\n\n' +
+        '姿勢なしルールは Closest-only モードで lock 機構を抜けて誤発火しやすいため、推奨されません。\n' +
+        '可能なら姿勢キャプチャしてからルール追加してください。\n\n' +
+        'それでも姿勢なしで追加しますか?'
+      );
+      if (!ok) return;
+    }
     const id = Date.now() & 0xffff;
     const r = {
       id,
