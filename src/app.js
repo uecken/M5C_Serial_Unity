@@ -4,10 +4,10 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260425-230054';
-import { BleClient }    from './lib/BleClient.js?v=20260425-230054';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-230054';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-230054';
+import { SerialClient } from './lib/SerialClient.js?v=20260425-231108';
+import { BleClient }    from './lib/BleClient.js?v=20260425-231108';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-231108';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-231108';
 
 const html = htm.bind(h);
 
@@ -123,13 +123,46 @@ function App() {
 
   // Closest-only モード: FW 側で最近傍ルールだけ発火させる
   const [closestOnlyMode, setClosestOnlyMode] = useState(false);
+  // Button-edge lock パラメータ
+  const [lockWindowMs, setLockWindowMs] = useState(500);
+  const [lockCooldownMs, setLockCooldownMs] = useState(300);
+  // Lock 中のルール ID (FW から watch event で受信)
+  const [lockedRuleId, setLockedRuleId] = useState(-1);
+  const [lockedAt, setLockedAt] = useState(0);   // 受信タイムスタンプ (ms)
 
   // 初回 device.info 取得時に FW の状態を反映
   useEffect(() => {
     if (deviceInfo && typeof deviceInfo.closest_only === 'boolean') {
       setClosestOnlyMode(deviceInfo.closest_only);
     }
-  }, [deviceInfo?.closest_only]);
+    if (deviceInfo?.lock_window_ms) setLockWindowMs(deviceInfo.lock_window_ms);
+    if (deviceInfo?.lock_cooldown_ms !== undefined) setLockCooldownMs(deviceInfo.lock_cooldown_ms);
+  }, [deviceInfo?.closest_only, deviceInfo?.lock_window_ms, deviceInfo?.lock_cooldown_ms]);
+
+  // 'lock' イベント受信 (FW: lock.acquired / lock.fired / lock.expired)
+  useEffect(() => {
+    const onLock = (ev) => {
+      const d = ev.detail;
+      if (d.phase === 'lock.acquired') {
+        setLockedRuleId(d.id);
+        setLockedAt(Date.now());
+      } else {
+        // fired or expired → リセット
+        setLockedRuleId(-1);
+      }
+    };
+    [serialClient, bleClient].forEach((c) => c.addEventListener('type:lock', onLock));
+    return () => [serialClient, bleClient].forEach((c) => c.removeEventListener('type:lock', onLock));
+  }, []);
+
+  // Lock 設定を FW に送信
+  const handleSendLockParams = () => {
+    sendCmd({
+      cmd: 'engine.lock.set',
+      window_ms: parseInt(lockWindowMs, 10),
+      cooldown_ms: parseInt(lockCooldownMs, 10),
+    });
+  };
 
   // App version (deploy 時に生成される version.json から読み込み)
   // index.html の <meta name="app-version"> が deploy 時に置換されるのでそれをまず読む
@@ -1036,23 +1069,48 @@ function App() {
           </span>
         </div>
         <canvas ref=${gridCanvasRef} style="width:100%; height:180px; display:block; border-radius:6px; background:#f1f5f9;"></canvas>
-        <div class="flex items-center justify-between mt-2 p-2 bg-emerald-50 rounded">
-          <label class="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked=${closestOnlyMode}
-              onChange=${(e) => {
-                const v = e.target.checked;
-                setClosestOnlyMode(v);
-                sendCmd({ cmd: 'engine.closest_only', enabled: v });
-              }}
-              disabled=${!connected} />
-            <b>Closest-only モード</b>
-            <span class="text-xs text-slate-500">
-              (姿勢条件マッチが複数あっても、最近傍 1 件だけ発火)
+        <div class="mt-2 p-2 bg-emerald-50 rounded space-y-2">
+          <div class="flex items-center justify-between">
+            <label class="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked=${closestOnlyMode}
+                onChange=${(e) => {
+                  const v = e.target.checked;
+                  setClosestOnlyMode(v);
+                  sendCmd({ cmd: 'engine.closest_only', enabled: v });
+                }}
+                disabled=${!connected} />
+              <b>Closest-only モード</b>
+              <span class="text-xs text-slate-500">
+                (ボタン押下時の姿勢で最近傍ルール lock → window 内で他条件成立 → 発火)
+              </span>
+            </label>
+            <span class="text-xs ${closestOnlyMode ? 'text-emerald-700 font-semibold' : 'text-slate-400'}">
+              ${closestOnlyMode ? 'ON' : 'OFF: 全マッチ並列発火'}
             </span>
-          </label>
-          <span class="text-xs ${closestOnlyMode ? 'text-emerald-700 font-semibold' : 'text-slate-400'}">
-            ${closestOnlyMode ? 'ON: 旧 getClosestPK3 互換' : 'OFF: 全マッチ並列発火'}
-          </span>
+          </div>
+          ${closestOnlyMode ? html`
+            <div class="flex items-center gap-2 text-xs flex-wrap pt-1 border-t border-emerald-200">
+              <span class="font-semibold">⏱ Lock window:</span>
+              <input type="number" min="50" max="5000" step="50" value=${lockWindowMs}
+                onInput=${(e) => setLockWindowMs(e.target.value)}
+                class="border rounded px-1 py-0.5 w-16 font-mono" /> ms
+              <span class="text-slate-500">(ボタン押下後この時間内に他条件成立で発火)</span>
+              <span class="font-semibold ml-3">🚫 Cooldown:</span>
+              <input type="number" min="0" max="5000" step="50" value=${lockCooldownMs}
+                onInput=${(e) => setLockCooldownMs(e.target.value)}
+                class="border rounded px-1 py-0.5 w-16 font-mono" /> ms
+              <span class="text-slate-500">(発火後この時間は再 lock 不可)</span>
+              <button onClick=${handleSendLockParams} disabled=${!connected}
+                class="ml-auto px-2 py-0.5 bg-emerald-200 hover:bg-emerald-300 rounded font-semibold disabled:opacity-40">
+                📤 適用
+              </button>
+            </div>
+            ${lockedRuleId >= 0 ? html`
+              <div class="text-xs text-amber-700 font-semibold animate-pulse">
+                🔒 Locked: rule id=${lockedRuleId} (${Math.round((Date.now() - lockedAt))}ms)
+              </div>
+            ` : null}
+          ` : null}
         </div>
         <p class="text-xs text-slate-500 mt-1">
           現在の姿勢と登録ルール姿勢を 2D 平面に投影 (Roll: -180~180°、Pitch: -90~90°)。
