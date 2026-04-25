@@ -4,10 +4,10 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js';
-import { BleClient }    from './lib/BleClient.js';
-import { IMUViewer }    from './lib/IMUViewer.js';
-import { PitchRollGrid } from './lib/PitchRollGrid.js';
+import { SerialClient } from './lib/SerialClient.js?v=20260425-213454';
+import { BleClient }    from './lib/BleClient.js?v=20260425-213454';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-213454';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-213454';
 
 const html = htm.bind(h);
 
@@ -107,6 +107,29 @@ function App() {
       setClosestOnlyMode(deviceInfo.closest_only);
     }
   }, [deviceInfo?.closest_only]);
+
+  // App version (deploy 時に生成される version.json から読み込み)
+  // index.html の <meta name="app-version"> が deploy 時に置換されるのでそれをまず読む
+  // version.json は no-cache で fetch、デプロイ時に必ず更新
+  const [appVersion, setAppVersion] = useState(() => {
+    const meta = document.querySelector('meta[name="app-version"]');
+    const v = meta?.getAttribute('content') || '';
+    return v && !v.includes('__BUILD_VERSION__') ? v : '';
+  });
+  const [appDeployedAt, setAppDeployedAt] = useState('');
+  useEffect(() => {
+    fetch(`./version.json?nocache=${Date.now()}`, { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        if (!d) return;
+        if (d.version) setAppVersion(d.version);
+        if (d.deployed_at) {
+          // YYYY-MM-DD だけ表示
+          setAppDeployedAt(String(d.deployed_at).split('T')[0]);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // 3D viewer 初期化
   useEffect(() => {
@@ -1141,7 +1164,10 @@ function App() {
     </div>
 
     <footer class="mt-4 text-center text-xs text-slate-400">
-      Burst Motion — Phase 2.1 | USB:115200 / BLE NUS | JSON Lines | Auto-reconnect 対応
+      Burst Motion | USB:115200 / BLE NUS | JSON Lines | Auto-reconnect 対応
+      <span class="ml-2 px-2 py-0.5 bg-slate-100 rounded font-mono">
+        v${appVersion || 'dev'}${appDeployedAt ? ` (${appDeployedAt})` : ''}
+      </span>
     </footer>
   </div>
   `;
