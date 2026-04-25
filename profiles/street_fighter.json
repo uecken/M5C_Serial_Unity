@@ -1,8 +1,8 @@
 {
   "schema": "burst_motion_sample_v1",
   "id": "street_fighter",
-  "title": "🥊 ストリートファイター 風 (5 技セット)",
-  "description": "Btn3 (G26) を押しながら振る → 5 種類の格闘技コマンドを姿勢で使い分け。punch/kick (単発) と hadoken/shoryuken/tatsumaki (本格コマンド macro) を Roll/Pitch 2 軸で分散配置し、Closest-only + lock window で誤発火防止。",
+  "title": "🥊 ストリートファイター 風 (SF Zero on miniplay 用)",
+  "description": "M5StickC 基本姿勢 R+90/P0 (縦持ち)。Btn3 (G26) 押下で SF Zero (miniplay.com) のキー入力。BUTTON_1=z (LP), BUTTON_2=x (MP), BUTTON_3=a (LK), BUTTON_4=s (MK), L=q (HP), R=e (HK)。",
   "hardware_required": ["m5stickc", "m5stickc_plus", "m5stickc_2"],
   "engine": {
     "closest_only": true,
@@ -11,13 +11,22 @@
   },
   "rules": [
     {
+      "name": "midkick",
+      "ui_mode": "oneshot",
+      "button_idx": 3,
+      "button_state": 0,
+      "posture": { "euler": [90, 0, 0], "euler_tol": [25, 25, 180] },
+      "key": "s",
+      "cooldown_ms": 200
+    },
+    {
       "name": "punch",
       "ui_mode": "oneshot",
       "button_idx": 3,
       "button_state": 0,
-      "posture": { "euler": [45, 0, 0], "euler_tol": [15, 25, 180] },
+      "posture": { "euler": [120, 0, 0], "euler_tol": [25, 25, 180] },
       "accel_abs_threshold": 1.8,
-      "key": "p",
+      "key": "x",
       "cooldown_ms": 400
     },
     {
@@ -25,9 +34,9 @@
       "ui_mode": "oneshot",
       "button_idx": 3,
       "button_state": 0,
-      "posture": { "euler": [-45, 0, 0], "euler_tol": [15, 25, 180] },
+      "posture": { "euler": [60, 0, 0], "euler_tol": [25, 25, 180] },
       "accel_abs_threshold": 1.8,
-      "key": "k",
+      "key": "a",
       "cooldown_ms": 400
     },
     {
@@ -37,7 +46,7 @@
       "button_state": 0,
       "posture": { "euler": [-179, 0, 0], "euler_tol": [15, 25, 180] },
       "accel_abs_threshold": 2.0,
-      "keys": ["DOWN", "DOWN+RIGHT", "RIGHT", "RIGHT+a"],
+      "keys": ["DOWN", "DOWN+RIGHT", "RIGHT", "RIGHT+z"],
       "interval_ms": 50,
       "cooldown_ms": 600
     },
@@ -48,7 +57,7 @@
       "button_state": 0,
       "posture": { "euler": [0, 75, 0], "euler_tol": [180, 15, 180] },
       "accel_abs_threshold": 2.5,
-      "keys": ["RIGHT", "DOWN", "DOWN+RIGHT+a"],
+      "keys": ["RIGHT", "DOWN", "DOWN+RIGHT+z"],
       "interval_ms": 50,
       "cooldown_ms": 800
     },
@@ -59,7 +68,7 @@
       "button_state": 0,
       "posture": { "euler": [-45, -30, 0], "euler_tol": [15, 15, 180] },
       "accel_abs_threshold": 2.0,
-      "keys": ["DOWN", "DOWN+LEFT", "LEFT", "LEFT+X"],
+      "keys": ["DOWN", "DOWN+LEFT", "LEFT", "LEFT+a"],
       "interval_ms": 50,
       "cooldown_ms": 700
     }
