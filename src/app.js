@@ -48,6 +48,9 @@ function App() {
   const [ruleAccelTh, setRuleAccelTh] = useState(2.5);
   const [ruleKey, setRuleKey] = useState('a');
   const [ruleMode, setRuleMode] = useState('oneshot');
+  const [ruleList, setRuleList] = useState([]);   // FW から取得した rule 一覧
+  const [triggerFlash, setTriggerFlash] = useState(null);  // {id, phase, name, t}
+  const [watchEnabled, setWatchEnabled] = useState(false);
 
   const logRef = useRef(null);
   const canvasRef = useRef(null);
@@ -109,6 +112,21 @@ function App() {
     const onDevInfo = (ev) => setDeviceInfo(ev.detail);
     const onPong = (ev) => setDeviceInfo((prev) => ({ ...prev, ...ev.detail }));
 
+    const onRuleList = (ev) => setRuleList(ev.detail.rules || []);
+    const onTriggerHit = (ev) => {
+      const d = ev.detail;
+      setTriggerFlash({ id: d.id, name: d.rule_name, phase: d.phase, t: Date.now() });
+      // 1 秒後にフラッシュを消す
+      setTimeout(() => setTriggerFlash((cur) => cur && cur.t === d.t ? null : cur), 1000);
+    };
+    const onAck = (ev) => {
+      // rule.add / rule.clear の ack を受けたら自動で rule.list 再取得
+      const d = ev.detail;
+      if (d.cmd === 'rule.add' || d.cmd === 'rule.clear' || d.cmd === 'rule.remove') {
+        if (activeClient) activeClient.send({ cmd: 'rule.list' }).catch(() => {});
+      }
+    };
+
     [serialClient, bleClient].forEach((c) => {
       c.addEventListener('connected', onConnected);
       c.addEventListener('disconnected', onDisconnected);
@@ -118,6 +136,9 @@ function App() {
       c.addEventListener('type:device.info', onDevInfo);
       c.addEventListener('type:pong', onPong);
       c.addEventListener('type:boot', onPong);
+      c.addEventListener('type:rule.list', onRuleList);
+      c.addEventListener('type:trigger.hit', onTriggerHit);
+      c.addEventListener('type:ack', onAck);
     });
 
     return () => {
@@ -130,6 +151,9 @@ function App() {
         c.removeEventListener('type:device.info', onDevInfo);
         c.removeEventListener('type:pong', onPong);
         c.removeEventListener('type:boot', onPong);
+        c.removeEventListener('type:rule.list', onRuleList);
+        c.removeEventListener('type:trigger.hit', onTriggerHit);
+        c.removeEventListener('type:ack', onAck);
       });
     };
   }, [addLog]);
@@ -208,19 +232,22 @@ function App() {
     sendCmd({ cmd: 'calibrate.simple', duration_ms: 1000 });
   };
 
-  // HID Test (遅延付き、メモ帳などにフォーカス移す時間を確保)
+  // HID Test
+  // マウス系 (mouse_move / mouse_click) は即実行 (動きが見えてわかりやすい)
+  // キーボード系 (fire / text) は遅延付き (フォーカス先のアプリに切り替える時間)
   const hidTest = (action, extra = {}) => {
+    const isMouse = action === 'mouse_move' || action === 'mouse_click';
     // 既に走ってるカウントダウンがあればキャンセル
     if (hidTimerRef.current) {
       clearInterval(hidTimerRef.current);
       hidTimerRef.current = null;
     }
-    const delay = parseInt(hidDelayMs) || 0;
+    const delay = isMouse ? 0 : (parseInt(hidDelayMs) || 0);
     if (delay <= 0) {
       sendCmd({ cmd: 'test.hid', action, ...extra });
       return;
     }
-    // カウントダウン開始
+    // カウントダウン開始 (キーボード系のみ)
     setHidCountdown(delay);
     const startTime = Date.now();
     hidTimerRef.current = setInterval(() => {
@@ -262,7 +289,26 @@ function App() {
     });
   };
   const handleListRules  = () => sendCmd({ cmd: 'rule.list' });
-  const handleClearRules = () => sendCmd({ cmd: 'rule.clear' });
+  const handleClearRules = () => {
+    if (!confirm('登録済みルールをすべて削除します。OK?')) return;
+    sendCmd({ cmd: 'rule.clear' });
+  };
+  const handleToggleWatch = () => {
+    const next = !watchEnabled;
+    setWatchEnabled(next);
+    sendCmd({ cmd: 'watch.set', enabled: next });
+  };
+  // 接続成功時に自動で rule.list + watch を要求
+  useEffect(() => {
+    if (connected && activeClient) {
+      const t = setTimeout(() => {
+        activeClient.send({ cmd: 'rule.list' }).catch(() => {});
+        activeClient.send({ cmd: 'watch.set', enabled: true }).catch(() => {});
+        setWatchEnabled(true);
+      }, 500);
+      return () => clearTimeout(t);
+    }
+  }, [connected]);
 
   const usbSupported = 'serial' in navigator;
   const bleSupported = 'bluetooth' in navigator;
@@ -414,36 +460,81 @@ function App() {
             Type
           </button>
         </div>
-        <div class="flex gap-2 flex-wrap">
-          <button onClick=${() => hidTest('mouse_move', { dx: 50, dy: 0 })} disabled=${!connected || hidCountdown > 0} class="px-3 py-1 text-sm bg-slate-200 rounded disabled:opacity-40">→ Mouse 50,0</button>
-          <button onClick=${() => hidTest('mouse_move', { dx: -50, dy: 0 })} disabled=${!connected || hidCountdown > 0} class="px-3 py-1 text-sm bg-slate-200 rounded disabled:opacity-40">← Mouse -50,0</button>
-          <button onClick=${() => hidTest('mouse_click', { button: 'left' })} disabled=${!connected || hidCountdown > 0} class="px-3 py-1 text-sm bg-slate-200 rounded disabled:opacity-40">Click</button>
+        <div class="flex gap-2 flex-wrap items-center">
+          <span class="text-xs text-slate-500 mr-1">マウス (即実行):</span>
+          <button onClick=${() => hidTest('mouse_move', { dx: 50, dy: 0 })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">→ 50,0</button>
+          <button onClick=${() => hidTest('mouse_move', { dx: -50, dy: 0 })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">← -50,0</button>
+          <button onClick=${() => hidTest('mouse_move', { dx: 0, dy: 50 })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">↓ 0,50</button>
+          <button onClick=${() => hidTest('mouse_move', { dx: 0, dy: -50 })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">↑ 0,-50</button>
+          <button onClick=${() => hidTest('mouse_click', { button: 'left' })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">Click</button>
         </div>
       </div>
 
       <!-- 簡易ルール -->
       <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4">
-        <h2 class="font-semibold mb-3">🎯 簡易アクションルール (試作)</h2>
-        <p class="text-xs text-slate-500 mb-2">加速度トリガーで HID キー発火</p>
-        <div class="flex items-center gap-2 mb-2 flex-wrap">
-          <label class="text-sm">モード:</label>
-          <select value=${ruleMode} onChange=${(e) => setRuleMode(e.target.value)} class="border rounded px-2 py-1 text-sm">
-            <option value="oneshot">ONESHOT (1発)</option>
-            <option value="hold_start_only">HOLD_START_ONLY (押下保持)</option>
-          </select>
+        <div class="flex justify-between items-center mb-3">
+          <h2 class="font-semibold">🎯 アクションルール</h2>
+          <label class="flex items-center gap-1 cursor-pointer text-xs">
+            <input type="checkbox" checked=${watchEnabled} onChange=${handleToggleWatch} disabled=${!connected} />
+            発火通知 (watch)
+          </label>
         </div>
-        <div class="flex items-center gap-2 mb-2 flex-wrap">
-          <label class="text-sm">加速度しきい値 [g]:</label>
-          <input type="number" min="0.5" max="10" step="0.1" value=${ruleAccelTh}
-            onInput=${(e) => setRuleAccelTh(e.target.value)} class="border rounded px-2 py-1 w-20 font-mono text-sm" />
-          <label class="text-sm ml-2">キー:</label>
-          <input type="text" value=${ruleKey} onInput=${(e) => setRuleKey(e.target.value)}
-            maxlength="1" class="border rounded px-2 py-1 w-12 text-center font-mono" />
-        </div>
-        <div class="flex gap-2 flex-wrap">
-          <button onClick=${handleAddRule} disabled=${!connected} class="px-3 py-1 text-sm bg-emerald-200 hover:bg-emerald-300 rounded disabled:opacity-40">Add Rule</button>
-          <button onClick=${handleListRules} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 rounded disabled:opacity-40">List</button>
-          <button onClick=${handleClearRules} disabled=${!connected} class="px-3 py-1 text-sm bg-red-200 hover:bg-red-300 rounded disabled:opacity-40">Clear All</button>
+
+        <!-- 発火フラッシュ -->
+        ${triggerFlash ? html`
+          <div class="mb-3 p-2 bg-yellow-100 border border-yellow-400 rounded animate-pulse text-sm font-semibold text-yellow-800">
+            🔥 #${triggerFlash.id} ${triggerFlash.name} ${triggerFlash.phase}
+          </div>
+        ` : null}
+
+        <!-- 登録済みルール一覧 -->
+        ${ruleList.length > 0 ? html`
+          <div class="mb-3 max-h-32 overflow-y-auto border rounded">
+            <table class="w-full text-xs">
+              <thead class="bg-slate-100 sticky top-0">
+                <tr>
+                  <th class="px-2 py-1 text-left">ID</th>
+                  <th class="px-2 py-1 text-left">Name</th>
+                  <th class="px-2 py-1 text-center">States</th>
+                  <th class="px-2 py-1 text-center">Loop</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${ruleList.map((r) => html`
+                  <tr class="${triggerFlash && triggerFlash.id === r.id ? 'bg-yellow-100' : ''} border-t">
+                    <td class="px-2 py-1 font-mono">${r.id}</td>
+                    <td class="px-2 py-1">${r.name}</td>
+                    <td class="px-2 py-1 text-center">${r.states_count}</td>
+                    <td class="px-2 py-1 text-center">${r.loop ? '🔁' : '➡️'}</td>
+                  </tr>
+                `)}
+              </tbody>
+            </table>
+          </div>
+        ` : html`<p class="text-xs text-slate-400 mb-2">未登録 — 下のフォームから追加</p>`}
+
+        <!-- 追加フォーム -->
+        <div class="border-t pt-2 mt-2">
+          <div class="flex items-center gap-2 mb-2 flex-wrap">
+            <label class="text-sm">モード:</label>
+            <select value=${ruleMode} onChange=${(e) => setRuleMode(e.target.value)} class="border rounded px-2 py-1 text-sm">
+              <option value="oneshot">ONESHOT</option>
+              <option value="hold_start_only">HOLD_START_ONLY</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-2 mb-2 flex-wrap">
+            <label class="text-sm">加速度 ≥</label>
+            <input type="number" min="0.5" max="10" step="0.1" value=${ruleAccelTh}
+              onInput=${(e) => setRuleAccelTh(e.target.value)} class="border rounded px-2 py-1 w-16 font-mono text-sm" />
+            <span class="text-sm">g  →  キー:</span>
+            <input type="text" value=${ruleKey} onInput=${(e) => setRuleKey(e.target.value)}
+              maxlength="1" class="border rounded px-2 py-1 w-12 text-center font-mono" />
+          </div>
+          <div class="flex gap-2 flex-wrap">
+            <button onClick=${handleAddRule} disabled=${!connected} class="px-3 py-1 text-sm bg-emerald-200 hover:bg-emerald-300 rounded disabled:opacity-40">+ Add</button>
+            <button onClick=${handleListRules} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 rounded disabled:opacity-40">Refresh</button>
+            <button onClick=${handleClearRules} disabled=${!connected || ruleList.length === 0} class="px-3 py-1 text-sm bg-red-200 hover:bg-red-300 rounded disabled:opacity-40">Clear All</button>
+          </div>
         </div>
       </div>
     </div>
