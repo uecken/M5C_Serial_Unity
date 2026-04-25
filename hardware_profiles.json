@@ -8,9 +8,11 @@
       "imu": "MPU6886",
       "fw_env": "m5stick-c-v2",
       "buttons": [
-        { "idx": 1, "name": "BtnA", "gpio": 37, "location": "LCD 下 / M5 ロゴボタン", "active_low": true, "default_label": "M5" },
-        { "idx": 2, "name": "BtnB", "gpio": 39, "location": "右側面のボタン",          "active_low": true, "default_label": "Right" }
-      ]
+        { "idx": 1, "name": "Btn1 (G0)",  "gpio": 0,  "active_low": true,  "pull_mode": 1, "location": "GPIO 0  (BOOT 兼用、SW で GND 落とし)", "default_label": "M5" },
+        { "idx": 2, "name": "Btn2 (G36)", "gpio": 36, "active_low": false, "pull_mode": 0, "location": "GPIO 36 (input only、3.3V 入力で押下)", "default_label": "B" },
+        { "idx": 3, "name": "Btn3 (G26)", "gpio": 26, "active_low": false, "pull_mode": 1, "location": "GPIO 26 (3.3V ショートで押下、半 PD)", "default_label": "C" }
+      ],
+      "note": "レガシー motion_controller 互換 (G0/G36/G26)。FW デフォルト + NVS で永続化。Web UI から hw.buttons.set で変更可能。"
     },
     "m5stickc_plus": {
       "title": "M5StickC Plus",
@@ -18,10 +20,11 @@
       "imu": "MPU6886",
       "fw_env": "m5stickc-plus-v2",
       "buttons": [
-        { "idx": 1, "name": "BtnA", "gpio": 37, "location": "LCD 下 / M5 ロゴボタン", "active_low": true, "default_label": "M5" },
-        { "idx": 2, "name": "BtnB", "gpio": 39, "location": "右側面のボタン",          "active_low": true, "default_label": "Right" },
-        { "idx": 3, "name": "BtnC", "gpio": 35, "location": "上面のボタン",            "active_low": true, "default_label": "Top",   "note": "Plus 限定、IR LED と兼用" }
-      ]
+        { "idx": 1, "name": "Btn1 (G0)",  "gpio": 0,  "active_low": true,  "pull_mode": 1, "location": "GPIO 0  (BOOT 兼用)", "default_label": "M5" },
+        { "idx": 2, "name": "Btn2 (G36)", "gpio": 36, "active_low": false, "pull_mode": 0, "location": "GPIO 36 (input only)", "default_label": "B" },
+        { "idx": 3, "name": "Btn3 (G26)", "gpio": 26, "active_low": false, "pull_mode": 1, "location": "GPIO 26 (3.3V ショート)", "default_label": "C" }
+      ],
+      "note": "M5StickC レガシー互換。Plus 上面の GPIO 35 ボタンを使う場合は hw.buttons.set で変更。"
     },
     "m5stickc_2": {
       "title": "M5StickC Plus2",
@@ -29,9 +32,9 @@
       "imu": "MPU6886",
       "fw_env": "m5stickc-plus2-v2",
       "buttons": [
-        { "idx": 1, "name": "BtnA", "gpio": 37, "location": "LCD 下 / M5 ロゴボタン", "active_low": true, "default_label": "M5" },
-        { "idx": 2, "name": "BtnB", "gpio": 39, "location": "右側面のボタン",          "active_low": true, "default_label": "Right" },
-        { "idx": 3, "name": "BtnC", "gpio": 35, "location": "上面のボタン",            "active_low": true, "default_label": "Top" }
+        { "idx": 1, "name": "Btn1 (G0)",  "gpio": 0,  "active_low": true,  "pull_mode": 1, "location": "GPIO 0  (BOOT 兼用)", "default_label": "M5" },
+        { "idx": 2, "name": "Btn2 (G36)", "gpio": 36, "active_low": false, "pull_mode": 0, "location": "GPIO 36 (input only)", "default_label": "B" },
+        { "idx": 3, "name": "Btn3 (G26)", "gpio": 26, "active_low": false, "pull_mode": 1, "location": "GPIO 26 (3.3V ショート)", "default_label": "C" }
       ]
     },
     "m5atom_s3": {

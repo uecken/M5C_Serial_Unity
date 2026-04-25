@@ -4,10 +4,10 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260425-221451';
-import { BleClient }    from './lib/BleClient.js?v=20260425-221451';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-221451';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-221451';
+import { SerialClient } from './lib/SerialClient.js?v=20260425-222851';
+import { BleClient }    from './lib/BleClient.js?v=20260425-222851';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-222851';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-222851';
 
 const html = htm.bind(h);
 
@@ -700,6 +700,67 @@ function App() {
   // 現在 Hardware の buttons 配列 (空配列なら定義未取得 or 該当機種なし)
   const currentButtons = hardwareDefs[selectedHardware]?.buttons || [];
 
+  // FW 側の現在のボタン GPIO 構成 (hw.buttons.get の応答)
+  const [fwButtons, setFwButtons] = useState(null);  // null = 未取得、配列 = FW の現在値
+  // 「FW に適用」ボタンの結果メッセージ
+  const [fwButtonsStatus, setFwButtonsStatus] = useState('');
+
+  // hw.buttons 受信ハンドラ (FW から GPIO 構成取得)
+  useEffect(() => {
+    const onHwButtons = (ev) => setFwButtons(ev.detail.buttons || []);
+    [serialClient, bleClient].forEach((c) => {
+      c.addEventListener('type:hw.buttons', onHwButtons);
+    });
+    return () => {
+      [serialClient, bleClient].forEach((c) => {
+        c.removeEventListener('type:hw.buttons', onHwButtons);
+      });
+    };
+  }, []);
+
+  // 接続成功時に hw.buttons.get を投げて FW 現在値を取得
+  useEffect(() => {
+    if (connected && activeClient) {
+      const t = setTimeout(() => {
+        activeClient.send({ cmd: 'hw.buttons.get' }).catch(() => {});
+      }, 800);
+      return () => clearTimeout(t);
+    }
+  }, [connected]);
+
+  // 現 Hardware 定義を FW に適用
+  const handleApplyButtonsToFw = async () => {
+    if (!activeClient || !connected) return;
+    if (currentButtons.length === 0) return;
+    const buttons = currentButtons.map((b) => ({
+      gpio: b.gpio,
+      active_low: b.active_low ?? true,
+      pull_mode: b.pull_mode ?? 1,
+    }));
+    setFwButtonsStatus('FW へ送信中…');
+    try {
+      await activeClient.send({ cmd: 'hw.buttons.set', buttons });
+      // 直後に hw.buttons.get で確認
+      await new Promise((r) => setTimeout(r, 200));
+      await activeClient.send({ cmd: 'hw.buttons.get' });
+      setFwButtonsStatus(`✅ ${buttons.length} ボタンを FW に適用 (NVS 保存済み)`);
+    } catch (e) {
+      setFwButtonsStatus(`❌ 失敗: ${e.message || e}`);
+    }
+    setTimeout(() => setFwButtonsStatus(''), 5000);
+  };
+
+  // FW 現在構成と Web 側 currentButtons の GPIO 一致判定
+  const buttonsMatchFw = (() => {
+    if (!fwButtons || currentButtons.length === 0) return null;
+    if (fwButtons.length !== currentButtons.length) return false;
+    return fwButtons.every((b, i) =>
+      b.gpio === currentButtons[i].gpio &&
+      !!b.active_low === !!currentButtons[i].active_low &&
+      (b.pull_mode | 0) === (currentButtons[i].pull_mode | 0)
+    );
+  })();
+
   // サンプル → ルール送信 → profile.save
   const handleSampleLoad = async (sample) => {
     if (!activeClient || !connected) {
@@ -968,27 +1029,69 @@ function App() {
 
         <!-- Hardware 選択 (ボタン定義用) -->
         ${Object.keys(hardwareDefs).length > 0 ? html`
-          <div class="flex items-center gap-2 mb-3 p-2 bg-slate-100 rounded text-xs">
-            <span class="font-semibold">⚙ Hardware:</span>
-            <select value=${selectedHardware}
-              onChange=${(e) => setSelectedHardware(e.target.value)}
-              class="border rounded px-2 py-0.5 text-xs">
-              ${Object.entries(hardwareDefs).map(([id, def]) => html`
-                <option value=${id}>${def.title} (${def.buttons?.length || 0} btn)</option>
-              `)}
-            </select>
-            ${currentButtons.length > 0 ? html`
-              <span class="text-slate-600">
-                利用可能ボタン:
-                ${currentButtons.map((b, i) => html`
-                  ${i > 0 ? ', ' : ''}<b>${b.name}</b> (idx=${b.idx}, GPIO ${b.gpio})
+          <div class="mb-3 p-2 bg-slate-100 rounded text-xs">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="font-semibold">⚙ Hardware:</span>
+              <select value=${selectedHardware}
+                onChange=${(e) => setSelectedHardware(e.target.value)}
+                class="border rounded px-2 py-0.5 text-xs">
+                ${Object.entries(hardwareDefs).map(([id, def]) => html`
+                  <option value=${id}>${def.title} (${def.buttons?.length || 0} btn)</option>
                 `)}
-              </span>
-            ` : null}
-            ${deviceInfo?.board && deviceInfo.board === selectedHardware ? html`
-              <span class="ml-auto text-emerald-700 font-semibold">✓ 接続中デバイスと一致</span>
-            ` : deviceInfo?.board ? html`
-              <span class="ml-auto text-amber-600">⚠ 接続中: ${deviceInfo.board}</span>
+              </select>
+              ${deviceInfo?.board && deviceInfo.board === selectedHardware ? html`
+                <span class="ml-auto text-emerald-700 font-semibold">✓ 接続中デバイスと一致</span>
+              ` : deviceInfo?.board ? html`
+                <span class="ml-auto text-amber-600">⚠ 接続中 board: ${deviceInfo.board}</span>
+              ` : null}
+            </div>
+            ${currentButtons.length > 0 ? html`
+              <table class="mt-2 w-full text-xs">
+                <thead class="text-slate-500">
+                  <tr>
+                    <th class="text-left px-1">idx</th>
+                    <th class="text-left px-1">名前</th>
+                    <th class="text-left px-1">GPIO</th>
+                    <th class="text-left px-1">論理</th>
+                    <th class="text-left px-1">PU</th>
+                    <th class="text-left px-1">場所</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${currentButtons.map((b) => html`
+                    <tr class="border-t border-slate-200">
+                      <td class="px-1 font-mono">${b.idx}</td>
+                      <td class="px-1">${b.name}</td>
+                      <td class="px-1 font-mono">G${b.gpio}</td>
+                      <td class="px-1">${b.active_low ? 'active_low' : 'active_high'}</td>
+                      <td class="px-1">${b.pull_mode === 1 ? 'PU' : b.pull_mode === 2 ? 'PD' : '-'}</td>
+                      <td class="px-1 text-slate-500">${b.location || ''}</td>
+                    </tr>
+                  `)}
+                </tbody>
+              </table>
+              <div class="mt-2 flex items-center gap-2 flex-wrap">
+                <button onClick=${handleApplyButtonsToFw} disabled=${!connected}
+                  class="px-2 py-0.5 bg-emerald-200 hover:bg-emerald-300 rounded disabled:opacity-40 text-xs font-semibold">
+                  📤 FW に適用 (hw.buttons.set + NVS 保存)
+                </button>
+                ${buttonsMatchFw === true ? html`
+                  <span class="text-emerald-700 font-semibold">✓ FW 構成と一致</span>
+                ` : buttonsMatchFw === false ? html`
+                  <span class="text-amber-600">⚠ FW 構成と異なる (適用が必要)</span>
+                ` : html`
+                  <span class="text-slate-400">FW 構成 未取得</span>`}
+                ${fwButtonsStatus ? html`
+                  <span class="text-emerald-700">${fwButtonsStatus}</span>
+                ` : null}
+              </div>
+              ${fwButtons ? html`
+                <div class="mt-1 text-slate-500">
+                  FW 現在: ${fwButtons.map((b, i) => html`
+                    ${i > 0 ? ' / ' : ''}idx${b.idx}=G${b.gpio}(${b.active_low ? 'L' : 'H'},${b.pull_mode === 1 ? 'PU' : b.pull_mode === 2 ? 'PD' : '-'})
+                  `)}
+                </div>
+              ` : null}
             ` : null}
           </div>
         ` : null}
