@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-075610';
-import { BleClient }    from './lib/BleClient.js?v=20260426-075610';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-075610';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-075610';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-075610';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-080017';
+import { BleClient }    from './lib/BleClient.js?v=20260426-080017';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-080017';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-080017';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-080017';
 
 const html = htm.bind(h);
 
@@ -1082,6 +1082,28 @@ function App() {
           if (coolMs !== undefined) { payload.cooldown_ms = coolMs; setLockCooldownMs(coolMs); }
           await activeClient.send(payload);
           await new Promise((res) => setTimeout(res, 30));
+        }
+      }
+
+      // FW Phase チェック: 同時押し macro を含むサンプルは Phase 5.14+ FW 必須
+      const fwPhase = deviceInfo?.fw_phase || '';
+      const fwPhaseNum = parseFloat(fwPhase) || 0;
+      const hasComboMacro = data.rules.some((r) =>
+        Array.isArray(r.keys) && r.keys.some((s) => typeof s === 'string' && s.includes('+'))
+      );
+      if (hasComboMacro && fwPhaseNum < 5.14) {
+        const ok = confirm(
+          `⚠ FW Phase ${fwPhase || '不明'} は同時押し macro 未対応です\n\n` +
+          `このサンプルには同時押しコマンド (DOWN+RIGHT 等) が含まれていますが、\n` +
+          `FW Phase 5.14 未満では正しく解釈できず、"!" 文字が入力されてしまう問題があります。\n\n` +
+          `FW を Phase 5.14+ にフラッシュしてから再度適用してください。\n\n` +
+          `そのまま適用しますか? (誤動作する可能性が高いです)`
+        );
+        if (!ok) {
+          setSampleLoading(null);
+          setSampleStatus('❌ キャンセル: FW Phase 不足');
+          setTimeout(() => setSampleStatus(''), 5000);
+          return;
         }
       }
 
