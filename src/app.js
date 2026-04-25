@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260425-235252';
-import { BleClient }    from './lib/BleClient.js?v=20260425-235252';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-235252';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-235252';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260425-235252';
+import { SerialClient } from './lib/SerialClient.js?v=20260425-235900';
+import { BleClient }    from './lib/BleClient.js?v=20260425-235900';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-235900';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-235900';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260425-235900';
 
 const html = htm.bind(h);
 
@@ -67,6 +67,8 @@ function App() {
   const [startPosture, setStartPosture] = useState(null);   // {euler:[r,p,y], tol:[r,p,y]} | null
   const [endPosture, setEndPosture] = useState(null);
   const [postureTol, setPostureTol] = useState(15);   // ±degrees
+  // 姿勢判定方法: "euler" (default、Roll/Pitch tol)、"quat" (Quaternion 内積)
+  const [postureJudgeBy, setPostureJudgeBy] = useState('euler');
 
   // 修飾キー
   const [modCtrl,  setModCtrl ] = useState(false);
@@ -725,7 +727,11 @@ function App() {
       r.accel_abs_threshold = parseFloat(ruleAccelTh);
     }
     if (startPosture) {
-      r.posture = { euler: startPosture.euler, euler_tol: startPosture.euler_tol };
+      r.posture = {
+        euler: startPosture.euler,
+        euler_tol: startPosture.euler_tol,
+        judge_by: postureJudgeBy,   // "euler" (default) or "quat"
+      };
       if (startPosture.quat) r.posture.quat = startPosture.quat;
     }
     if (ruleButtonEnabled) {
@@ -1521,11 +1527,17 @@ function App() {
           <!-- 姿勢トリガ -->
           <div class="border rounded p-2 bg-slate-50">
             <div class="text-xs font-semibold text-slate-600 mb-1">姿勢条件 (任意)</div>
-            <div class="flex items-center gap-2 mb-1 flex-wrap">
-              <span class="text-xs">許容 ±</span>
+            <div class="flex items-center gap-2 mb-1 flex-wrap text-xs">
+              <span>許容 ±</span>
               <input type="number" min="5" max="90" step="5" value=${postureTol}
-                onInput=${(e) => setPostureTol(e.target.value)} class="border rounded px-1 py-0.5 w-12 font-mono text-xs" />
-              <span class="text-xs">°</span>
+                onInput=${(e) => setPostureTol(e.target.value)} class="border rounded px-1 py-0.5 w-12 font-mono" />
+              <span>°</span>
+              <span class="ml-3">判定:</span>
+              <select value=${postureJudgeBy} onChange=${(e) => setPostureJudgeBy(e.target.value)}
+                class="border rounded px-1 py-0.5">
+                <option value="euler">Euler 角 (Roll/Pitch tol、推奨)</option>
+                <option value="quat">Quaternion 内積</option>
+              </select>
             </div>
             <div class="flex items-center gap-2 mb-1 flex-wrap text-xs">
               <button onClick=${captureStartPosture} disabled=${!connected || !sensor}
