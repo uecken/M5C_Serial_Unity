@@ -4,10 +4,10 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260425-224534';
-import { BleClient }    from './lib/BleClient.js?v=20260425-224534';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-224534';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-224534';
+import { SerialClient } from './lib/SerialClient.js?v=20260425-225209';
+import { BleClient }    from './lib/BleClient.js?v=20260425-225209';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-225209';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-225209';
 
 const html = htm.bind(h);
 
@@ -863,11 +863,21 @@ function App() {
                 </div>
               `;
             })}
-            <span class="text-[10px] font-mono ml-1 ${liveBtnUpdatedMs && (Date.now() - liveBtnUpdatedMs) < 2000 ? 'text-emerald-700' : 'text-amber-600'}">
-              ${liveBtnUpdatedMs ? `${Date.now() - liveBtnUpdatedMs}ms` : '未受信'}
-            </span>
+            <div class="flex flex-col items-end gap-0.5 ml-1">
+              <span class="text-[10px] font-mono ${liveBtnUpdatedMs && (Date.now() - liveBtnUpdatedMs) < 2000 ? 'text-emerald-700' : 'text-amber-600'}">
+                ${liveBtnUpdatedMs ? `${Date.now() - liveBtnUpdatedMs}ms` : '⚠ 未受信'}
+              </span>
+              <button onClick=${() => sendCmd({ cmd: 'hw.buttons.get' })}
+                class="text-[10px] px-1.5 py-0.5 bg-violet-200 hover:bg-violet-300 rounded font-semibold"
+                title="hw.buttons.get を即送信 (ログで送受信を確認)">
+                🔍 Test
+              </button>
+            </div>
           </div>
         ` : null}
+        <span class="text-[10px] font-mono px-2 py-1 bg-slate-100 rounded text-slate-500" title="${appDeployedAt}">
+          v${appVersion || 'dev'}
+        </span>
         ${!connected ? html`
           <div class="flex gap-1 bg-slate-100 rounded-lg p-1">
             <button onClick=${() => setTransport('usb')}
@@ -890,6 +900,20 @@ function App() {
         `}
       </div>
     </header>
+
+    <!-- ボタン未受信時の診断バナー -->
+    ${connected && currentButtons.length > 0 && (!liveBtnUpdatedMs || (Date.now() - liveBtnUpdatedMs) > 3000) ? html`
+      <div class="mb-3 p-3 bg-amber-50 border-l-4 border-amber-400 text-sm">
+        <div class="font-semibold text-amber-800 mb-1">⚠ ボタン状態が FW から受信できていません</div>
+        <ul class="text-xs text-amber-700 list-disc ml-5 space-y-0.5">
+          <li>新 FW (Phase 5.2 以降) を焼いていますか? 旧 FW は <code>hw.buttons.get</code> コマンド未対応です。
+            ヘッダの <b>🔍 Test</b> ボタンを押下 → 下のログに <code>← {"type":"err",...,"err":"unknown_cmd"}</code> が出れば旧 FW 確定。</li>
+          <li>Web ページを <b>Ctrl+F5</b> で強制リロード (キャッシュ確認)。ヘッダ右の <code>v...</code> が <code>v20260425-22xxxx</code> 以降なら最新。</li>
+          <li>Stream が ON なら sensor の "btn" フィールドから取得、OFF なら 200ms 周期で <code>hw.buttons.get</code> 自動送信中。
+            ログにも何もない場合は <b>接続が切れている</b>可能性。ヘッダの "切断" ボタンが見えるか確認してください。</li>
+        </ul>
+      </div>
+    ` : null}
 
     ${!connected && transport === 'usb' && usbSupported ? html`
       <div class="mb-4 bg-blue-50 text-blue-800 p-3 rounded-lg text-sm flex items-center justify-between flex-wrap gap-2">
