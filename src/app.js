@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-080017';
-import { BleClient }    from './lib/BleClient.js?v=20260426-080017';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-080017';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-080017';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-080017';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-080334';
+import { BleClient }    from './lib/BleClient.js?v=20260426-080334';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-080334';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-080334';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-080334';
 
 const html = htm.bind(h);
 
@@ -818,10 +818,11 @@ function App() {
     setWatchEnabled(next);
     sendCmd({ cmd: 'watch.set', enabled: next });
   };
-  // 接続成功時に自動で rule.list + profile.list + watch を要求
+  // 接続成功時に自動で device.info + rule.list + profile.list + watch を要求
   useEffect(() => {
     if (connected && activeClient) {
       const t = setTimeout(() => {
+        activeClient.send({ cmd: 'device.info' }).catch(() => {});  // FW Phase / build 取得
         activeClient.send({ cmd: 'rule.list' }).catch(() => {});
         activeClient.send({ cmd: 'profile.list' }).catch(() => {});
         activeClient.send({ cmd: 'watch.set', enabled: true }).catch(() => {});
