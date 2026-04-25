@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-081124';
-import { BleClient }    from './lib/BleClient.js?v=20260426-081124';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-081124';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-081124';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-081124';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-082000';
+import { BleClient }    from './lib/BleClient.js?v=20260426-082000';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-082000';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-082000';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-082000';
 
 const html = htm.bind(h);
 
@@ -1010,6 +1010,40 @@ function App() {
     return map[c] || `0x${c.toString(16).padStart(2, '0')}`;
   };
 
+  // FIRE_MACRO の (keys[], key_modes[]) を「各ステップで押下中のキー集合」として再構築 (Phase 5.14.5)
+  // 例: keys=[DOWN, RIGHT, DOWN, a, 0], modes=[PRESS, PRESS, RELEASE, PRESS, RELEASE_ALL]
+  //   →  [{↓}, {↓+→}, {→}, {→+a}, {}]  ← 各ステップで押下中の集合
+  // UI で「↓ → ↓+→ → →+a」のようにブロック並べて視覚化、同時押しが一目で分かる。
+  const renderMacroSteps = (keys, modes) => {
+    if (!Array.isArray(keys) || keys.length === 0) return null;
+    const steps = [];
+    const pressed = [];   // 配列で順序保持 (同時押し集合の表示順)
+    const setHas = (name) => pressed.includes(name);
+    const setAdd = (name) => { if (!setHas(name)) pressed.push(name); };
+    const setDel = (name) => { const i = pressed.indexOf(name); if (i >= 0) pressed.splice(i, 1); };
+    for (let i = 0; i < keys.length; i++) {
+      const mode = (modes && modes[i] !== undefined) ? modes[i] : 0;
+      const name = hidCodeToName(keys[i]);
+      if (mode === 3) {            // RELEASE_ALL
+        pressed.length = 0;
+        steps.push([]);
+      } else if (mode === 1) {      // PRESS
+        setAdd(name); steps.push([...pressed]);
+      } else if (mode === 2) {      // RELEASE
+        setDel(name); steps.push([...pressed]);
+      } else {                      // FIRE (press + release)
+        setAdd(name); steps.push([...pressed]);
+        setDel(name);
+      }
+    }
+    return steps.map((set, i) => {
+      if (set.length === 0) {
+        return html`<span class="text-slate-400 mx-0.5" title="全 release">∅</span>`;
+      }
+      return html`<span class="bg-amber-100 text-amber-800 px-1 rounded mr-0.5 border border-amber-300" title="ステップ ${i+1}: ${set.length} キー同時押下">${set.join('+')}</span>`;
+    });
+  };
+
   // 同時押し macro 形式の展開 (Phase 5.14)
   // 入力: ["DOWN", "DOWN+RIGHT", "RIGHT", "RIGHT+p"]  (各ステップで押下中のキー集合)
   // 出力: ["+DOWN", "+RIGHT", "-DOWN", "+p", "!"]    (FW 内部 prefix 形式)
@@ -1141,7 +1175,9 @@ function App() {
         }
         setSampleStatus(`ルール ${i + 1}/${data.rules.length}: ${r.name}`);
         await activeClient.send({ cmd: 'rule.add', r });
-        await new Promise((res) => setTimeout(res, 50));
+        // FW 側で autoSaveActiveProfile (LittleFS 書込み 50-100ms) が走るため、
+        // 250ms 待機して Serial RX buffer overflow による rule.add drop を防止 (Phase 5.14.5)
+        await new Promise((res) => setTimeout(res, 250));
       }
 
       setSampleStatus('プロファイル保存中…');
@@ -1629,7 +1665,11 @@ function App() {
                         ${r.action ? html`
                           <span class="text-[9px] text-slate-400">${r.action.type_name || '?'}</span>
                           ${r.action.keys && r.action.keys.length > 0 ? html`
-                            <span class="ml-1">${r.action.keys.map(hidCodeToName).join(' ')}</span>
+                            <span class="ml-1 inline-flex flex-wrap items-center">
+                              ${r.action.type_name === 'fire_macro'
+                                ? renderMacroSteps(r.action.keys, r.action.key_modes)
+                                : r.action.keys.map(hidCodeToName).join(' ')}
+                            </span>
                           ` : html`<span class="ml-1 text-red-500">空!</span>`}
                         ` : '-'}
                       </td>

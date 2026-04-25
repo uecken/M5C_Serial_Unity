@@ -59,7 +59,7 @@
       "button_state": 0,
       "posture": { "euler": [-45, -30, 0], "euler_tol": [15, 15, 180] },
       "accel_abs_threshold": 2.0,
-      "keys": ["DOWN", "DOWN+LEFT", "LEFT", "LEFT+k"],
+      "keys": ["DOWN", "DOWN+LEFT", "LEFT", "LEFT+X"],
       "interval_ms": 50,
       "cooldown_ms": 700
     }
