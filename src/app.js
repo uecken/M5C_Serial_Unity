@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-082948';
-import { BleClient }    from './lib/BleClient.js?v=20260426-082948';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-082948';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-082948';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-082948';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-083617';
+import { BleClient }    from './lib/BleClient.js?v=20260426-083617';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-083617';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-083617';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-083617';
 
 const html = htm.bind(h);
 
@@ -70,7 +70,10 @@ function App() {
   // 姿勢キャプチャ (Euler [r,p,y]、tol [r,p,y])
   const [startPosture, setStartPosture] = useState(null);   // {euler:[r,p,y], tol:[r,p,y]} | null
   const [endPosture, setEndPosture] = useState(null);
-  const [postureTol, setPostureTol] = useState(15);   // ±degrees
+  const [postureTol, setPostureTol] = useState(15);   // ±degrees (一律、簡易)
+  // 軸別 tol オーバーライド (Phase 5.15、空 or 0 なら postureTol 使用、180 で軸を実質除外)
+  const [postureTolRoll, setPostureTolRoll] = useState('');
+  const [postureTolPitch, setPostureTolPitch] = useState('');
   // 姿勢判定方法: "euler" (default、Roll/Pitch tol)、"quat" (Quaternion 内積)
   const [postureJudgeBy, setPostureJudgeBy] = useState('euler');
 
