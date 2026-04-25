@@ -4,10 +4,10 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260425-223642';
-import { BleClient }    from './lib/BleClient.js?v=20260425-223642';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-223642';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-223642';
+import { SerialClient } from './lib/SerialClient.js?v=20260425-224534';
+import { BleClient }    from './lib/BleClient.js?v=20260425-224534';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-224534';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-224534';
 
 const html = htm.bind(h);
 
@@ -704,10 +704,20 @@ function App() {
   const [fwButtons, setFwButtons] = useState(null);  // null = 未取得、配列 = FW の現在値
   // 「FW に適用」ボタンの結果メッセージ
   const [fwButtonsStatus, setFwButtonsStatus] = useState('');
+  // ライブ ボタン bitmap (sensor.btn または hw.buttons.get.bitmap から)
+  const [liveBtnBitmap, setLiveBtnBitmap] = useState(0);
+  // 直近のボタン受信タイムスタンプ (UI で「データ来てる?」確認用)
+  const [liveBtnUpdatedMs, setLiveBtnUpdatedMs] = useState(0);
 
-  // hw.buttons 受信ハンドラ (FW から GPIO 構成取得)
+  // hw.buttons 受信ハンドラ (FW から GPIO 構成取得 + bitmap)
   useEffect(() => {
-    const onHwButtons = (ev) => setFwButtons(ev.detail.buttons || []);
+    const onHwButtons = (ev) => {
+      setFwButtons(ev.detail.buttons || []);
+      if (ev.detail.bitmap !== undefined) {
+        setLiveBtnBitmap(ev.detail.bitmap);
+        setLiveBtnUpdatedMs(Date.now());
+      }
+    };
     [serialClient, bleClient].forEach((c) => {
       c.addEventListener('type:hw.buttons', onHwButtons);
     });
@@ -717,6 +727,24 @@ function App() {
       });
     };
   }, []);
+
+  // sensor.btn 受信時に liveBtnBitmap 更新
+  useEffect(() => {
+    if (sensor && sensor.btn !== undefined) {
+      setLiveBtnBitmap(sensor.btn);
+      setLiveBtnUpdatedMs(Date.now());
+    }
+  }, [sensor?.btn, sensor?.t]);
+
+  // Stream OFF 時は 200ms 周期で hw.buttons.get をポーリング (ボタン状態を切らさない)
+  useEffect(() => {
+    if (!connected || !activeClient) return;
+    if (streamRate > 0) return;  // Stream ON なら sensor.btn から取得済
+    const id = setInterval(() => {
+      activeClient.send({ cmd: 'hw.buttons.get' }).catch(() => {});
+    }, 200);
+    return () => clearInterval(id);
+  }, [connected, streamRate]);
 
   // 接続成功時に hw.buttons.get を投げて FW 現在値を取得
   useEffect(() => {
@@ -810,12 +838,36 @@ function App() {
 
   return html`
   <div class="max-w-6xl mx-auto p-4">
-    <header class="flex items-center justify-between mb-4 pb-3 border-b border-slate-200">
+    <header class="flex items-center justify-between mb-4 pb-3 border-b border-slate-200 gap-3 flex-wrap">
       <div>
         <h1 class="text-2xl font-bold">🎮 Burst Motion — 設定アプリ</h1>
         <p class="text-sm text-slate-500">Web Serial (USB) / Web Bluetooth (BLE NUS) 両対応 — Phase 2</p>
       </div>
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-3 flex-wrap">
+        <!-- 大型ボタン状態インジケータ (常時表示、Stream ON/OFF 不問) -->
+        ${connected && currentButtons.length > 0 ? html`
+          <div class="flex items-center gap-2 px-3 py-2 bg-violet-50 border border-violet-200 rounded-lg">
+            <span class="text-xs text-slate-600 font-semibold">BTN:</span>
+            ${currentButtons.map((b) => {
+              const pressed = ((liveBtnBitmap >> (b.idx - 1)) & 1) === 1;
+              return html`
+                <div class="flex flex-col items-center gap-0.5"
+                     title="idx=${b.idx} GPIO ${b.gpio} (${b.active_low ? 'active_low' : 'active_high'}, ${b.pull_mode === 1 ? 'PU' : b.pull_mode === 2 ? 'PD' : 'INPUT'})">
+                  <div class="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold border-2 transition-all
+                    ${pressed
+                      ? 'bg-emerald-500 text-white border-emerald-700 scale-110 shadow-lg animate-pulse'
+                      : 'bg-slate-100 text-slate-400 border-slate-300'}">
+                    ${b.idx}
+                  </div>
+                  <span class="text-[9px] font-mono ${pressed ? 'text-emerald-700 font-bold' : 'text-slate-400'}">G${b.gpio}</span>
+                </div>
+              `;
+            })}
+            <span class="text-[10px] font-mono ml-1 ${liveBtnUpdatedMs && (Date.now() - liveBtnUpdatedMs) < 2000 ? 'text-emerald-700' : 'text-amber-600'}">
+              ${liveBtnUpdatedMs ? `${Date.now() - liveBtnUpdatedMs}ms` : '未受信'}
+            </span>
+          </div>
+        ` : null}
         ${!connected ? html`
           <div class="flex gap-1 bg-slate-100 rounded-lg p-1">
             <button onClick=${() => setTransport('usb')}
