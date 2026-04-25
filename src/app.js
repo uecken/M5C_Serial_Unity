@@ -4,10 +4,10 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260425-222851';
-import { BleClient }    from './lib/BleClient.js?v=20260425-222851';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-222851';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-222851';
+import { SerialClient } from './lib/SerialClient.js?v=20260425-223134';
+import { BleClient }    from './lib/BleClient.js?v=20260425-223134';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-223134';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-223134';
 
 const html = htm.bind(h);
 
