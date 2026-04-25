@@ -1,0 +1,31 @@
+{
+  "schema": "burst_motion_sample_v1",
+  "id": "street_fighter",
+  "title": "🥊 ストリートファイター 風",
+  "description": "右傾け→p (パンチ)、左傾け→k (キック)、振り下ろし (>3g)→h (ハードアタック)。本格的な波動拳/昇竜拳のシーケンス検出は将来の Phase 6+ で SEQUENCE 状態機械を活用。",
+  "rules": [
+    {
+      "name": "punch",
+      "ui_mode": "oneshot",
+      "posture": { "euler": [45, 0, 0], "euler_tol": [15, 180, 180] },
+      "accel_abs_threshold": 1.8,
+      "key": "p",
+      "cooldown_ms": 400
+    },
+    {
+      "name": "kick",
+      "ui_mode": "oneshot",
+      "posture": { "euler": [-45, 0, 0], "euler_tol": [15, 180, 180] },
+      "accel_abs_threshold": 1.8,
+      "key": "k",
+      "cooldown_ms": 400
+    },
+    {
+      "name": "hard_attack",
+      "ui_mode": "oneshot",
+      "accel_abs_threshold": 3.0,
+      "key": "h",
+      "cooldown_ms": 800
+    }
+  ]
+}

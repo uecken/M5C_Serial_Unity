@@ -4,10 +4,10 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260425-213828';
-import { BleClient }    from './lib/BleClient.js?v=20260425-213828';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-213828';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-213828';
+import { SerialClient } from './lib/SerialClient.js?v=20260425-214540';
+import { BleClient }    from './lib/BleClient.js?v=20260425-214540';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-214540';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-214540';
 
 const html = htm.bind(h);
 
@@ -77,6 +77,11 @@ function App() {
   const [profileList, setProfileList] = useState([]);
   const [profileName, setProfileName] = useState('default');
   const [activeProfile, setActiveProfile] = useState('');
+
+  // サンプルプロファイル (リポジトリ同梱、Phase 5)
+  const [samples, setSamples] = useState([]);
+  const [sampleLoading, setSampleLoading] = useState(null);  // 進行中のサンプル id
+  const [sampleStatus, setSampleStatus] = useState('');
 
   // 6 点キャリブ ウィザード
   const [calib6Step, setCalib6Step] = useState(-1);  // -1=idle、0..5=待機、6=完了待機
@@ -645,6 +650,58 @@ function App() {
     sendCmd({ cmd: 'profile.delete', name });
   };
 
+  // サンプルプロファイル一覧を初回 fetch
+  useEffect(() => {
+    fetch('./profiles/index.json', { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d && Array.isArray(d.profiles)) setSamples(d.profiles); })
+      .catch(() => {});
+  }, []);
+
+  // サンプル → ルール送信 → profile.save
+  const handleSampleLoad = async (sample) => {
+    if (!activeClient || !connected) {
+      alert('先にデバイスへ接続してください');
+      return;
+    }
+    if (!confirm(`サンプル「${sample.title}」を読み込みます。\n現在登録中のルールは全て上書きされます。\n続けますか?`)) return;
+
+    setSampleLoading(sample.id);
+    setSampleStatus('JSON 取得中…');
+    try {
+      const resp = await fetch(`./profiles/${sample.file}`, { cache: 'no-store' });
+      if (!resp.ok) throw new Error('fetch failed');
+      const data = await resp.json();
+      if (!data.rules || !Array.isArray(data.rules)) throw new Error('invalid schema');
+
+      setSampleStatus('既存ルール削除中…');
+      await activeClient.send({ cmd: 'rule.clear' });
+
+      const baseId = (Date.now() & 0xff00);
+      for (let i = 0; i < data.rules.length; i++) {
+        const r = { ...data.rules[i], id: baseId + i };
+        setSampleStatus(`ルール ${i + 1}/${data.rules.length}: ${r.name}`);
+        await activeClient.send({ cmd: 'rule.add', r });
+        // FW 側の処理を待つ余裕、軽い間隔
+        await new Promise((res) => setTimeout(res, 50));
+      }
+
+      setSampleStatus('プロファイル保存中…');
+      await activeClient.send({ cmd: 'profile.save', name: sample.id });
+      // rule.list / profile.list 更新
+      await activeClient.send({ cmd: 'rule.list' });
+      await activeClient.send({ cmd: 'profile.list' });
+      setProfileName(sample.id);
+      setSampleStatus(`✅ "${sample.title}" を ${data.rules.length} ルールで読み込み完了`);
+    } catch (e) {
+      setSampleStatus(`❌ エラー: ${e.message || e}`);
+    } finally {
+      setSampleLoading(null);
+      // 5 秒後にステータスをクリア
+      setTimeout(() => setSampleStatus(''), 5000);
+    }
+  };
+
   const usbSupported = 'serial' in navigator;
   const bleSupported = 'bluetooth' in navigator;
 
@@ -1142,6 +1199,39 @@ function App() {
         <span class="text-xs text-slate-500 ml-2">manifest: <a href="./firmware/m5stickc-v2/manifest.json" class="underline">m5stickc-v2</a></span>
       </div>
     </div>
+
+    <!-- サンプルプロファイル (リポジトリ同梱、Phase 5) -->
+    ${samples.length > 0 ? html`
+      <div class="mt-4 bg-white rounded-lg shadow-sm border border-slate-200 p-4">
+        <h2 class="font-semibold mb-2">🎁 サンプルプロファイル</h2>
+        <p class="text-xs text-slate-500 mb-3">
+          ワンクリックで既存ルールを上書きし、サンプルを書込みます。動作確認・テンプレートとしてどうぞ。
+        </p>
+        ${sampleStatus ? html`
+          <div class="mb-3 p-2 rounded text-xs font-mono ${sampleStatus.startsWith('❌') ? 'bg-red-100 text-red-700' : sampleStatus.startsWith('✅') ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}">
+            ${sampleStatus}
+          </div>
+        ` : null}
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+          ${samples.map((s) => html`
+            <div class="border rounded p-2 bg-slate-50 flex flex-col gap-1">
+              <div class="font-semibold text-sm">${s.title}</div>
+              <div class="text-xs text-slate-600 leading-snug">${s.description}</div>
+              <div class="flex items-center justify-between mt-1">
+                <span class="text-xs text-slate-400">
+                  ${s.rule_count} ルール
+                  ${s.tags ? html` · ${s.tags.map((t) => html`<span class="ml-1 px-1 bg-slate-200 rounded">${t}</span>`)}` : null}
+                </span>
+                <button onClick=${() => handleSampleLoad(s)} disabled=${!connected || sampleLoading !== null}
+                  class="px-2 py-0.5 text-xs bg-emerald-200 hover:bg-emerald-300 rounded disabled:opacity-40">
+                  ${sampleLoading === s.id ? '⏳ 読込中…' : '📥 適用'}
+                </button>
+              </div>
+            </div>
+          `)}
+        </div>
+      </div>
+    ` : null}
 
     <!-- プロファイル管理 -->
     <div class="mt-4 bg-white rounded-lg shadow-sm border border-slate-200 p-4">

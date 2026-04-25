@@ -1,0 +1,29 @@
+{
+  "schema": "burst_motion_sample_v1",
+  "id": "presentation",
+  "title": "🎤 プレゼンテーション",
+  "description": "右傾け→次ページ (n)、左傾け→前ページ (p)、振って→ポインタ切替 (b)。本来は矢印キーが望ましいが ASCII 互換のため n/p で代用 (Keynote/PowerPoint で n が次スライド)。",
+  "rules": [
+    {
+      "name": "next_slide",
+      "ui_mode": "oneshot",
+      "posture": { "euler": [40, 0, 0], "euler_tol": [15, 180, 180] },
+      "key": "n",
+      "cooldown_ms": 800
+    },
+    {
+      "name": "prev_slide",
+      "ui_mode": "oneshot",
+      "posture": { "euler": [-40, 0, 0], "euler_tol": [15, 180, 180] },
+      "key": "p",
+      "cooldown_ms": 800
+    },
+    {
+      "name": "pointer_toggle",
+      "ui_mode": "oneshot",
+      "accel_abs_threshold": 2.5,
+      "key": "b",
+      "cooldown_ms": 1500
+    }
+  ]
+}

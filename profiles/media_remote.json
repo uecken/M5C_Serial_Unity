@@ -1,0 +1,29 @@
+{
+  "schema": "burst_motion_sample_v1",
+  "id": "media_remote",
+  "title": "🎵 メディアリモコン",
+  "description": "右傾け→k (再生/一時停止)、上傾け (前)→j (10秒戻し)、下傾け (後)→l (10秒進み)。YouTube / VLC のキーバインドに準拠。",
+  "rules": [
+    {
+      "name": "play_pause",
+      "ui_mode": "oneshot",
+      "posture": { "euler": [50, 0, 0], "euler_tol": [15, 180, 180] },
+      "key": "k",
+      "cooldown_ms": 800
+    },
+    {
+      "name": "rewind",
+      "ui_mode": "oneshot",
+      "posture": { "euler": [0, 40, 0], "euler_tol": [180, 15, 180] },
+      "key": "j",
+      "cooldown_ms": 600
+    },
+    {
+      "name": "fast_forward",
+      "ui_mode": "oneshot",
+      "posture": { "euler": [0, -40, 0], "euler_tol": [180, 15, 180] },
+      "key": "l",
+      "cooldown_ms": 600
+    }
+  ]
+}

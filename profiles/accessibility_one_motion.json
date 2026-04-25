@@ -1,0 +1,15 @@
+{
+  "schema": "burst_motion_sample_v1",
+  "id": "accessibility_one_motion",
+  "title": "♿ アクセシビリティ - 1 モーション 1 キー",
+  "description": "大きく振る (3g 以上) でスペースキーを 1 回送る。手の動きが限定的なユーザーでも、デバイスを軽く振るだけで PC 操作 (動画再生/一時停止、ゲーム決定キー等) が可能。クールダウン 1 秒で誤発火を抑制。",
+  "rules": [
+    {
+      "name": "shake_to_space",
+      "ui_mode": "oneshot",
+      "accel_abs_threshold": 3.0,
+      "key": " ",
+      "cooldown_ms": 1000
+    }
+  ]
+}

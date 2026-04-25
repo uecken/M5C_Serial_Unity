@@ -1,0 +1,45 @@
+{
+  "schema": "burst_motion_sample_index_v1",
+  "profiles": [
+    {
+      "id": "presentation",
+      "title": "🎤 プレゼンテーション",
+      "description": "右傾けで次ページ、左傾けで前ページ、振って 'p' (ポインタ切替)",
+      "tags": ["presentation", "office"],
+      "rule_count": 3,
+      "file": "presentation.json"
+    },
+    {
+      "id": "fps_wasd",
+      "title": "🎮 FPS WASD (傾け移動)",
+      "description": "前後左右の傾きで W/A/S/D を継続押下、ボタン押下で射撃",
+      "tags": ["game", "fps"],
+      "rule_count": 5,
+      "file": "fps_wasd.json"
+    },
+    {
+      "id": "accessibility_one_motion",
+      "title": "♿ アクセシビリティ - 1 モーション 1 キー",
+      "description": "大きく振る → スペース 1 つだけ。手の動きが限定的でも操作可能。",
+      "tags": ["accessibility", "simple"],
+      "rule_count": 1,
+      "file": "accessibility_one_motion.json"
+    },
+    {
+      "id": "media_remote",
+      "title": "🎵 メディアリモコン",
+      "description": "右傾けで k (再生/一時停止)、上傾けで j (10秒戻し)、下傾けで l (10秒進み) — YouTube 等",
+      "tags": ["media", "remote", "youtube"],
+      "rule_count": 3,
+      "file": "media_remote.json"
+    },
+    {
+      "id": "street_fighter",
+      "title": "🥊 ストリートファイター 風",
+      "description": "右傾け+ボタンで P (パンチ)、左傾け+ボタンで K (キック)、振り下ろしで H (ハードアタック)",
+      "tags": ["game", "fighting"],
+      "rule_count": 3,
+      "file": "street_fighter.json"
+    }
+  ]
+}

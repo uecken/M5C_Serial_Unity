@@ -1,0 +1,43 @@
+{
+  "schema": "burst_motion_sample_v1",
+  "id": "fps_wasd",
+  "title": "🎮 FPS WASD (傾け移動)",
+  "description": "前傾→W (前進)、後傾→S (後退)、左傾→A、右傾→D を傾けてる間ずっと押下継続 (HOLD_START_ONLY)。振って→Space (ジャンプ)。",
+  "rules": [
+    {
+      "name": "move_forward",
+      "ui_mode": "hold_start_only",
+      "posture": { "euler": [0, 30, 0], "euler_tol": [180, 15, 180] },
+      "key": "w",
+      "cooldown_ms": 0
+    },
+    {
+      "name": "move_back",
+      "ui_mode": "hold_start_only",
+      "posture": { "euler": [0, -30, 0], "euler_tol": [180, 15, 180] },
+      "key": "s",
+      "cooldown_ms": 0
+    },
+    {
+      "name": "move_left",
+      "ui_mode": "hold_start_only",
+      "posture": { "euler": [-30, 0, 0], "euler_tol": [15, 180, 180] },
+      "key": "a",
+      "cooldown_ms": 0
+    },
+    {
+      "name": "move_right",
+      "ui_mode": "hold_start_only",
+      "posture": { "euler": [30, 0, 0], "euler_tol": [15, 180, 180] },
+      "key": "d",
+      "cooldown_ms": 0
+    },
+    {
+      "name": "jump",
+      "ui_mode": "oneshot",
+      "accel_abs_threshold": 2.5,
+      "key": " ",
+      "cooldown_ms": 600
+    }
+  ]
+}

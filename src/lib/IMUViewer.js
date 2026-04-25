@@ -1,7 +1,7 @@
 // Burst Motion - IMUViewer (Phase 4.1 拡張版)
 // 旧版 (findradio.jp) の機能を移植:
-// - 球体ワイヤーフレーム (基準スケール)
-// - M5StickC モデル (球と一緒に回転)
+// - 球体ワイヤーフレーム (基準スケール、★固定★)
+// - M5StickC モデル (★球とは独立に回転★、ユーザー仕様: 球は基準として固定)
 // - World/Body 座標軸切替
 // - 重力ベクトル矢印
 // - 球面に登録ルール姿勢の点を表示 (橙)、最近傍 (緑)、現在 (赤)
@@ -37,7 +37,7 @@ export class IMUViewer {
     this.worldAxes.visible = false;
     this.scene.add(this.worldAxes);
 
-    // ---- M5StickC モデル (球の子: 球と一緒に回転) ----
+    // ---- M5StickC モデル (scene 直下: 球は固定、stickC だけ回転) ----
     const stickGeo = new THREE.BoxGeometry(0.24, 0.12, 0.48);
     const orange = new THREE.MeshBasicMaterial({ color: 0xffa500 });
     const black  = new THREE.MeshBasicMaterial({ color: 0x000000 });
@@ -53,7 +53,7 @@ export class IMUViewer {
     const mark = new THREE.Mesh(markGeo, new THREE.MeshBasicMaterial({ color: 0x33ff33 }));
     mark.position.set(0, -0.061, 0.24);
     this.m5StickC.add(mark);
-    this.sphere.add(this.m5StickC);
+    this.scene.add(this.m5StickC);
 
     // ---- Body 軸 (M5StickC の子: 一緒に回転) ----
     this.bodyAxes = new THREE.AxesHelper(0.7);
@@ -185,9 +185,9 @@ export class IMUViewer {
 
   _tick() {
     if (!this._running) return;
-    // base からの相対回転
+    // base からの相対回転を M5StickC モデルに適用 (球体は固定、ユーザー仕様)
     const q = this.qRef.clone().multiply(this.targetQuat);
-    this.sphere.quaternion.slerp(q, this.smoothing);
+    this.m5StickC.quaternion.slerp(q, this.smoothing);
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame(this._tick);
   }
