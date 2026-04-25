@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-083617';
-import { BleClient }    from './lib/BleClient.js?v=20260426-083617';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-083617';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-083617';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-083617';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-083828';
+import { BleClient }    from './lib/BleClient.js?v=20260426-083828';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-083828';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-083828';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-083828';
 
 const html = htm.bind(h);
 
@@ -339,16 +339,19 @@ function App() {
   useEffect(() => {
     const stored = JSON.parse(localStorage.getItem('burst_motion_rule_postures') || '{}');
     const refs = ruleList.map((r) => {
-      // 1. FW 応答に posture が含まれていれば優先 (Phase 5.9 で quat も含む)
+      // 1. FW 応答に posture が含まれていれば優先 (Phase 5.9 で quat も含む、Phase 5.16 で tol も)
       if (r.posture && r.posture.euler) {
         const local = stored[r.id];
-        // FW 側 quat を最優先、なければ localStorage から (Phase 5.7 旧データ用)
         const fwQuat = r.posture.quat;
         const localQuat = local?.quat;
         const q = (fwQuat && fwQuat.length === 4) ? fwQuat : localQuat;
+        const tol = r.posture.euler_tol;
         return {
           id: r.id, name: r.name,
           roll: r.posture.euler[0], pitch: r.posture.euler[1], yaw: r.posture.euler[2],
+          rollTol:  Array.isArray(tol) ? tol[0] : undefined,
+          pitchTol: Array.isArray(tol) ? tol[1] : undefined,
+          yawTol:   Array.isArray(tol) ? tol[2] : undefined,
           qw: q?.[0], qx: q?.[1], qy: q?.[2], qz: q?.[3],
         };
       }
@@ -357,6 +360,9 @@ function App() {
       if (!p) return null;
       return { id: r.id, name: r.name,
                roll: p.euler[0], pitch: p.euler[1], yaw: p.euler[2],
+               rollTol:  p.euler_tol?.[0],
+               pitchTol: p.euler_tol?.[1],
+               yawTol:   p.euler_tol?.[2],
                qw: p.quat?.[0], qx: p.quat?.[1], qy: p.quat?.[2], qz: p.quat?.[3] };
     }).filter(Boolean);
     setRuleReferences(refs);

@@ -87,12 +87,12 @@ export class PitchRollGrid {
     this._drawGrid();
 
     // 登録参照点 (橙)、発火中=緑フラッシュ、最近傍=緑
+    // Phase 5.16: tol で囲まれた矩形を半透明で描画 (発火範囲の可視化)
     this.references.forEach((r, idx) => {
       const isFiring = (this.firingIdx === idx);
       const isClosest = (this.closest === idx);
       let color, radius;
       if (isFiring) {
-        // 発火フラッシュ: 鮮やかな緑 + 大きめ + 中央白丸でアクセント
         color = '#22c55e';
         radius = 11;
       } else if (isClosest) {
@@ -101,6 +101,38 @@ export class PitchRollGrid {
       } else {
         color = '#f97316';
         radius = 5;
+      }
+      // tol 矩形を背景に描画 (中央点より先に)
+      if (typeof r.rollTol === 'number' && typeof r.pitchTol === 'number') {
+        const fillStyle  = isFiring  ? 'rgba(34,197,94,0.20)'
+                         : isClosest ? 'rgba(16,185,129,0.18)'
+                                     : 'rgba(249,115,22,0.13)';
+        const strokeStyle = isFiring  ? 'rgba(21,128,61,0.6)'
+                          : isClosest ? 'rgba(5,150,105,0.5)'
+                                      : 'rgba(234,88,12,0.4)';
+        // Roll tol が極端に広い (≥170) なら描画省略 (= 軸除外、ほぼ全幅で視覚 noise)
+        // Pitch tol も同様 (≥85 で全幅相当)
+        const rollWide  = r.rollTol  >= 170;
+        const pitchWide = r.pitchTol >= 85;
+        if (rollWide && pitchWide) {
+          // 両軸除外 → 描画省略
+        } else if (rollWide) {
+          // Roll 任意 → 横帯 (Pitch 範囲のみ)
+          const yTop = this._pitchToY(r.pitch + r.pitchTol);
+          const yBot = this._pitchToY(r.pitch - r.pitchTol);
+          ctx.fillStyle = fillStyle;
+          ctx.fillRect(0, yTop, W, yBot - yTop);
+          ctx.strokeStyle = strokeStyle;
+          ctx.strokeRect(0, yTop, W, yBot - yTop);
+        } else if (pitchWide) {
+          // Pitch 任意 → 縦帯 (Roll 範囲のみ、wrap 対応)
+          this._fillRollRange(ctx, r.roll, r.rollTol, fillStyle, strokeStyle);
+        } else {
+          // 通常: 矩形 (Roll wrap 対応のため Roll 範囲を 1〜2 個に分割)
+          const yTop = this._pitchToY(r.pitch + r.pitchTol);
+          const yBot = this._pitchToY(r.pitch - r.pitchTol);
+          this._fillRollRangeY(ctx, r.roll, r.rollTol, yTop, yBot, fillStyle, strokeStyle);
+        }
       }
       this._plotPoint(r.roll, r.pitch, color, radius);
       if (isFiring) {
@@ -124,6 +156,47 @@ export class PitchRollGrid {
     // 現在姿勢 (赤、上から描く)
     if (this.current) {
       this._plotPoint(this.current.roll, this.current.pitch, '#ef4444', 6);
+    }
+  }
+
+  // Roll 範囲 [center - tol, center + tol] を ±180° wrap 考慮で 1〜2 矩形描画
+  // (フル高さ = 縦帯バージョン)
+  _fillRollRange(ctx, center, tol, fillStyle, strokeStyle) {
+    const H = this.canvas.height;
+    this._fillRollRangeY(ctx, center, tol, 0, H, fillStyle, strokeStyle);
+  }
+  _fillRollRangeY(ctx, center, tol, yTop, yBot, fillStyle, strokeStyle) {
+    const lo = center - tol;
+    const hi = center + tol;
+    ctx.fillStyle = fillStyle;
+    ctx.strokeStyle = strokeStyle;
+    ctx.lineWidth = 1;
+    if (lo >= -180 && hi <= 180) {
+      // wrap なし、1 矩形
+      const xL = this._rollToX(lo);
+      const xR = this._rollToX(hi);
+      ctx.fillRect(xL, yTop, xR - xL, yBot - yTop);
+      ctx.strokeRect(xL, yTop, xR - xL, yBot - yTop);
+    } else if (lo < -180) {
+      // 左側 wrap: [lo+360, 180] と [-180, hi]
+      const xL1 = this._rollToX(lo + 360);
+      const xR1 = this._rollToX(180);
+      ctx.fillRect(xL1, yTop, xR1 - xL1, yBot - yTop);
+      ctx.strokeRect(xL1, yTop, xR1 - xL1, yBot - yTop);
+      const xL2 = this._rollToX(-180);
+      const xR2 = this._rollToX(hi);
+      ctx.fillRect(xL2, yTop, xR2 - xL2, yBot - yTop);
+      ctx.strokeRect(xL2, yTop, xR2 - xL2, yBot - yTop);
+    } else if (hi > 180) {
+      // 右側 wrap: [lo, 180] と [-180, hi-360]
+      const xL1 = this._rollToX(lo);
+      const xR1 = this._rollToX(180);
+      ctx.fillRect(xL1, yTop, xR1 - xL1, yBot - yTop);
+      ctx.strokeRect(xL1, yTop, xR1 - xL1, yBot - yTop);
+      const xL2 = this._rollToX(-180);
+      const xR2 = this._rollToX(hi - 360);
+      ctx.fillRect(xL2, yTop, xR2 - xL2, yBot - yTop);
+      ctx.strokeRect(xL2, yTop, xR2 - xL2, yBot - yTop);
     }
   }
 
