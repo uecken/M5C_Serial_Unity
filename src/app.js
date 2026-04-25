@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-083828';
-import { BleClient }    from './lib/BleClient.js?v=20260426-083828';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-083828';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-083828';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-083828';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-084324';
+import { BleClient }    from './lib/BleClient.js?v=20260426-084324';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-084324';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-084324';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-084324';
 
 const html = htm.bind(h);
 
@@ -1309,6 +1309,18 @@ function App() {
         `}
       </div>
     </header>
+
+    <!-- FW Phase 古い警告 (Closest-only ON で Phase < 5.15 = tol 重み付け未対応) -->
+    ${connected && closestOnlyMode && deviceInfo?.fw_phase && parseFloat(deviceInfo.fw_phase) < 5.15 ? html`
+      <div class="mb-3 p-3 bg-amber-50 border-l-4 border-amber-400 text-sm">
+        <div class="font-semibold text-amber-800 mb-1">⚠ FW Phase ${deviceInfo.fw_phase} は Closest 計算の tol 重み付けに未対応</div>
+        <div class="text-xs text-amber-700">
+          Phase 5.15+ で「<code>euler_tol = 180</code> の軸を Closest 計算で実質除外する」アルゴリズムが導入されました。
+          現在の FW では shoryuken のような「Roll 任意 / Pitch 厳密」ルールが期待通り選定されない可能性があります。<br/>
+          → Chrome タブで「切断」→ 開発者に FW フラッシュを依頼 → Phase 5.15+ にしてください。
+        </div>
+      </div>
+    ` : null}
 
     <!-- ボタン未受信時の診断バナー -->
     ${connected && currentButtons.length > 0 && (!liveBtnUpdatedMs || (Date.now() - liveBtnUpdatedMs) > 3000) ? html`
