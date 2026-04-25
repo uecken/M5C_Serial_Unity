@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-082000';
-import { BleClient }    from './lib/BleClient.js?v=20260426-082000';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-082000';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-082000';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-082000';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-082315';
+import { BleClient }    from './lib/BleClient.js?v=20260426-082315';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-082315';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-082315';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-082315';
 
 const html = htm.bind(h);
 
@@ -1154,9 +1154,36 @@ function App() {
       }
 
       const baseId = (Date.now() & 0xff00);
+      // ack 待ちヘルパ (rule.add の ok=true ack を待つ、タイムアウト 2 秒)
+      const waitForAck = (cmdName, expectedId) => new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+          activeClient.removeEventListener('type:ack', handler);
+          activeClient.removeEventListener('type:err', errHandler);
+          resolve({ ok: false, reason: 'timeout' });
+        }, 2000);
+        const handler = (ev) => {
+          const d = ev.detail;
+          if (d.cmd === cmdName && (expectedId === undefined || d.id === expectedId)) {
+            clearTimeout(timeout);
+            activeClient.removeEventListener('type:ack', handler);
+            activeClient.removeEventListener('type:err', errHandler);
+            resolve({ ok: !!d.ok });
+          }
+        };
+        const errHandler = (ev) => {
+          // parse_error 等 cmd 不明エラーも検出
+          clearTimeout(timeout);
+          activeClient.removeEventListener('type:ack', handler);
+          activeClient.removeEventListener('type:err', errHandler);
+          resolve({ ok: false, reason: ev.detail?.err || 'err' });
+        };
+        activeClient.addEventListener('type:ack', handler);
+        activeClient.addEventListener('type:err', errHandler);
+      });
+
+      let failedCount = 0;
       for (let i = 0; i < data.rules.length; i++) {
         const r = { ...data.rules[i], id: baseId + i };
-        // posture.euler から quat を計算して付加 (Closest-only 計算用)
         if (r.posture && Array.isArray(r.posture.euler) && !r.posture.quat) {
           r.posture = {
             ...r.posture,
@@ -1169,15 +1196,25 @@ function App() {
             quat: eulerToQuat(r.end_posture.euler[0], r.end_posture.euler[1], r.end_posture.euler[2]),
           };
         }
-        // Phase 5.14: 同時押し macro 展開 (例: "DOWN+RIGHT" → "+DOWN","+RIGHT" 等)
         if (Array.isArray(r.keys)) {
           r.keys = expandKeySteps(r.keys);
         }
-        setSampleStatus(`ルール ${i + 1}/${data.rules.length}: ${r.name}`);
+        setSampleStatus(`ルール ${i + 1}/${data.rules.length}: ${r.name} 送信中…`);
         await activeClient.send({ cmd: 'rule.add', r });
-        // FW 側で autoSaveActiveProfile (LittleFS 書込み 50-100ms) が走るため、
-        // 250ms 待機して Serial RX buffer overflow による rule.add drop を防止 (Phase 5.14.5)
-        await new Promise((res) => setTimeout(res, 250));
+        // ack 待ち (request-response、Phase 5.14.6: rule.add drop の根本対策)
+        const ackResult = await waitForAck('rule.add', r.id);
+        if (!ackResult.ok) {
+          failedCount++;
+          console.warn(`rule.add ${r.name} (id=${r.id}) failed:`, ackResult);
+          // 1 回リトライ
+          await new Promise((res) => setTimeout(res, 200));
+          await activeClient.send({ cmd: 'rule.add', r });
+          const retry = await waitForAck('rule.add', r.id);
+          if (retry.ok) failedCount--;
+        }
+      }
+      if (failedCount > 0) {
+        setSampleStatus(`⚠ ${failedCount} 件のルール登録に失敗 (タイムアウト/parse_error)`);
       }
 
       setSampleStatus('プロファイル保存中…');
