@@ -4,10 +4,10 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260425-214540';
-import { BleClient }    from './lib/BleClient.js?v=20260425-214540';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-214540';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-214540';
+import { SerialClient } from './lib/SerialClient.js?v=20260425-221451';
+import { BleClient }    from './lib/BleClient.js?v=20260425-221451';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-221451';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-221451';
 
 const html = htm.bind(h);
 
@@ -82,6 +82,17 @@ function App() {
   const [samples, setSamples] = useState([]);
   const [sampleLoading, setSampleLoading] = useState(null);  // 進行中のサンプル id
   const [sampleStatus, setSampleStatus] = useState('');
+
+  // Hardware 定義 (機種別ボタン GPIO)
+  const [hardwareDefs, setHardwareDefs] = useState({});  // {m5stickc: {title, buttons: [...]}, ...}
+  const [selectedHardware, setSelectedHardware] = useState(
+    localStorage.getItem('burst_motion_hardware') || 'm5stickc'
+  );
+
+  // ルール作成時のボタン条件
+  const [ruleButtonEnabled, setRuleButtonEnabled] = useState(false);
+  const [ruleButtonIdx, setRuleButtonIdx] = useState(1);
+  const [ruleButtonState, setRuleButtonState] = useState(0);  // 0=押下中、1=解放中
 
   // 6 点キャリブ ウィザード
   const [calib6Step, setCalib6Step] = useState(-1);  // -1=idle、0..5=待機、6=完了待機
@@ -593,6 +604,10 @@ function App() {
       r.posture = { euler: startPosture.euler, euler_tol: startPosture.euler_tol };
       if (startPosture.quat) r.posture.quat = startPosture.quat;
     }
+    if (ruleButtonEnabled) {
+      r.button_idx = parseInt(ruleButtonIdx, 10);
+      r.button_state = parseInt(ruleButtonState, 10);
+    }
     if (ruleMode === 'hold_start_end' && endPosture) {
       r.end_posture = { euler: endPosture.euler, euler_tol: endPosture.euler_tol };
       if (endPosture.quat) r.end_posture.quat = endPosture.quat;
@@ -615,6 +630,10 @@ function App() {
   const handleListRules  = () => sendCmd({ cmd: 'rule.list' });
   const handleClearRules = () => {
     if (!confirm('登録済みルールをすべて削除します。OK?')) return;
+    // 楽観的更新: FW 応答を待たずに UI 即時クリア (ack→rule.list の往復で遅延感あるため)
+    setRuleList([]);
+    setRuleReferences([]);
+    setClosestRuleIdx(-1);
     sendCmd({ cmd: 'rule.clear' });
   };
   const handleToggleWatch = () => {
@@ -657,6 +676,29 @@ function App() {
       .then((d) => { if (d && Array.isArray(d.profiles)) setSamples(d.profiles); })
       .catch(() => {});
   }, []);
+
+  // Hardware 定義を初回 fetch
+  useEffect(() => {
+    fetch('./hardware_profiles.json', { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d && d.hardware) setHardwareDefs(d.hardware); })
+      .catch(() => {});
+  }, []);
+
+  // device.info.board が来たら自動で hardware 選択
+  useEffect(() => {
+    if (deviceInfo?.board && hardwareDefs[deviceInfo.board]) {
+      setSelectedHardware(deviceInfo.board);
+    }
+  }, [deviceInfo?.board, hardwareDefs]);
+
+  // selectedHardware を localStorage 永続化
+  useEffect(() => {
+    localStorage.setItem('burst_motion_hardware', selectedHardware);
+  }, [selectedHardware]);
+
+  // 現在 Hardware の buttons 配列 (空配列なら定義未取得 or 該当機種なし)
+  const currentButtons = hardwareDefs[selectedHardware]?.buttons || [];
 
   // サンプル → ルール送信 → profile.save
   const handleSampleLoad = async (sample) => {
@@ -924,6 +966,33 @@ function App() {
           </label>
         </div>
 
+        <!-- Hardware 選択 (ボタン定義用) -->
+        ${Object.keys(hardwareDefs).length > 0 ? html`
+          <div class="flex items-center gap-2 mb-3 p-2 bg-slate-100 rounded text-xs">
+            <span class="font-semibold">⚙ Hardware:</span>
+            <select value=${selectedHardware}
+              onChange=${(e) => setSelectedHardware(e.target.value)}
+              class="border rounded px-2 py-0.5 text-xs">
+              ${Object.entries(hardwareDefs).map(([id, def]) => html`
+                <option value=${id}>${def.title} (${def.buttons?.length || 0} btn)</option>
+              `)}
+            </select>
+            ${currentButtons.length > 0 ? html`
+              <span class="text-slate-600">
+                利用可能ボタン:
+                ${currentButtons.map((b, i) => html`
+                  ${i > 0 ? ', ' : ''}<b>${b.name}</b> (idx=${b.idx}, GPIO ${b.gpio})
+                `)}
+              </span>
+            ` : null}
+            ${deviceInfo?.board && deviceInfo.board === selectedHardware ? html`
+              <span class="ml-auto text-emerald-700 font-semibold">✓ 接続中デバイスと一致</span>
+            ` : deviceInfo?.board ? html`
+              <span class="ml-auto text-amber-600">⚠ 接続中: ${deviceInfo.board}</span>
+            ` : null}
+          </div>
+        ` : null}
+
         <!-- 発火フラッシュ -->
         ${triggerFlash ? html`
           <div class="mb-3 p-2 bg-yellow-100 border border-yellow-400 rounded animate-pulse text-sm font-semibold text-yellow-800">
@@ -1010,6 +1079,49 @@ function App() {
                 ` : html`<span class="text-slate-400">未取得</span>`}
               </div>
             ` : null}
+          </div>
+
+          <!-- ボタン条件 (Hardware に応じて利用可能ボタンを提示) -->
+          <div class="border rounded p-2 bg-violet-50">
+            <div class="flex items-center justify-between mb-1">
+              <label class="flex items-center gap-1 text-xs font-semibold text-slate-600 cursor-pointer">
+                <input type="checkbox" checked=${ruleButtonEnabled}
+                  onChange=${(e) => setRuleButtonEnabled(e.target.checked)}
+                  disabled=${currentButtons.length === 0} />
+                ボタン条件 (任意)
+              </label>
+              <span class="text-xs text-slate-500">
+                Hardware: <b>${hardwareDefs[selectedHardware]?.title || selectedHardware}</b>
+              </span>
+            </div>
+            ${currentButtons.length === 0 ? html`
+              <div class="text-xs text-slate-400">
+                Hardware 定義が未取得 or ボタン定義なし
+              </div>
+            ` : html`
+              <div class="flex items-center gap-2 flex-wrap text-xs">
+                <span>ボタン:</span>
+                <select value=${ruleButtonIdx}
+                  onChange=${(e) => setRuleButtonIdx(parseInt(e.target.value, 10))}
+                  disabled=${!ruleButtonEnabled}
+                  class="border rounded px-1 py-0.5 disabled:opacity-40">
+                  ${currentButtons.map((b) => html`
+                    <option value=${b.idx}>
+                      idx=${b.idx} ${b.name} (GPIO ${b.gpio}, ${b.location})
+                    </option>
+                  `)}
+                </select>
+                <span>状態:</span>
+                <select value=${ruleButtonState}
+                  onChange=${(e) => setRuleButtonState(parseInt(e.target.value, 10))}
+                  disabled=${!ruleButtonEnabled}
+                  class="border rounded px-1 py-0.5 disabled:opacity-40">
+                  <option value="0">押下中</option>
+                  <option value="1">解放中</option>
+                  <option value="2">どちらでも</option>
+                </select>
+              </div>
+            `}
           </div>
 
           <!-- 出力アクション -->

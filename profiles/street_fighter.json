@@ -2,11 +2,14 @@
   "schema": "burst_motion_sample_v1",
   "id": "street_fighter",
   "title": "🥊 ストリートファイター 風",
-  "description": "右傾け→p (パンチ)、左傾け→k (キック)、振り下ろし (>3g)→h (ハードアタック)。本格的な波動拳/昇竜拳のシーケンス検出は将来の Phase 6+ で SEQUENCE 状態機械を活用。",
+  "description": "BtnA (M5 ロゴ、GPIO 37) を押しながら傾ける/振る → 攻撃。右傾け→p (パンチ)、左傾け→k (キック)、振り下ろし (>3g)→h (ハードアタック)。誤発火防止のためボタン押下中のみ動作。",
+  "hardware_required": ["m5stickc", "m5stickc_plus", "m5stickc_2"],
   "rules": [
     {
       "name": "punch",
       "ui_mode": "oneshot",
+      "button_idx": 1,
+      "button_state": 0,
       "posture": { "euler": [45, 0, 0], "euler_tol": [15, 180, 180] },
       "accel_abs_threshold": 1.8,
       "key": "p",
@@ -15,6 +18,8 @@
     {
       "name": "kick",
       "ui_mode": "oneshot",
+      "button_idx": 1,
+      "button_state": 0,
       "posture": { "euler": [-45, 0, 0], "euler_tol": [15, 180, 180] },
       "accel_abs_threshold": 1.8,
       "key": "k",
@@ -23,6 +28,8 @@
     {
       "name": "hard_attack",
       "ui_mode": "oneshot",
+      "button_idx": 1,
+      "button_state": 0,
       "accel_abs_threshold": 3.0,
       "key": "h",
       "cooldown_ms": 800

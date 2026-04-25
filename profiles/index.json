@@ -35,9 +35,9 @@
     },
     {
       "id": "street_fighter",
-      "title": "🥊 ストリートファイター 風",
-      "description": "右傾け+ボタンで P (パンチ)、左傾け+ボタンで K (キック)、振り下ろしで H (ハードアタック)",
-      "tags": ["game", "fighting"],
+      "title": "🥊 ストリートファイター 風 (要 BtnA)",
+      "description": "BtnA (GPIO 37) 押しながら → 右傾け P (パンチ) / 左傾け K (キック) / 振り下ろし H (ハード)",
+      "tags": ["game", "fighting", "button"],
       "rule_count": 3,
       "file": "street_fighter.json"
     }
