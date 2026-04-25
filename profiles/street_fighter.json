@@ -1,8 +1,8 @@
 {
   "schema": "burst_motion_sample_v1",
   "id": "street_fighter",
-  "title": "🥊 ストリートファイター 風",
-  "description": "Btn3 (G26) を押しながら傾ける/振る → 攻撃。右傾け→p (パンチ)、左傾け→k (キック)。ボタン押下瞬間の姿勢で lock → 400ms 以内に 1.8g 超の振りで発火。発火後 300ms cooldown で連発防止。姿勢なしルール (旧 hard_attack) は廃止 — 姿勢ありを推奨。",
+  "title": "🥊 ストリートファイター 風 (5 技セット)",
+  "description": "Btn3 (G26) を押しながら振る → 5 種類の格闘技コマンドを姿勢で使い分け。punch/kick (単発) と hadoken/shoryuken/tatsumaki (本格コマンド macro) を Roll/Pitch 2 軸で分散配置し、Closest-only + lock window で誤発火防止。",
   "hardware_required": ["m5stickc", "m5stickc_plus", "m5stickc_2"],
   "engine": {
     "closest_only": true,
@@ -15,7 +15,7 @@
       "ui_mode": "oneshot",
       "button_idx": 3,
       "button_state": 0,
-      "posture": { "euler": [45, 0, 0], "euler_tol": [15, 180, 180] },
+      "posture": { "euler": [45, 0, 0], "euler_tol": [15, 25, 180] },
       "accel_abs_threshold": 1.8,
       "key": "p",
       "cooldown_ms": 400
@@ -25,7 +25,7 @@
       "ui_mode": "oneshot",
       "button_idx": 3,
       "button_state": 0,
-      "posture": { "euler": [-45, 0, 0], "euler_tol": [15, 180, 180] },
+      "posture": { "euler": [-45, 0, 0], "euler_tol": [15, 25, 180] },
       "accel_abs_threshold": 1.8,
       "key": "k",
       "cooldown_ms": 400
@@ -35,11 +35,33 @@
       "ui_mode": "oneshot",
       "button_idx": 3,
       "button_state": 0,
-      "posture": { "euler": [173, -3, 0], "euler_tol": [15, 15, 180] },
-      "accel_abs_threshold": 1.5,
-      "keys": ["DOWN", "RIGHT", "a"],
+      "posture": { "euler": [0, -45, 0], "euler_tol": [25, 15, 180] },
+      "accel_abs_threshold": 2.0,
+      "keys": ["DOWN", "RIGHT", "p"],
       "interval_ms": 30,
       "cooldown_ms": 600
+    },
+    {
+      "name": "shoryuken",
+      "ui_mode": "oneshot",
+      "button_idx": 3,
+      "button_state": 0,
+      "posture": { "euler": [45, -30, 0], "euler_tol": [15, 15, 180] },
+      "accel_abs_threshold": 2.5,
+      "keys": ["RIGHT", "DOWN", "RIGHT", "p"],
+      "interval_ms": 30,
+      "cooldown_ms": 800
+    },
+    {
+      "name": "tatsumaki",
+      "ui_mode": "oneshot",
+      "button_idx": 3,
+      "button_state": 0,
+      "posture": { "euler": [-45, -30, 0], "euler_tol": [15, 15, 180] },
+      "accel_abs_threshold": 2.0,
+      "keys": ["DOWN", "LEFT", "k"],
+      "interval_ms": 30,
+      "cooldown_ms": 700
     }
   ]
 }

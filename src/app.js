@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-074153';
-import { BleClient }    from './lib/BleClient.js?v=20260426-074153';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-074153';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-074153';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-074153';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-074536';
+import { BleClient }    from './lib/BleClient.js?v=20260426-074536';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-074536';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-074536';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-074536';
 
 const html = htm.bind(h);
 
@@ -1629,6 +1629,12 @@ function App() {
               ${startPosture ? html`
                 <span class="font-mono text-cyan-700">R:${startPosture.euler[0].toFixed(0)} P:${startPosture.euler[1].toFixed(0)} Y:${startPosture.euler[2].toFixed(0)}</span>
                 <button onClick=${clearStartPosture} class="text-xs text-red-600 hover:underline">×</button>
+                ${Math.abs(startPosture.euler[1]) > 65 ? html`
+                  <span class="text-[11px] text-red-700 font-semibold bg-red-100 px-2 py-0.5 rounded border border-red-300"
+                        title="Pitch が ±65° を超えるとジンバルロック領域に入り、Mahony Euler 出力が不安定になります。Roll/Yaw が縮退してルール判定が機能しません。">
+                    ⚠ Pitch ${startPosture.euler[1].toFixed(0)}° はジンバルロック (>±65°) — Euler 判定不可
+                  </span>
+                ` : null}
               ` : html`<span class="text-slate-400">未取得 (Stream ON で取得可)</span>`}
             </div>
             ${ruleMode === 'hold_start_end' ? html`
@@ -1638,6 +1644,12 @@ function App() {
                 ${endPosture ? html`
                   <span class="font-mono text-orange-700">R:${endPosture.euler[0].toFixed(0)} P:${endPosture.euler[1].toFixed(0)} Y:${endPosture.euler[2].toFixed(0)}</span>
                   <button onClick=${clearEndPosture} class="text-xs text-red-600 hover:underline">×</button>
+                  ${Math.abs(endPosture.euler[1]) > 65 ? html`
+                    <span class="text-[11px] text-red-700 font-semibold bg-red-100 px-2 py-0.5 rounded border border-red-300"
+                          title="Pitch が ±65° を超えるとジンバルロック領域に入り、Euler 判定が不安定になります。">
+                      ⚠ Pitch ${endPosture.euler[1].toFixed(0)}° はジンバルロック (>±65°) — Euler 判定不可
+                    </span>
+                  ` : null}
                 ` : html`<span class="text-slate-400">未取得</span>`}
               </div>
             ` : null}
