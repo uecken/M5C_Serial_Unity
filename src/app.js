@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-064441';
-import { BleClient }    from './lib/BleClient.js?v=20260426-064441';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-064441';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-064441';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-064441';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-065938';
+import { BleClient }    from './lib/BleClient.js?v=20260426-065938';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-065938';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-065938';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-065938';
 
 const html = htm.bind(h);
 
@@ -790,6 +790,13 @@ function App() {
     setClosestRuleIdx(-1);
     sendCmd({ cmd: 'rule.clear' });
   };
+  const handleRemoveRule = (id, name) => {
+    if (!confirm(`ルール「${name}」(id=${id}) を削除します。OK?`)) return;
+    // 楽観的更新
+    setRuleList((prev) => prev.filter((r) => r.id !== id));
+    setRuleReferences((prev) => prev.filter((r) => r.id !== id));
+    sendCmd({ cmd: 'rule.remove', id });
+  };
   const handleToggleWatch = () => {
     const next = !watchEnabled;
     setWatchEnabled(next);
@@ -1503,6 +1510,7 @@ function App() {
                   <th class="px-2 py-1 text-left">Posture</th>
                   <th class="px-2 py-1 text-left">Accel</th>
                   <th class="px-2 py-1 text-left">Action</th>
+                  <th class="px-2 py-1 text-center"></th>
                 </tr>
               </thead>
               <tbody>
@@ -1541,6 +1549,12 @@ function App() {
                             <span class="ml-1">${r.action.keys.map(hidCodeToName).join(' ')}</span>
                           ` : html`<span class="ml-1 text-red-500">空!</span>`}
                         ` : '-'}
+                      </td>
+                      <td class="px-1 py-1 text-center">
+                        <button onClick=${() => handleRemoveRule(r.id, r.name)}
+                          disabled=${!connected}
+                          class="px-1.5 py-0.5 text-xs bg-red-200 hover:bg-red-400 hover:text-white rounded disabled:opacity-30"
+                          title="ルール ${r.name} (id=${r.id}) を削除">🗑</button>
                       </td>
                     </tr>
                   `;
