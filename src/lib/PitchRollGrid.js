@@ -11,6 +11,20 @@ export class PitchRollGrid {
     this.references = [];   // [{roll, pitch, name?}, ...]
     this.current = null;    // {roll, pitch}
     this.closest = null;    // 最近傍登録 index
+    this.firingIdx = -1;    // 発火フラッシュ中のルール index
+    this._firingTimer = null;
+  }
+
+  // 発火したルールを緑フラッシュ表示。durationMs 経過後に元に戻る
+  setFiring(idx, durationMs = 500) {
+    if (this._firingTimer) clearTimeout(this._firingTimer);
+    this.firingIdx = idx;
+    this.draw();
+    this._firingTimer = setTimeout(() => {
+      this.firingIdx = -1;
+      this._firingTimer = null;
+      this.draw();
+    }, durationMs);
   }
 
   setCurrent(roll, pitch) {
@@ -48,17 +62,37 @@ export class PitchRollGrid {
 
     this._drawGrid();
 
-    // 登録参照点 (橙)
+    // 登録参照点 (橙)、発火中=緑フラッシュ、最近傍=緑
     this.references.forEach((r, idx) => {
+      const isFiring = (this.firingIdx === idx);
       const isClosest = (this.closest === idx);
-      const color = isClosest ? '#10b981' : '#f97316';   // 緑 or 橙
-      const radius = isClosest ? 7 : 5;
+      let color, radius;
+      if (isFiring) {
+        // 発火フラッシュ: 鮮やかな緑 + 大きめ + 中央白丸でアクセント
+        color = '#22c55e';
+        radius = 11;
+      } else if (isClosest) {
+        color = '#10b981';
+        radius = 7;
+      } else {
+        color = '#f97316';
+        radius = 5;
+      }
       this._plotPoint(r.roll, r.pitch, color, radius);
+      if (isFiring) {
+        // 発火フラッシュの中央に白丸でアクセント
+        const px = this._rollToX(r.roll);
+        const py = this._pitchToY(r.pitch);
+        ctx.beginPath();
+        ctx.arc(px, py, 3, 0, 2 * Math.PI);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+      }
       if (r.name) {
         const px = this._rollToX(r.roll);
         const py = this._pitchToY(r.pitch);
-        ctx.fillStyle = '#475569';
-        ctx.font = '10px sans-serif';
+        ctx.fillStyle = isFiring ? '#15803d' : '#475569';
+        ctx.font = isFiring ? 'bold 11px sans-serif' : '10px sans-serif';
         ctx.fillText(r.name, px + 8, py - 4);
       }
     });

@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260425-234602';
-import { BleClient }    from './lib/BleClient.js?v=20260425-234602';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-234602';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-234602';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260425-234602';
+import { SerialClient } from './lib/SerialClient.js?v=20260425-234850';
+import { BleClient }    from './lib/BleClient.js?v=20260425-234850';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-234850';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-234850';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260425-234850';
 
 const html = htm.bind(h);
 
@@ -124,7 +124,11 @@ function App() {
 
   // ルール姿勢から計算した登録参照点
   const [ruleReferences, setRuleReferences] = useState([]);  // [{id, name, roll, pitch, yaw, qw, qx, qy, qz}]
+  const ruleReferencesRef = useRef([]);   // onTriggerHit など closure 経由で参照する用
   const [closestRuleIdx, setClosestRuleIdx] = useState(-1);
+
+  // ruleReferences を ref にも反映 (event handler の closure 内で最新を参照)
+  useEffect(() => { ruleReferencesRef.current = ruleReferences; }, [ruleReferences]);
 
   // Closest-only モード: FW 側で最近傍ルールだけ発火させる
   const [closestOnlyMode, setClosestOnlyMode] = useState(false);
@@ -444,6 +448,11 @@ function App() {
       setTriggerFlash({ id: d.id, name: d.rule_name, phase: d.phase, t: Date.now() });
       // 1 秒後にフラッシュを消す
       setTimeout(() => setTriggerFlash((cur) => cur && cur.t === d.t ? null : cur), 1000);
+      // 2D マップで該当ルール点を緑フラッシュ (500ms 後に元の色)
+      if (gridRef.current && d.phase === 'enter') {
+        const idx = ruleReferencesRef.current.findIndex((r) => r.id === d.id);
+        if (idx >= 0) gridRef.current.setFiring(idx, 500);
+      }
     };
     const onAck = (ev) => {
       const d = ev.detail;
