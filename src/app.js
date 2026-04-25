@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260425-234010';
-import { BleClient }    from './lib/BleClient.js?v=20260425-234010';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-234010';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-234010';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260425-234010';
+import { SerialClient } from './lib/SerialClient.js?v=20260425-234602';
+import { BleClient }    from './lib/BleClient.js?v=20260425-234602';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-234602';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-234602';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260425-234602';
 
 const html = htm.bind(h);
 
@@ -386,8 +386,20 @@ function App() {
       setDeviceInfo(null);
       setSensor(null);
     };
-    const onRaw = (ev) => addLog('rx', ev.detail);
-    const onSent = (ev) => addLog('tx', JSON.stringify(ev.detail));
+    // ノイズ除外: 自動ポーリングしている hw.buttons.get の送受信はログに出さない
+    //   (200ms 周期で 5/秒 流れてログを埋めるため)
+    //   ヘッダの 🔍 Test ボタンで明示送信した場合は除外できないが、
+    //   それ以外の hw.buttons は UI 表示のための裏通信なので隠す
+    const isNoiseTx = (obj) => obj?.cmd === 'hw.buttons.get';
+    const isNoiseRx = (line) => typeof line === 'string' && line.includes('"type":"hw.buttons"');
+    const onRaw = (ev) => {
+      if (isNoiseRx(ev.detail)) return;
+      addLog('rx', ev.detail);
+    };
+    const onSent = (ev) => {
+      if (isNoiseTx(ev.detail)) return;
+      addLog('tx', JSON.stringify(ev.detail));
+    };
     const onSensor = (ev) => {
       setSensor(ev.detail);
       // Stream タイミング統計
@@ -839,13 +851,14 @@ function App() {
     }
   }, [sensor?.btn, sensor?.t]);
 
-  // Stream OFF 時は 200ms 周期で hw.buttons.get をポーリング (ボタン状態を切らさない)
+  // Stream OFF 時は 500ms 周期で hw.buttons.get をポーリング (ボタン状態を切らさない)
+  // ログには出さない (onRaw/onSent でフィルタ)
   useEffect(() => {
     if (!connected || !activeClient) return;
     if (streamRate > 0) return;  // Stream ON なら sensor.btn から取得済
     const id = setInterval(() => {
       activeClient.send({ cmd: 'hw.buttons.get' }).catch(() => {});
-    }, 200);
+    }, 500);
     return () => clearInterval(id);
   }, [connected, streamRate]);
 
