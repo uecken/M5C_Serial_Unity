@@ -571,6 +571,32 @@ function App() {
       </div>
     </div>
 
+    <!-- FW 書込み (esp-web-tools) -->
+    <div class="mt-4 bg-white rounded-lg shadow-sm border border-slate-200 p-4">
+      <div class="flex justify-between items-center mb-3">
+        <h2 class="font-semibold">⚡ FW 書込み (Web から)</h2>
+        ${deviceInfo?.fw ? html`<span class="chip bg-green-100 text-green-700">現在: ${deviceInfo.fw}</span>` : null}
+      </div>
+      <p class="text-xs text-slate-500 mb-2">
+        esp-web-tools を使ってブラウザから直接 FW を書き込み。
+        ${connected ? '⚠️ 書込みには Serial 切断が必要 (上の「切断」ボタン押下後に Install)' : ''}
+      </p>
+      <div class="flex items-center gap-2 flex-wrap">
+        <esp-web-install-button manifest="./firmware/m5stickc-v2/manifest.json">
+          <button slot="activate" class="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg disabled:opacity-50">
+            ⚡ M5StickC v2 を書き込み
+          </button>
+          <span slot="unsupported" class="text-sm text-red-600">
+            このブラウザは WebSerial 非対応です。Chrome/Edge を使ってください。
+          </span>
+          <span slot="not-allowed" class="text-sm text-red-600">
+            HTTPS 環境でのみ動作します。
+          </span>
+        </esp-web-install-button>
+        <span class="text-xs text-slate-500 ml-2">manifest: <a href="./firmware/m5stickc-v2/manifest.json" class="underline">m5stickc-v2</a></span>
+      </div>
+    </div>
+
     <!-- プロファイル管理 -->
     <div class="mt-4 bg-white rounded-lg shadow-sm border border-slate-200 p-4">
       <div class="flex justify-between items-center mb-3">
