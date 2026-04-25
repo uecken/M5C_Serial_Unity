@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-074536';
-import { BleClient }    from './lib/BleClient.js?v=20260426-074536';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-074536';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-074536';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-074536';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-075610';
+import { BleClient }    from './lib/BleClient.js?v=20260426-075610';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-075610';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-075610';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-075610';
 
 const html = htm.bind(h);
 
@@ -781,11 +781,13 @@ function App() {
     }
     // キー入力 (単一 or 連続マクロ)
     if (ruleInputMode === 'macro' && ruleKeysList.trim()) {
-      const arr = ruleKeysList.split(/[\s,]+/).filter(Boolean);
+      // カンマ区切り (各カンマ要素はそのステップで押下中のキー集合、"+" 連結可)
+      // 例: "DOWN, DOWN+RIGHT, RIGHT, RIGHT+p"
+      const arr = ruleKeysList.split(',').map((s) => s.trim()).filter(Boolean);
       if (arr.length > 0) {
-        r.keys = arr;
+        // Phase 5.14: 同時押し macro 展開 ("+" を含む要素があれば prefix 配列に変換)
+        r.keys = expandKeySteps(arr);
         r.interval_ms = parseInt(ruleKeyInterval, 10) || 30;
-        // single 用 r.key は無視されるよう削除
         delete r.key;
       }
     } else if (ruleKey) {
@@ -996,6 +998,37 @@ function App() {
     return map[c] || `0x${c.toString(16).padStart(2, '0')}`;
   };
 
+  // 同時押し macro 形式の展開 (Phase 5.14)
+  // 入力: ["DOWN", "DOWN+RIGHT", "RIGHT", "RIGHT+p"]  (各ステップで押下中のキー集合)
+  // 出力: ["+DOWN", "+RIGHT", "-DOWN", "+p", "!"]    (FW 内部 prefix 形式)
+  // 1 要素に "+" を含まない単独キー (例: "p", "ARROW_RIGHT") は従来通り FIRE 扱い (押→離)。
+  // 1 要素でも "+" を含む同時押しを検出したら、全体を「キーセット遷移」として展開する。
+  const expandKeySteps = (keysInput) => {
+    if (!Array.isArray(keysInput)) return keysInput;
+    const hasComboStep = keysInput.some((s) => typeof s === 'string' && s.includes('+'));
+    if (!hasComboStep) return keysInput;  // 全部単独キー → 従来形式そのまま
+    const result = [];
+    let prev = new Set();
+    for (const step of keysInput) {
+      if (typeof step !== 'string') continue;
+      if (step === '!') {
+        // 明示的 release-all
+        for (const k of prev) result.push('-' + k);
+        prev = new Set();
+        continue;
+      }
+      const curr = new Set(step.split('+').map((s) => s.trim()).filter(Boolean));
+      // release: prev にあって curr にないキー
+      for (const k of prev) if (!curr.has(k)) result.push('-' + k);
+      // press: curr にあって prev にないキー
+      for (const k of curr) if (!prev.has(k)) result.push('+' + k);
+      prev = curr;
+    }
+    // 最後に残っているキーを全 release
+    if (prev.size > 0) result.push('!');
+    return result;
+  };
+
   // Euler [deg] → Quaternion [w,x,y,z] 変換 (ZYX 順、Mahony Filter / 一般的な航空規約)
   // サンプルプロファイルの posture.euler から quat を生成、rule.add に含める。
   // (FW 側で quat 未指定時は「現在の sensor quat」が使われてしまい、
@@ -1056,7 +1089,6 @@ function App() {
       for (let i = 0; i < data.rules.length; i++) {
         const r = { ...data.rules[i], id: baseId + i };
         // posture.euler から quat を計算して付加 (Closest-only 計算用)
-        // quat 未指定だと FW は現在 sensor quat を保存 → 全ルール同じ quat になり Closest-only が機能不全
         if (r.posture && Array.isArray(r.posture.euler) && !r.posture.quat) {
           r.posture = {
             ...r.posture,
@@ -1069,9 +1101,12 @@ function App() {
             quat: eulerToQuat(r.end_posture.euler[0], r.end_posture.euler[1], r.end_posture.euler[2]),
           };
         }
+        // Phase 5.14: 同時押し macro 展開 (例: "DOWN+RIGHT" → "+DOWN","+RIGHT" 等)
+        if (Array.isArray(r.keys)) {
+          r.keys = expandKeySteps(r.keys);
+        }
         setSampleStatus(`ルール ${i + 1}/${data.rules.length}: ${r.name}`);
         await activeClient.send({ cmd: 'rule.add', r });
-        // FW 側の処理を待つ余裕、軽い間隔
         await new Promise((res) => setTimeout(res, 50));
       }
 
@@ -1741,7 +1776,10 @@ function App() {
                   class="border rounded px-1 py-0.5 w-16 font-mono" /> ms
               </div>
               <div class="text-[10px] text-slate-500 mt-1">
-                カンマ/空白区切り。各キーを順次 press → ${ruleKeyInterval}ms 待機 → release。例: 波動拳 = "DOWN, RIGHT, P"
+                カンマ区切り。各要素はそのステップで押下中のキー集合 (<code>+</code> で同時押し連結)。
+                例:<br/>
+                ・単純順次: <code>DOWN, RIGHT, p</code> (各 press→release)<br/>
+                ・<b>同時押しコマンド</b>: <code>DOWN, DOWN+RIGHT, RIGHT, RIGHT+p</code> (差分自動 release/press、波動拳 ↓↘→P 風)
               </div>
             `}
           </div>

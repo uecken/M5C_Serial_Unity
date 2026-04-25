@@ -37,8 +37,8 @@
       "button_state": 0,
       "posture": { "euler": [0, -45, 0], "euler_tol": [25, 15, 180] },
       "accel_abs_threshold": 2.0,
-      "keys": ["DOWN", "RIGHT", "p"],
-      "interval_ms": 30,
+      "keys": ["DOWN", "DOWN+RIGHT", "RIGHT", "RIGHT+p"],
+      "interval_ms": 50,
       "cooldown_ms": 600
     },
     {
@@ -48,8 +48,8 @@
       "button_state": 0,
       "posture": { "euler": [45, -30, 0], "euler_tol": [15, 15, 180] },
       "accel_abs_threshold": 2.5,
-      "keys": ["RIGHT", "DOWN", "RIGHT", "p"],
-      "interval_ms": 30,
+      "keys": ["RIGHT", "DOWN", "DOWN+RIGHT", "RIGHT+p"],
+      "interval_ms": 50,
       "cooldown_ms": 800
     },
     {
@@ -59,8 +59,8 @@
       "button_state": 0,
       "posture": { "euler": [-45, -30, 0], "euler_tol": [15, 15, 180] },
       "accel_abs_threshold": 2.0,
-      "keys": ["DOWN", "LEFT", "k"],
-      "interval_ms": 30,
+      "keys": ["DOWN", "DOWN+LEFT", "LEFT", "LEFT+k"],
+      "interval_ms": 50,
       "cooldown_ms": 700
     }
   ]
