@@ -4,10 +4,10 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260425-213454';
-import { BleClient }    from './lib/BleClient.js?v=20260425-213454';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-213454';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-213454';
+import { SerialClient } from './lib/SerialClient.js?v=20260425-213828';
+import { BleClient }    from './lib/BleClient.js?v=20260425-213828';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-213828';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-213828';
 
 const html = htm.bind(h);
 
@@ -51,6 +51,13 @@ function App() {
   const [ruleKey, setRuleKey] = useState('a');
   const [ruleMode, setRuleMode] = useState('oneshot');
   const [ruleName, setRuleName] = useState('');
+  // HOLD_START_END で終了側に別キー (空なら同じキーを release のみ)
+  const [endKey, setEndKey] = useState('');
+  // 終了側の修飾キー
+  const [endModCtrl,  setEndModCtrl ] = useState(false);
+  const [endModShift, setEndModShift] = useState(false);
+  const [endModAlt,   setEndModAlt  ] = useState(false);
+  const [endModGui,   setEndModGui  ] = useState(false);
   const [ruleList, setRuleList] = useState([]);   // FW から取得した rule 一覧
   const [triggerFlash, setTriggerFlash] = useState(null);  // {id, phase, name, t}
   const [watchEnabled, setWatchEnabled] = useState(false);
@@ -584,6 +591,17 @@ function App() {
     if (ruleMode === 'hold_start_end' && endPosture) {
       r.end_posture = { euler: endPosture.euler, euler_tol: endPosture.euler_tol };
       if (endPosture.quat) r.end_posture.quat = endPosture.quat;
+      // 終了側に別キーが指定されていれば送る (空なら従来通り start key の release のみ)
+      if (endKey && endKey.length > 0) {
+        r.end_key = endKey[0];
+        let endMods = 0;
+        if (endModCtrl)  endMods |= 0x01;
+        if (endModShift) endMods |= 0x02;
+        if (endModAlt)   endMods |= 0x04;
+        if (endModGui)   endMods |= 0x08;
+        if (endMods > 0) r.end_modifiers = endMods;
+        r.end_duration_ms = 30;
+      }
     }
     const mods = buildModifiers();
     if (mods > 0) r.modifiers = mods;
@@ -939,7 +957,9 @@ function App() {
 
           <!-- 出力アクション -->
           <div class="border rounded p-2 bg-emerald-50">
-            <div class="text-xs font-semibold text-slate-600 mb-1">出力 HID キー</div>
+            <div class="text-xs font-semibold text-slate-600 mb-1">
+              出力 HID キー${ruleMode === 'hold_start_end' ? ' (開始姿勢で press → 終了姿勢で release)' : ''}
+            </div>
             <div class="flex items-center gap-1 mb-1 flex-wrap text-xs">
               <span>修飾:</span>
               <label class="flex items-center gap-0.5"><input type="checkbox" checked=${modCtrl} onChange=${(e)=>setModCtrl(e.target.checked)} />Ctrl</label>
@@ -956,6 +976,30 @@ function App() {
               </span>
             </div>
           </div>
+
+          ${ruleMode === 'hold_start_end' ? html`
+            <!-- 終了側 別キー (オプション) -->
+            <div class="border rounded p-2 bg-orange-50">
+              <div class="text-xs font-semibold text-slate-600 mb-1">
+                ＋ 終了姿勢時に追加発火するキー (任意、空なら start key の release のみ)
+              </div>
+              <div class="flex items-center gap-1 mb-1 flex-wrap text-xs">
+                <span>修飾:</span>
+                <label class="flex items-center gap-0.5"><input type="checkbox" checked=${endModCtrl}  onChange=${(e)=>setEndModCtrl(e.target.checked)} />Ctrl</label>
+                <label class="flex items-center gap-0.5"><input type="checkbox" checked=${endModShift} onChange=${(e)=>setEndModShift(e.target.checked)} />Shift</label>
+                <label class="flex items-center gap-0.5"><input type="checkbox" checked=${endModAlt}   onChange=${(e)=>setEndModAlt(e.target.checked)} />Alt</label>
+                <label class="flex items-center gap-0.5"><input type="checkbox" checked=${endModGui}   onChange=${(e)=>setEndModGui(e.target.checked)} />Win</label>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs">+ キー:</span>
+                <input type="text" value=${endKey} onInput=${(e) => setEndKey(e.target.value)}
+                  maxlength="1" placeholder="(空)" class="border rounded px-2 py-1 w-12 text-center font-mono" />
+                <span class="text-xs text-slate-500">
+                  ${endKey ? `${endModCtrl?'Ctrl+':''}${endModShift?'Shift+':''}${endModAlt?'Alt+':''}${endModGui?'Win+':''}${endKey} を 30ms FIRE_ONCE` : '— (release のみ)'}
+                </span>
+              </div>
+            </div>
+          ` : null}
 
           <!-- アクション -->
           <div class="flex gap-2 flex-wrap pt-1">
