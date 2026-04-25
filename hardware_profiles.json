@@ -10,7 +10,7 @@
       "buttons": [
         { "idx": 1, "name": "Btn1 (G0)",  "gpio": 0,  "active_low": true,  "pull_mode": 1, "location": "GPIO 0  (BOOT 兼用、SW で GND 落とし)", "default_label": "M5" },
         { "idx": 2, "name": "Btn2 (G36)", "gpio": 36, "active_low": false, "pull_mode": 0, "location": "GPIO 36 (input only、3.3V 入力で押下)", "default_label": "B" },
-        { "idx": 3, "name": "Btn3 (G26)", "gpio": 26, "active_low": false, "pull_mode": 1, "location": "GPIO 26 (3.3V ショートで押下、半 PD)", "default_label": "C" }
+        { "idx": 3, "name": "Btn3 (G26)", "gpio": 26, "active_low": true,  "pull_mode": 1, "location": "GPIO 26 (active_low + INPUT_PULLUP、SW で GND 落とし)", "default_label": "C" }
       ],
       "note": "レガシー motion_controller 互換 (G0/G36/G26)。FW デフォルト + NVS で永続化。Web UI から hw.buttons.set で変更可能。"
     },
@@ -22,7 +22,7 @@
       "buttons": [
         { "idx": 1, "name": "Btn1 (G0)",  "gpio": 0,  "active_low": true,  "pull_mode": 1, "location": "GPIO 0  (BOOT 兼用)", "default_label": "M5" },
         { "idx": 2, "name": "Btn2 (G36)", "gpio": 36, "active_low": false, "pull_mode": 0, "location": "GPIO 36 (input only)", "default_label": "B" },
-        { "idx": 3, "name": "Btn3 (G26)", "gpio": 26, "active_low": false, "pull_mode": 1, "location": "GPIO 26 (3.3V ショート)", "default_label": "C" }
+        { "idx": 3, "name": "Btn3 (G26)", "gpio": 26, "active_low": true,  "pull_mode": 1, "location": "GPIO 26 (active_low + PU)", "default_label": "C" }
       ],
       "note": "M5StickC レガシー互換。Plus 上面の GPIO 35 ボタンを使う場合は hw.buttons.set で変更。"
     },
@@ -34,7 +34,7 @@
       "buttons": [
         { "idx": 1, "name": "Btn1 (G0)",  "gpio": 0,  "active_low": true,  "pull_mode": 1, "location": "GPIO 0  (BOOT 兼用)", "default_label": "M5" },
         { "idx": 2, "name": "Btn2 (G36)", "gpio": 36, "active_low": false, "pull_mode": 0, "location": "GPIO 36 (input only)", "default_label": "B" },
-        { "idx": 3, "name": "Btn3 (G26)", "gpio": 26, "active_low": false, "pull_mode": 1, "location": "GPIO 26 (3.3V ショート)", "default_label": "C" }
+        { "idx": 3, "name": "Btn3 (G26)", "gpio": 26, "active_low": true,  "pull_mode": 1, "location": "GPIO 26 (active_low + PU)", "default_label": "C" }
       ]
     },
     "m5atom_s3": {
