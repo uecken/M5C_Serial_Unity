@@ -46,16 +46,34 @@ function App() {
   const [hidCountdown, setHidCountdown] = useState(0);  // 0 = idle, >0 = カウントダウン中
   // Rule editor 状態
   const [ruleAccelTh, setRuleAccelTh] = useState(2.5);
+  const [ruleAccelEnabled, setRuleAccelEnabled] = useState(true);
   const [ruleKey, setRuleKey] = useState('a');
   const [ruleMode, setRuleMode] = useState('oneshot');
+  const [ruleName, setRuleName] = useState('');
   const [ruleList, setRuleList] = useState([]);   // FW から取得した rule 一覧
   const [triggerFlash, setTriggerFlash] = useState(null);  // {id, phase, name, t}
   const [watchEnabled, setWatchEnabled] = useState(false);
+
+  // 姿勢キャプチャ (Euler [r,p,y]、tol [r,p,y])
+  const [startPosture, setStartPosture] = useState(null);   // {euler:[r,p,y], tol:[r,p,y]} | null
+  const [endPosture, setEndPosture] = useState(null);
+  const [postureTol, setPostureTol] = useState(15);   // ±degrees
+
+  // 修飾キー
+  const [modCtrl,  setModCtrl ] = useState(false);
+  const [modShift, setModShift] = useState(false);
+  const [modAlt,   setModAlt  ] = useState(false);
+  const [modGui,   setModGui  ] = useState(false);   // Win / Cmd
 
   // Profile 状態
   const [profileList, setProfileList] = useState([]);
   const [profileName, setProfileName] = useState('default');
   const [activeProfile, setActiveProfile] = useState('');
+
+  // 6 点キャリブ ウィザード
+  const [calib6Step, setCalib6Step] = useState(-1);  // -1=idle、0..5=待機、6=完了待機
+  const [calib6Instruction, setCalib6Instruction] = useState('');
+  const [calib6Result, setCalib6Result] = useState(null);
 
   const logRef = useRef(null);
   const canvasRef = useRef(null);
@@ -123,6 +141,17 @@ function App() {
       if (ev.detail.active) setActiveProfile(ev.detail.active);
     };
     const onProfileActive = (ev) => setActiveProfile(ev.detail.name || '');
+    const onCalibStep = (ev) => {
+      setCalib6Step(ev.detail.step);
+      setCalib6Instruction(ev.detail.instruction || '');
+    };
+    const onCalibAck = (ev) => {
+      const d = ev.detail;
+      if (d.cmd === 'calibrate.full.finish' && d.ok) {
+        setCalib6Result(d);
+        setCalib6Step(-1);
+      }
+    };
     const onTriggerHit = (ev) => {
       const d = ev.detail;
       setTriggerFlash({ id: d.id, name: d.rule_name, phase: d.phase, t: Date.now() });
@@ -153,6 +182,8 @@ function App() {
       c.addEventListener('type:ack', onAck);
       c.addEventListener('type:profile.list', onProfileList);
       c.addEventListener('type:profile.active', onProfileActive);
+      c.addEventListener('type:calibration.step', onCalibStep);
+      c.addEventListener('type:ack', onCalibAck);
     });
 
     return () => {
@@ -170,6 +201,8 @@ function App() {
         c.removeEventListener('type:ack', onAck);
         c.removeEventListener('type:profile.list', onProfileList);
         c.removeEventListener('type:profile.active', onProfileActive);
+        c.removeEventListener('type:calibration.step', onCalibStep);
+        c.removeEventListener('type:ack', onCalibAck);
       });
     };
   }, [addLog]);
@@ -244,8 +277,23 @@ function App() {
   };
   const handleBleStart = () => sendCmd({ cmd: 'ble.start' });
   const handleCalibrate = () => {
-    if (!confirm('キャリブレーション中は Controller を 1 秒間静止させてください。OK?')) return;
+    if (!confirm('簡易キャリブレーション (1秒静止) を実行します。OK?')) return;
     sendCmd({ cmd: 'calibrate.simple', duration_ms: 1000 });
+  };
+  // 6 点キャリブレーション
+  const handleCalib6Start = () => {
+    setCalib6Result(null);
+    sendCmd({ cmd: 'calibrate.full.start' });
+  };
+  const handleCalib6Capture = () => {
+    sendCmd({ cmd: 'calibrate.full.capture' });
+  };
+  const handleCalib6Finish = () => {
+    sendCmd({ cmd: 'calibrate.full.finish' });
+  };
+  const handleCalib6Cancel = () => {
+    sendCmd({ cmd: 'calibrate.full.cancel' });
+    setCalib6Step(-1);
   };
 
   // HID Test
@@ -290,19 +338,58 @@ function App() {
     if (hidTimerRef.current) clearInterval(hidTimerRef.current);
   }, []);
 
+  // 姿勢キャプチャ (現在の sensor から)
+  const captureStartPosture = () => {
+    if (!sensor) { alert('センサーストリーム ON にしてから姿勢を取得してください'); return; }
+    const tol = parseInt(postureTol) || 15;
+    setStartPosture({
+      euler: [sensor.roll, sensor.pitch, sensor.yaw],
+      euler_tol: [tol, tol, tol * 6]  // yaw は許容大きめ
+    });
+  };
+  const captureEndPosture = () => {
+    if (!sensor) { alert('センサーストリーム ON にしてから姿勢を取得してください'); return; }
+    const tol = parseInt(postureTol) || 15;
+    setEndPosture({
+      euler: [sensor.roll, sensor.pitch, sensor.yaw],
+      euler_tol: [tol, tol, tol * 6]
+    });
+  };
+  const clearStartPosture = () => setStartPosture(null);
+  const clearEndPosture   = () => setEndPosture(null);
+
+  // 修飾キービット (BleCombo の HID キーコード規約に近い形)
+  // bit0=Ctrl, bit1=Shift, bit2=Alt, bit3=GUI(Win)
+  const buildModifiers = () => {
+    let m = 0;
+    if (modCtrl)  m |= 0x01;
+    if (modShift) m |= 0x02;
+    if (modAlt)   m |= 0x04;
+    if (modGui)   m |= 0x08;
+    return m;
+  };
+
   // Rule
   const handleAddRule = () => {
-    sendCmd({
-      cmd: 'rule.add',
-      r: {
-        id: Date.now() & 0xffff,
-        name: `${ruleMode}_${ruleKey}`,
-        ui_mode: ruleMode,
-        accel_abs_threshold: parseFloat(ruleAccelTh),
-        key: ruleKey,
-        cooldown_ms: 500,
-      },
-    });
+    const r = {
+      id: Date.now() & 0xffff,
+      name: ruleName || `${ruleMode}_${ruleKey}`,
+      ui_mode: ruleMode,
+      key: ruleKey,
+      cooldown_ms: 500,
+    };
+    if (ruleAccelEnabled && parseFloat(ruleAccelTh) > 0) {
+      r.accel_abs_threshold = parseFloat(ruleAccelTh);
+    }
+    if (startPosture) {
+      r.posture = { euler: startPosture.euler, euler_tol: startPosture.euler_tol };
+    }
+    if (ruleMode === 'hold_start_end' && endPosture) {
+      r.end_posture = { euler: endPosture.euler, euler_tol: endPosture.euler_tol };
+    }
+    const mods = buildModifiers();
+    if (mods > 0) r.modifiers = mods;
+    sendCmd({ cmd: 'rule.add', r });
   };
   const handleListRules  = () => sendCmd({ cmd: 'rule.list' });
   const handleClearRules = () => {
@@ -546,29 +633,144 @@ function App() {
         ` : html`<p class="text-xs text-slate-400 mb-2">未登録 — 下のフォームから追加</p>`}
 
         <!-- 追加フォーム -->
-        <div class="border-t pt-2 mt-2">
-          <div class="flex items-center gap-2 mb-2 flex-wrap">
+        <div class="border-t pt-2 mt-2 space-y-2">
+          <div class="flex items-center gap-2 flex-wrap">
+            <label class="text-sm">名前:</label>
+            <input type="text" value=${ruleName} onInput=${(e) => setRuleName(e.target.value)}
+              placeholder="(自動)" class="border rounded px-2 py-1 text-sm flex-1 max-w-32" />
             <label class="text-sm">モード:</label>
             <select value=${ruleMode} onChange=${(e) => setRuleMode(e.target.value)} class="border rounded px-2 py-1 text-sm">
-              <option value="oneshot">ONESHOT</option>
-              <option value="hold_start_only">HOLD_START_ONLY</option>
+              <option value="oneshot">ONESHOT (1発)</option>
+              <option value="hold_start_only">HOLD_START_ONLY (押下保持)</option>
+              <option value="hold_start_end">HOLD_START_END (開始/終了 別姿勢)</option>
             </select>
           </div>
-          <div class="flex items-center gap-2 mb-2 flex-wrap">
-            <label class="text-sm">加速度 ≥</label>
-            <input type="number" min="0.5" max="10" step="0.1" value=${ruleAccelTh}
-              onInput=${(e) => setRuleAccelTh(e.target.value)} class="border rounded px-2 py-1 w-16 font-mono text-sm" />
-            <span class="text-sm">g  →  キー:</span>
-            <input type="text" value=${ruleKey} onInput=${(e) => setRuleKey(e.target.value)}
-              maxlength="1" class="border rounded px-2 py-1 w-12 text-center font-mono" />
+
+          <!-- 加速度トリガ -->
+          <div class="flex items-center gap-2 flex-wrap">
+            <label class="text-sm flex items-center gap-1">
+              <input type="checkbox" checked=${ruleAccelEnabled} onChange=${(e) => setRuleAccelEnabled(e.target.checked)} />
+              加速度 ≥
+            </label>
+            <input type="number" min="0" max="10" step="0.1" value=${ruleAccelTh}
+              disabled=${!ruleAccelEnabled}
+              onInput=${(e) => setRuleAccelTh(e.target.value)} class="border rounded px-2 py-1 w-16 font-mono text-sm disabled:opacity-40" />
+            <span class="text-sm">g</span>
           </div>
-          <div class="flex gap-2 flex-wrap">
-            <button onClick=${handleAddRule} disabled=${!connected} class="px-3 py-1 text-sm bg-emerald-200 hover:bg-emerald-300 rounded disabled:opacity-40">+ Add</button>
-            <button onClick=${handleListRules} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 rounded disabled:opacity-40">Refresh</button>
-            <button onClick=${handleClearRules} disabled=${!connected || ruleList.length === 0} class="px-3 py-1 text-sm bg-red-200 hover:bg-red-300 rounded disabled:opacity-40">Clear All</button>
+
+          <!-- 姿勢トリガ -->
+          <div class="border rounded p-2 bg-slate-50">
+            <div class="text-xs font-semibold text-slate-600 mb-1">姿勢条件 (任意)</div>
+            <div class="flex items-center gap-2 mb-1 flex-wrap">
+              <span class="text-xs">許容 ±</span>
+              <input type="number" min="5" max="90" step="5" value=${postureTol}
+                onInput=${(e) => setPostureTol(e.target.value)} class="border rounded px-1 py-0.5 w-12 font-mono text-xs" />
+              <span class="text-xs">°</span>
+            </div>
+            <div class="flex items-center gap-2 mb-1 flex-wrap text-xs">
+              <button onClick=${captureStartPosture} disabled=${!connected || !sensor}
+                class="px-2 py-0.5 bg-cyan-200 hover:bg-cyan-300 rounded disabled:opacity-40">📷 開始姿勢</button>
+              ${startPosture ? html`
+                <span class="font-mono text-cyan-700">R:${startPosture.euler[0].toFixed(0)} P:${startPosture.euler[1].toFixed(0)} Y:${startPosture.euler[2].toFixed(0)}</span>
+                <button onClick=${clearStartPosture} class="text-xs text-red-600 hover:underline">×</button>
+              ` : html`<span class="text-slate-400">未取得 (Stream ON で取得可)</span>`}
+            </div>
+            ${ruleMode === 'hold_start_end' ? html`
+              <div class="flex items-center gap-2 flex-wrap text-xs">
+                <button onClick=${captureEndPosture} disabled=${!connected || !sensor}
+                  class="px-2 py-0.5 bg-orange-200 hover:bg-orange-300 rounded disabled:opacity-40">📷 終了姿勢</button>
+                ${endPosture ? html`
+                  <span class="font-mono text-orange-700">R:${endPosture.euler[0].toFixed(0)} P:${endPosture.euler[1].toFixed(0)} Y:${endPosture.euler[2].toFixed(0)}</span>
+                  <button onClick=${clearEndPosture} class="text-xs text-red-600 hover:underline">×</button>
+                ` : html`<span class="text-slate-400">未取得</span>`}
+              </div>
+            ` : null}
+          </div>
+
+          <!-- 出力アクション -->
+          <div class="border rounded p-2 bg-emerald-50">
+            <div class="text-xs font-semibold text-slate-600 mb-1">出力 HID キー</div>
+            <div class="flex items-center gap-1 mb-1 flex-wrap text-xs">
+              <span>修飾:</span>
+              <label class="flex items-center gap-0.5"><input type="checkbox" checked=${modCtrl} onChange=${(e)=>setModCtrl(e.target.checked)} />Ctrl</label>
+              <label class="flex items-center gap-0.5"><input type="checkbox" checked=${modShift} onChange=${(e)=>setModShift(e.target.checked)} />Shift</label>
+              <label class="flex items-center gap-0.5"><input type="checkbox" checked=${modAlt} onChange=${(e)=>setModAlt(e.target.checked)} />Alt</label>
+              <label class="flex items-center gap-0.5"><input type="checkbox" checked=${modGui} onChange=${(e)=>setModGui(e.target.checked)} />Win</label>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs">+ キー:</span>
+              <input type="text" value=${ruleKey} onInput=${(e) => setRuleKey(e.target.value)}
+                maxlength="1" class="border rounded px-2 py-1 w-12 text-center font-mono" />
+              <span class="text-xs text-slate-500">
+                ${modCtrl?'Ctrl+':''}${modShift?'Shift+':''}${modAlt?'Alt+':''}${modGui?'Win+':''}${ruleKey}
+              </span>
+            </div>
+          </div>
+
+          <!-- アクション -->
+          <div class="flex gap-2 flex-wrap pt-1">
+            <button onClick=${handleAddRule} disabled=${!connected}
+              class="px-3 py-1 text-sm bg-emerald-200 hover:bg-emerald-300 rounded disabled:opacity-40 font-semibold">
+              ✚ ルール追加
+            </button>
+            <button onClick=${handleListRules} disabled=${!connected}
+              class="px-3 py-1 text-sm bg-slate-200 rounded disabled:opacity-40">↻</button>
+            <button onClick=${handleClearRules} disabled=${!connected || ruleList.length === 0}
+              class="px-3 py-1 text-sm bg-red-200 hover:bg-red-300 rounded disabled:opacity-40">Clear All</button>
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- 6 点キャリブレーション ウィザード -->
+    <div class="mt-4 bg-white rounded-lg shadow-sm border border-slate-200 p-4">
+      <div class="flex justify-between items-center mb-2">
+        <h2 class="font-semibold">🎯 加速度キャリブレーション</h2>
+      </div>
+      <p class="text-xs text-slate-500 mb-2">
+        簡易: 1秒静止で gyro bias 補正 (起動時自動実行済み)<br/>
+        フル 6 点: 各面に向けて 6 回キャプチャ、accel bias + scale 補正
+      </p>
+
+      ${calib6Step < 0 ? html`
+        <div class="flex gap-2 flex-wrap">
+          <button onClick=${handleCalibrate} disabled=${!connected}
+            class="px-3 py-1 text-sm bg-orange-200 hover:bg-orange-300 rounded disabled:opacity-40">
+            ⚡ 簡易キャリブ (1秒)
+          </button>
+          <button onClick=${handleCalib6Start} disabled=${!connected}
+            class="px-3 py-1 text-sm bg-purple-200 hover:bg-purple-300 rounded disabled:opacity-40">
+            🎯 フル 6 点キャリブ 開始
+          </button>
+          ${calib6Result ? html`
+            <span class="text-xs text-emerald-700 font-mono">
+              ✅ accel_bias=[${calib6Result.accel_bias_ms2?.map(v => v.toFixed(3)).join(', ')}] scale=[${calib6Result.accel_scale?.map(v => v.toFixed(3)).join(', ')}]
+            </span>
+          ` : null}
+        </div>
+      ` : html`
+        <div class="border-2 border-purple-400 rounded p-3 bg-purple-50">
+          <div class="flex justify-between items-center mb-2">
+            <span class="font-semibold text-purple-700">ステップ ${Math.min(calib6Step+1, 6)}/6</span>
+            <button onClick=${handleCalib6Cancel} class="text-xs text-red-600 hover:underline">✕ キャンセル</button>
+          </div>
+          <div class="text-sm font-semibold mb-2">${calib6Instruction || '...'}</div>
+          ${sensor ? html`
+            <div class="text-xs font-mono text-slate-500 mb-2">
+              現在: ax=${sensor.ax?.toFixed(2)} ay=${sensor.ay?.toFixed(2)} az=${sensor.az?.toFixed(2)}
+            </div>
+          ` : html`<div class="text-xs text-amber-600 mb-2">⚠ Stream ON にしてください</div>`}
+          ${calib6Step < 6 ? html`
+            <button onClick=${handleCalib6Capture} class="px-3 py-1 text-sm bg-emerald-300 hover:bg-emerald-400 rounded font-semibold">
+              📷 静止して キャプチャ
+            </button>
+          ` : html`
+            <button onClick=${handleCalib6Finish} class="px-3 py-1 text-sm bg-blue-300 hover:bg-blue-400 rounded font-semibold">
+              ✅ 計算 + 適用
+            </button>
+          `}
+        </div>
+      `}
     </div>
 
     <!-- FW 書込み (esp-web-tools) -->
