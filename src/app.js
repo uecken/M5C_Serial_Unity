@@ -42,6 +42,8 @@ function App() {
   // HID test 状態
   const [testKey, setTestKey] = useState('a');
   const [testText, setTestText] = useState('Hello');
+  const [hidDelayMs, setHidDelayMs] = useState(1000);
+  const [hidCountdown, setHidCountdown] = useState(0);  // 0 = idle, >0 = カウントダウン中
   // Rule editor 状態
   const [ruleAccelTh, setRuleAccelTh] = useState(2.5);
   const [ruleKey, setRuleKey] = useState('a');
@@ -50,6 +52,7 @@ function App() {
   const logRef = useRef(null);
   const canvasRef = useRef(null);
   const viewerRef = useRef(null);
+  const hidTimerRef = useRef(null);
 
   // 3D viewer 初期化
   useEffect(() => {
@@ -205,8 +208,44 @@ function App() {
     sendCmd({ cmd: 'calibrate.simple', duration_ms: 1000 });
   };
 
-  // HID Test
-  const hidTest = (action, extra = {}) => sendCmd({ cmd: 'test.hid', action, ...extra });
+  // HID Test (遅延付き、メモ帳などにフォーカス移す時間を確保)
+  const hidTest = (action, extra = {}) => {
+    // 既に走ってるカウントダウンがあればキャンセル
+    if (hidTimerRef.current) {
+      clearInterval(hidTimerRef.current);
+      hidTimerRef.current = null;
+    }
+    const delay = parseInt(hidDelayMs) || 0;
+    if (delay <= 0) {
+      sendCmd({ cmd: 'test.hid', action, ...extra });
+      return;
+    }
+    // カウントダウン開始
+    setHidCountdown(delay);
+    const startTime = Date.now();
+    hidTimerRef.current = setInterval(() => {
+      const remaining = Math.max(0, delay - (Date.now() - startTime));
+      setHidCountdown(remaining);
+      if (remaining <= 0) {
+        clearInterval(hidTimerRef.current);
+        hidTimerRef.current = null;
+        setHidCountdown(0);
+        sendCmd({ cmd: 'test.hid', action, ...extra });
+      }
+    }, 50);
+  };
+  const hidTestCancel = () => {
+    if (hidTimerRef.current) {
+      clearInterval(hidTimerRef.current);
+      hidTimerRef.current = null;
+    }
+    setHidCountdown(0);
+  };
+
+  // unmount 時にタイマークリア
+  useEffect(() => () => {
+    if (hidTimerRef.current) clearInterval(hidTimerRef.current);
+  }, []);
 
   // Rule
   const handleAddRule = () => {
@@ -340,12 +379,29 @@ function App() {
       <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4">
         <h2 class="font-semibold mb-3">🧪 HID 直接テスト</h2>
         <p class="text-xs text-slate-500 mb-2">事前に「BLE Start」を押し、PC で Burst Motion をペアリング</p>
+
+        <!-- 遅延設定 -->
+        <div class="flex items-center gap-2 mb-3 p-2 bg-amber-50 rounded">
+          <label class="text-sm font-semibold">⏱ 送信遅延:</label>
+          <input type="number" min="0" max="10000" step="100" value=${hidDelayMs}
+            onInput=${(e) => setHidDelayMs(e.target.value)}
+            class="border rounded px-2 py-1 w-20 font-mono text-sm" />
+          <span class="text-xs text-slate-500">ms (押下後この時間待ってから送信、メモ帳等にフォーカス移動用)</span>
+        </div>
+
+        ${hidCountdown > 0 ? html`
+          <div class="mb-3 p-2 bg-orange-100 border border-orange-300 rounded flex items-center justify-between">
+            <span class="text-sm font-semibold text-orange-700">🚀 ${(hidCountdown/1000).toFixed(1)}秒後に送信</span>
+            <button onClick=${hidTestCancel} class="px-2 py-0.5 text-xs bg-red-300 hover:bg-red-400 rounded">キャンセル</button>
+          </div>
+        ` : null}
+
         <div class="flex items-center gap-2 mb-2">
           <label class="text-sm">キー:</label>
           <input type="text" value=${testKey} onInput=${(e) => setTestKey(e.target.value)}
             maxlength="1" class="border rounded px-2 py-1 w-12 text-center font-mono" />
           <button onClick=${() => hidTest('fire', { key: testKey })}
-            disabled=${!connected} class="px-3 py-1 text-sm bg-blue-200 hover:bg-blue-300 rounded disabled:opacity-40">
+            disabled=${!connected || hidCountdown > 0} class="px-3 py-1 text-sm bg-blue-200 hover:bg-blue-300 rounded disabled:opacity-40">
             Press '${testKey}'
           </button>
         </div>
@@ -354,14 +410,14 @@ function App() {
           <input type="text" value=${testText} onInput=${(e) => setTestText(e.target.value)}
             class="border rounded px-2 py-1 flex-1 font-mono text-sm" />
           <button onClick=${() => hidTest('text', { text: testText })}
-            disabled=${!connected} class="px-3 py-1 text-sm bg-blue-200 hover:bg-blue-300 rounded disabled:opacity-40">
+            disabled=${!connected || hidCountdown > 0} class="px-3 py-1 text-sm bg-blue-200 hover:bg-blue-300 rounded disabled:opacity-40">
             Type
           </button>
         </div>
         <div class="flex gap-2 flex-wrap">
-          <button onClick=${() => hidTest('mouse_move', { dx: 50, dy: 0 })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 rounded disabled:opacity-40">→ Mouse 50,0</button>
-          <button onClick=${() => hidTest('mouse_move', { dx: -50, dy: 0 })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 rounded disabled:opacity-40">← Mouse -50,0</button>
-          <button onClick=${() => hidTest('mouse_click', { button: 'left' })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 rounded disabled:opacity-40">Click</button>
+          <button onClick=${() => hidTest('mouse_move', { dx: 50, dy: 0 })} disabled=${!connected || hidCountdown > 0} class="px-3 py-1 text-sm bg-slate-200 rounded disabled:opacity-40">→ Mouse 50,0</button>
+          <button onClick=${() => hidTest('mouse_move', { dx: -50, dy: 0 })} disabled=${!connected || hidCountdown > 0} class="px-3 py-1 text-sm bg-slate-200 rounded disabled:opacity-40">← Mouse -50,0</button>
+          <button onClick=${() => hidTest('mouse_click', { button: 'left' })} disabled=${!connected || hidCountdown > 0} class="px-3 py-1 text-sm bg-slate-200 rounded disabled:opacity-40">Click</button>
         </div>
       </div>
 
