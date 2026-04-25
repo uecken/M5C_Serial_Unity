@@ -75,6 +75,12 @@ function App() {
   const [calib6Instruction, setCalib6Instruction] = useState('');
   const [calib6Result, setCalib6Result] = useState(null);
 
+  // Stream タイミング debug
+  const [streamGaps, setStreamGaps] = useState([]);  // 直近 100 サンプルの ms gap
+  const [streamStats, setStreamStats] = useState({ count: 0, avg: 0, min: 0, max: 0, p95: 0 });
+  const lastStreamTRef = useRef(null);   // 直近の receive 時刻 (performance.now)
+  const lastFwTRef = useRef(null);       // 直近の sensor.t (FW 側 timestamp)
+
   const logRef = useRef(null);
   const canvasRef = useRef(null);
   const viewerRef = useRef(null);
@@ -131,7 +137,25 @@ function App() {
     };
     const onRaw = (ev) => addLog('rx', ev.detail);
     const onSent = (ev) => addLog('tx', JSON.stringify(ev.detail));
-    const onSensor = (ev) => setSensor(ev.detail);
+    const onSensor = (ev) => {
+      setSensor(ev.detail);
+      // Stream タイミング統計
+      const now = performance.now();
+      const fwT = ev.detail.t;
+      const last = lastStreamTRef.current;
+      const lastFw = lastFwTRef.current;
+      lastStreamTRef.current = now;
+      lastFwTRef.current = fwT;
+      if (last !== null && lastFw !== null) {
+        const browserGap = now - last;       // ブラウザ受信 gap
+        const fwGap = fwT - lastFw;          // FW timestamp 差 (本来 ~20ms @50Hz)
+        setStreamGaps((prev) => {
+          const next = [...prev, { fw: fwGap, browser: browserGap }];
+          if (next.length > 100) next.splice(0, next.length - 100);
+          return next;
+        });
+      }
+    };
     const onDevInfo = (ev) => setDeviceInfo(ev.detail);
     const onPong = (ev) => setDeviceInfo((prev) => ({ ...prev, ...ev.detail }));
 
@@ -228,6 +252,27 @@ function App() {
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [log]);
+
+  // streamGaps が更新されたら統計再計算
+  useEffect(() => {
+    if (streamGaps.length === 0) return;
+    const fwGaps = streamGaps.map((g) => g.fw).filter((v) => v > 0 && v < 1000);
+    if (fwGaps.length === 0) return;
+    const sorted = [...fwGaps].sort((a, b) => a - b);
+    const sum = fwGaps.reduce((a, b) => a + b, 0);
+    setStreamStats({
+      count: fwGaps.length,
+      avg: sum / fwGaps.length,
+      min: sorted[0],
+      max: sorted[sorted.length - 1],
+      p95: sorted[Math.floor(sorted.length * 0.95)],
+    });
+  }, [streamGaps]);
+
+  const handleClearStreamStats = () => {
+    setStreamGaps([]);
+    setStreamStats({ count: 0, avg: 0, min: 0, max: 0, p95: 0 });
+  };
 
   const handleConnect = async () => {
     try {
@@ -721,6 +766,56 @@ function App() {
         </div>
       </div>
     </div>
+
+    <!-- Stream Debug -->
+    ${streamGaps.length > 0 || streamRate > 0 ? html`
+      <div class="mt-4 bg-white rounded-lg shadow-sm border border-slate-200 p-4">
+        <div class="flex justify-between items-center mb-2">
+          <h2 class="font-semibold">⏱ Stream タイミング (FW timestamp 差)</h2>
+          <button onClick=${handleClearStreamStats} class="text-xs text-slate-400 hover:text-slate-700">Clear</button>
+        </div>
+        <p class="text-xs text-slate-500 mb-2">
+          50Hz Stream の理想 gap = 20ms。大きい値が頻発するとフリーズ気味。
+          差は <code>sensor.t</code> 同士なので、ブラウザ受信遅延ではなく FW 内部の delay。
+        </p>
+        ${streamStats.count > 0 ? html`
+          <div class="grid grid-cols-5 gap-2 text-sm font-mono mb-2">
+            <div class="bg-slate-50 rounded p-2 text-center">
+              <div class="text-xs text-slate-500">サンプル数</div>
+              <div class="font-bold">${streamStats.count}</div>
+            </div>
+            <div class="bg-slate-50 rounded p-2 text-center">
+              <div class="text-xs text-slate-500">avg</div>
+              <div class="font-bold">${streamStats.avg.toFixed(1)} ms</div>
+            </div>
+            <div class="bg-emerald-50 rounded p-2 text-center">
+              <div class="text-xs text-slate-500">min</div>
+              <div class="font-bold">${streamStats.min.toFixed(0)} ms</div>
+            </div>
+            <div class="bg-yellow-50 rounded p-2 text-center">
+              <div class="text-xs text-slate-500">p95</div>
+              <div class="font-bold ${streamStats.p95 > 50 ? 'text-amber-700' : ''}">${streamStats.p95.toFixed(0)} ms</div>
+            </div>
+            <div class="bg-red-50 rounded p-2 text-center">
+              <div class="text-xs text-slate-500">max</div>
+              <div class="font-bold ${streamStats.max > 100 ? 'text-red-700' : ''}">${streamStats.max.toFixed(0)} ms</div>
+            </div>
+          </div>
+          <!-- ヒストグラム (簡易): 直近 100 サンプルを bar chart 風に表示 -->
+          <div class="flex items-end gap-px h-12 bg-slate-100 rounded p-1" style="overflow-x:auto;">
+            ${streamGaps.slice(-100).map((g) => {
+              const v = g.fw;
+              const h = Math.min(100, (v / 100) * 100);  // 100ms = 100% bar
+              const color = v < 25 ? '#10b981' : v < 50 ? '#fbbf24' : v < 100 ? '#f97316' : '#ef4444';
+              return html`<div style="width:4px; height:${h}%; background:${color}; flex-shrink:0;" title=${`${v.toFixed(1)}ms`}></div>`;
+            })}
+          </div>
+          <div class="text-xs text-slate-400 mt-1">
+            色: 🟢&lt;25ms (理想 ~20)  🟡 25-50ms  🟠 50-100ms (LCD 干渉?)  🔴 &gt;100ms (停滞)
+          </div>
+        ` : html`<p class="text-sm text-slate-400">Stream ON にすると統計取得開始</p>`}
+      </div>
+    ` : null}
 
     <!-- 6 点キャリブレーション ウィザード -->
     <div class="mt-4 bg-white rounded-lg shadow-sm border border-slate-200 p-4">
