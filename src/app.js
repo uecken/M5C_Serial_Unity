@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-001038';
-import { BleClient }    from './lib/BleClient.js?v=20260426-001038';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-001038';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-001038';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-001038';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-001319';
+import { BleClient }    from './lib/BleClient.js?v=20260426-001319';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-001319';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-001319';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-001319';
 
 const html = htm.bind(h);
 
@@ -598,6 +598,7 @@ function App() {
     setStreamRate(next);
   };
   const handleBleStart = () => sendCmd({ cmd: 'ble.start' });
+  const handleBleStop  = () => sendCmd({ cmd: 'ble.stop' });
   const handleCalibrate = () => {
     if (!confirm('簡易キャリブレーション (1秒静止) を実行します。OK?')) return;
     sendCmd({ cmd: 'calibrate.simple', duration_ms: 1000 });
@@ -1150,6 +1151,7 @@ function App() {
           <button onClick=${handlePing} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">Ping</button>
           <button onClick=${handleDeviceInfo} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">Info</button>
           <button onClick=${handleBleStart} disabled=${!connected} class="px-3 py-1 text-sm bg-purple-200 hover:bg-purple-300 rounded disabled:opacity-40">BLE Start</button>
+          <button onClick=${handleBleStop} disabled=${!connected} class="px-3 py-1 text-sm bg-rose-200 hover:bg-rose-300 rounded disabled:opacity-40">BLE Stop</button>
           <button onClick=${handleCalibrate} disabled=${!connected} class="px-3 py-1 text-sm bg-orange-200 hover:bg-orange-300 rounded disabled:opacity-40">Calibrate</button>
           <button onClick=${handleStreamToggle} disabled=${!connected} class="px-3 py-1 text-sm bg-emerald-200 hover:bg-emerald-300 rounded disabled:opacity-40">
             ${streamRate === 0 ? 'Stream ON' : 'Stream OFF'}
