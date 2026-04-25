@@ -3,6 +3,11 @@
   "id": "media_remote",
   "title": "🎵 メディアリモコン",
   "description": "右傾け→k (再生/一時停止)、上傾け (前)→j (10秒戻し)、下傾け (後)→l (10秒進み)。YouTube / VLC のキーバインドに準拠。",
+  "engine": {
+    "closest_only": false,
+    "button_lock_window_ms": 500,
+    "cooldown_ms": 600
+  },
   "rules": [
     {
       "name": "play_pause",

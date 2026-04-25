@@ -3,6 +3,11 @@
   "id": "fps_wasd",
   "title": "🎮 FPS WASD (傾け移動)",
   "description": "前傾→W (前進)、後傾→S (後退)、左傾→A、右傾→D を傾けてる間ずっと押下継続 (HOLD_START_ONLY)。振って→Space (ジャンプ)。",
+  "engine": {
+    "closest_only": false,
+    "button_lock_window_ms": 300,
+    "cooldown_ms": 0
+  },
   "rules": [
     {
       "name": "move_forward",

@@ -3,6 +3,11 @@
   "id": "presentation",
   "title": "🎤 プレゼンテーション",
   "description": "右傾け→次ページ (n)、左傾け→前ページ (p)、振って→ポインタ切替 (b)。本来は矢印キーが望ましいが ASCII 互換のため n/p で代用 (Keynote/PowerPoint で n が次スライド)。",
+  "engine": {
+    "closest_only": false,
+    "button_lock_window_ms": 500,
+    "cooldown_ms": 800
+  },
   "rules": [
     {
       "name": "next_slide",

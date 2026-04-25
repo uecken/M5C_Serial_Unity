@@ -4,10 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260425-231108';
-import { BleClient }    from './lib/BleClient.js?v=20260425-231108';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-231108';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-231108';
+import { SerialClient } from './lib/SerialClient.js?v=20260425-232348';
+import { BleClient }    from './lib/BleClient.js?v=20260425-232348';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-232348';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-232348';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260425-232348';
 
 const html = htm.bind(h);
 
@@ -111,6 +112,10 @@ function App() {
   const gridCanvasRef = useRef(null);
   const gridRef = useRef(null);
   const hidTimerRef = useRef(null);
+  const accelChartCanvasRef = useRef(null);
+  const accelChartRef = useRef(null);
+  const gyroChartCanvasRef = useRef(null);
+  const gyroChartRef = useRef(null);
 
   // 3D 表示オプション (旧 UI 互換)
   const [showWorldAxes, setShowWorldAxes] = useState(false);
@@ -210,6 +215,61 @@ function App() {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, [gridCanvasRef.current]);
+
+  // 時系列波形チャート初期化 (Accel & Gyro、各 XYZ + RMS)
+  useEffect(() => {
+    if (!accelChartCanvasRef.current || accelChartRef.current) return;
+    accelChartRef.current = new TimeSeriesChart(accelChartCanvasRef.current, {
+      channels: [
+        { key: 'x',   color: '#ef4444', label: 'X' },
+        { key: 'y',   color: '#10b981', label: 'Y' },
+        { key: 'z',   color: '#3b82f6', label: 'Z' },
+        { key: 'rms', color: '#1e293b', label: 'RMS', width: 2 },
+      ],
+      yMin: -2, yMax: 2, autoScale: true, bufferSize: 200,
+    });
+    accelChartRef.current.resize();
+  }, [accelChartCanvasRef.current]);
+  useEffect(() => {
+    if (!gyroChartCanvasRef.current || gyroChartRef.current) return;
+    gyroChartRef.current = new TimeSeriesChart(gyroChartCanvasRef.current, {
+      channels: [
+        { key: 'x',   color: '#ef4444', label: 'X' },
+        { key: 'y',   color: '#10b981', label: 'Y' },
+        { key: 'z',   color: '#3b82f6', label: 'Z' },
+        { key: 'rms', color: '#1e293b', label: 'RMS', width: 2 },
+      ],
+      yMin: -200, yMax: 200, autoScale: true, bufferSize: 200,
+    });
+    gyroChartRef.current.resize();
+  }, [gyroChartCanvasRef.current]);
+
+  // チャート resize 監視
+  useEffect(() => {
+    const onResize = () => {
+      accelChartRef.current?.resize();
+      gyroChartRef.current?.resize();
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // sensor 受信時に時系列波形へ push (RMS は Web 側で計算: sqrt(x^2+y^2+z^2))
+  useEffect(() => {
+    if (!sensor) return;
+    if (sensor.ax !== undefined && accelChartRef.current) {
+      // accel は m/s² → g 換算で見やすく
+      const ax_g = sensor.ax / 9.80665;
+      const ay_g = sensor.ay / 9.80665;
+      const az_g = sensor.az / 9.80665;
+      const rms_g = Math.sqrt(ax_g*ax_g + ay_g*ay_g + az_g*az_g);
+      accelChartRef.current.push({ x: ax_g, y: ay_g, z: az_g, rms: rms_g });
+    }
+    if (sensor.gx !== undefined && gyroChartRef.current) {
+      const rms = Math.sqrt(sensor.gx*sensor.gx + sensor.gy*sensor.gy + sensor.gz*sensor.gz);
+      gyroChartRef.current.push({ x: sensor.gx, y: sensor.gy, z: sensor.gz, rms });
+    }
+  }, [sensor?.t]);
 
   // 3D viewer の軸表示切替
   useEffect(() => { viewerRef.current?.setShowWorldAxes(showWorldAxes); }, [showWorldAxes]);
@@ -841,6 +901,24 @@ function App() {
       setSampleStatus('既存ルール削除中…');
       await activeClient.send({ cmd: 'rule.clear' });
 
+      // engine 設定 (Closest-only モード + Button lock window + Cooldown)
+      if (data.engine) {
+        if (typeof data.engine.closest_only === 'boolean') {
+          await activeClient.send({ cmd: 'engine.closest_only', enabled: data.engine.closest_only });
+          setClosestOnlyMode(data.engine.closest_only);
+          await new Promise((res) => setTimeout(res, 30));
+        }
+        const winMs = data.engine.button_lock_window_ms;
+        const coolMs = data.engine.cooldown_ms;
+        if (winMs !== undefined || coolMs !== undefined) {
+          const payload = { cmd: 'engine.lock.set' };
+          if (winMs !== undefined) { payload.window_ms = winMs; setLockWindowMs(winMs); }
+          if (coolMs !== undefined) { payload.cooldown_ms = coolMs; setLockCooldownMs(coolMs); }
+          await activeClient.send(payload);
+          await new Promise((res) => setTimeout(res, 30));
+        }
+      }
+
       const baseId = (Date.now() & 0xff00);
       for (let i = 0; i < data.rules.length; i++) {
         const r = { ...data.rules[i], id: baseId + i };
@@ -1021,16 +1099,18 @@ function App() {
         ${sensor ? html`
           <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-mono mt-2">
             <div class="bg-sky-50 rounded p-2">
-              <div class="text-slate-500">Accel [m/s²]</div>
-              <div>X: ${sensor.ax?.toFixed(2)}</div>
-              <div>Y: ${sensor.ay?.toFixed(2)}</div>
-              <div>Z: ${sensor.az?.toFixed(2)}</div>
+              <div class="text-slate-500">Accel [g]</div>
+              <div><span class="text-red-600">X:</span> ${(sensor.ax/9.80665)?.toFixed(2)}</div>
+              <div><span class="text-emerald-600">Y:</span> ${(sensor.ay/9.80665)?.toFixed(2)}</div>
+              <div><span class="text-blue-600">Z:</span> ${(sensor.az/9.80665)?.toFixed(2)}</div>
+              <div class="font-bold border-t border-sky-200 pt-0.5 mt-0.5">RMS: ${(Math.sqrt((sensor.ax/9.80665)**2 + (sensor.ay/9.80665)**2 + (sensor.az/9.80665)**2))?.toFixed(2)}</div>
             </div>
             <div class="bg-pink-50 rounded p-2">
               <div class="text-slate-500">Gyro [°/s]</div>
-              <div>X: ${sensor.gx?.toFixed(1)}</div>
-              <div>Y: ${sensor.gy?.toFixed(1)}</div>
-              <div>Z: ${sensor.gz?.toFixed(1)}</div>
+              <div><span class="text-red-600">X:</span> ${sensor.gx?.toFixed(1)}</div>
+              <div><span class="text-emerald-600">Y:</span> ${sensor.gy?.toFixed(1)}</div>
+              <div><span class="text-blue-600">Z:</span> ${sensor.gz?.toFixed(1)}</div>
+              <div class="font-bold border-t border-pink-200 pt-0.5 mt-0.5">RMS: ${(Math.sqrt(sensor.gx*sensor.gx + sensor.gy*sensor.gy + sensor.gz*sensor.gz))?.toFixed(1)}</div>
             </div>
             <div class="bg-emerald-50 rounded p-2">
               <div class="text-slate-500">Euler [°]</div>
@@ -1056,6 +1136,30 @@ function App() {
             </div>
           </div>
         ` : html`<p class="text-xs text-slate-400 mt-2 text-center">${streamRate === 0 ? 'Stream OFF (3D は QW/Q* 受信で動作)' : '待機中…'}</p>`}
+
+        <!-- 時系列波形チャート (Accel & Gyro 各 XYZ + RMS) -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-3">
+          <div>
+            <div class="text-[10px] text-slate-500 mb-0.5 flex items-center gap-2 font-mono">
+              <span>Accel [g] 時系列</span>
+              <span class="text-red-600">━ X</span>
+              <span class="text-emerald-600">━ Y</span>
+              <span class="text-blue-600">━ Z</span>
+              <span class="text-slate-900 font-bold">━ RMS</span>
+            </div>
+            <canvas ref=${accelChartCanvasRef} style="width:100%; height:80px; display:block; border-radius:4px;"></canvas>
+          </div>
+          <div>
+            <div class="text-[10px] text-slate-500 mb-0.5 flex items-center gap-2 font-mono">
+              <span>Gyro [°/s] 時系列</span>
+              <span class="text-red-600">━ X</span>
+              <span class="text-emerald-600">━ Y</span>
+              <span class="text-blue-600">━ Z</span>
+              <span class="text-slate-900 font-bold">━ RMS</span>
+            </div>
+            <canvas ref=${gyroChartCanvasRef} style="width:100%; height:80px; display:block; border-radius:4px;"></canvas>
+          </div>
+        </div>
       </div>
 
       <!-- Roll/Pitch 2D グリッド -->
@@ -1090,7 +1194,7 @@ function App() {
           </div>
           ${closestOnlyMode ? html`
             <div class="flex items-center gap-2 text-xs flex-wrap pt-1 border-t border-emerald-200">
-              <span class="font-semibold">⏱ Lock window:</span>
+              <span class="font-semibold">⏱ Button lock window:</span>
               <input type="number" min="50" max="5000" step="50" value=${lockWindowMs}
                 onInput=${(e) => setLockWindowMs(e.target.value)}
                 class="border rounded px-1 py-0.5 w-16 font-mono" /> ms
@@ -1107,7 +1211,7 @@ function App() {
             </div>
             ${lockedRuleId >= 0 ? html`
               <div class="text-xs text-amber-700 font-semibold animate-pulse">
-                🔒 Locked: rule id=${lockedRuleId} (${Math.round((Date.now() - lockedAt))}ms)
+                🔒 Button-locked: rule id=${lockedRuleId} (${Math.round((Date.now() - lockedAt))}ms)
               </div>
             ` : null}
           ` : null}
