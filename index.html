@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="./favicon.ico">
+  <title>Burst Motion — 設定アプリ</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "preact":       "https://esm.sh/preact@10.22.0",
+      "preact/hooks": "https://esm.sh/preact@10.22.0/hooks",
+      "htm":          "https://esm.sh/htm@3.1.1",
+      "three":        "https://esm.sh/three@0.160.0"
+    }
+  }
+  </script>
+  <style>
+    body { font-family: 'Hiragino Sans', 'Meiryo', system-ui, sans-serif; }
+    .chip { display:inline-block; padding:2px 8px; border-radius:9999px; font-size:11px; }
+    .log-line { font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 11px; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+  <div id="app" class="min-h-screen"></div>
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>
