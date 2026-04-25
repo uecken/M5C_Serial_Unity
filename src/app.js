@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260425-234850';
-import { BleClient }    from './lib/BleClient.js?v=20260425-234850';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-234850';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-234850';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260425-234850';
+import { SerialClient } from './lib/SerialClient.js?v=20260425-235252';
+import { BleClient }    from './lib/BleClient.js?v=20260425-235252';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260425-235252';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260425-235252';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260425-235252';
 
 const html = htm.bind(h);
 
@@ -860,6 +860,20 @@ function App() {
     }
   }, [sensor?.btn, sensor?.t]);
 
+  // ボタン rising edge 検出 → 3D 球面に押下時の姿勢を紫ドット表示
+  // (旧 motion_controller.js 互換、Stream ON 前提)
+  const lastBtnRef = useRef(0);
+  useEffect(() => {
+    if (!sensor || sensor.btn === undefined) return;
+    const prev = lastBtnRef.current;
+    const curr = sensor.btn;
+    const edge = curr & ~prev;  // 立ち上がり
+    lastBtnRef.current = curr;
+    if (edge !== 0 && viewerRef.current && sensor.qw !== undefined) {
+      viewerRef.current.setButtonPressDot(sensor.qw, sensor.qx, sensor.qy, sensor.qz, 2500);
+    }
+  }, [sensor?.btn]);
+
   // Stream OFF 時は 500ms 周期で hw.buttons.get をポーリング (ボタン状態を切らさない)
   // ログには出さない (onRaw/onSent でフィルタ)
   useEffect(() => {
@@ -914,6 +928,25 @@ function App() {
     );
   })();
 
+  // Euler [deg] → Quaternion [w,x,y,z] 変換 (ZYX 順、Mahony Filter / 一般的な航空規約)
+  // サンプルプロファイルの posture.euler から quat を生成、rule.add に含める。
+  // (FW 側で quat 未指定時は「現在の sensor quat」が使われてしまい、
+  //  全ルールが同じ quat になり Closest-only 計算が機能不全になる問題への対処)
+  const eulerToQuat = (rollDeg, pitchDeg, yawDeg) => {
+    const r = (rollDeg  * Math.PI / 180) / 2;
+    const p = (pitchDeg * Math.PI / 180) / 2;
+    const y = (yawDeg   * Math.PI / 180) / 2;
+    const cr = Math.cos(r), sr = Math.sin(r);
+    const cp = Math.cos(p), sp = Math.sin(p);
+    const cy = Math.cos(y), sy = Math.sin(y);
+    return [
+      cr*cp*cy + sr*sp*sy,   // w
+      sr*cp*cy - cr*sp*sy,   // x (roll 軸)
+      cr*sp*cy + sr*cp*sy,   // y (pitch 軸)
+      cr*cp*sy - sr*sp*cy,   // z (yaw 軸)
+    ];
+  };
+
   // サンプル → ルール送信 → profile.save
   const handleSampleLoad = async (sample) => {
     if (!activeClient || !connected) {
@@ -954,6 +987,20 @@ function App() {
       const baseId = (Date.now() & 0xff00);
       for (let i = 0; i < data.rules.length; i++) {
         const r = { ...data.rules[i], id: baseId + i };
+        // posture.euler から quat を計算して付加 (Closest-only 計算用)
+        // quat 未指定だと FW は現在 sensor quat を保存 → 全ルール同じ quat になり Closest-only が機能不全
+        if (r.posture && Array.isArray(r.posture.euler) && !r.posture.quat) {
+          r.posture = {
+            ...r.posture,
+            quat: eulerToQuat(r.posture.euler[0], r.posture.euler[1], r.posture.euler[2]),
+          };
+        }
+        if (r.end_posture && Array.isArray(r.end_posture.euler) && !r.end_posture.quat) {
+          r.end_posture = {
+            ...r.end_posture,
+            quat: eulerToQuat(r.end_posture.euler[0], r.end_posture.euler[1], r.end_posture.euler[2]),
+          };
+        }
         setSampleStatus(`ルール ${i + 1}/${data.rules.length}: ${r.name}`);
         await activeClient.send({ cmd: 'rule.add', r });
         // FW 側の処理を待つ余裕、軽い間隔

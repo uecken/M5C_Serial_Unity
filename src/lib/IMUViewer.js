@@ -74,15 +74,19 @@ export class IMUViewer {
     this.gravityArrow.visible = false;
     this.scene.add(this.gravityArrow);
 
-    // ---- 球面ドット (現在姿勢、登録、最近傍) ----
+    // ---- 球面ドット (現在姿勢、登録、最近傍、ボタン押下時) ----
     this.dots = {
-      current: this._makeDot(0xff0000, 0.06),   // 赤
-      closest: this._makeDot(0x00ff00, 0.07),   // 緑
+      current: this._makeDot(0xff0000, 0.06),       // 赤: 現在姿勢
+      closest: this._makeDot(0x00ff00, 0.07),       // 緑: 最近傍
+      buttonPress: this._makeDot(0xa855f7, 0.08),   // 紫: ボタン押下時の姿勢
     };
     this.dots.current.visible = false;
     this.dots.closest.visible = false;
+    this.dots.buttonPress.visible = false;
     this.scene.add(this.dots.current);
     this.scene.add(this.dots.closest);
+    this.scene.add(this.dots.buttonPress);
+    this._buttonPressTimer = null;
 
     this.referenceDots = [];   // 登録ルール用、橙
 
@@ -129,7 +133,7 @@ export class IMUViewer {
     this.gravityArrow.quaternion.copy(q);
   }
 
-  /** 登録ルール姿勢を球面に橙ドットで配置 */
+  /** 登録ルール姿勢を球面に橙ドットで配置 (旧版互換、見やすい大きさ) */
   setReferenceQuaternions(quats) {
     // 既存ドット消去
     for (const d of this.referenceDots) {
@@ -138,11 +142,26 @@ export class IMUViewer {
     }
     this.referenceDots = [];
     for (const q of quats) {
-      const d = this._makeDot(0xff8c00, 0.05);   // 橙
+      const d = this._makeDot(0xffa500, 0.07);   // 橙、見やすい大きさ
       d.position.copy(this._quatToSpherePoint(q));
       this.scene.add(d);
       this.referenceDots.push(d);
     }
+  }
+
+  /** ボタン押下時の姿勢を球面に紫ドットで表示 (旧版互換)
+   *  durationMs 経過後に消える (デフォルト 2000ms)
+   *  M5C 軸からの変換は呼び出し側で行うか、ここで生 quat を受け取る場合は同変換を適用 */
+  setButtonPressDot(qw, qx, qy, qz, durationMs = 2000) {
+    if (this._buttonPressTimer) clearTimeout(this._buttonPressTimer);
+    this.dots.buttonPress.visible = true;
+    // 軸変換は他のドットと同じ: M5C(qw,qx,qy,qz) → Three(-qx, qz, qy, qw)
+    const q = new THREE.Quaternion(-qx, qz, qy, qw);
+    this.dots.buttonPress.position.copy(this._quatToSpherePoint(q));
+    this._buttonPressTimer = setTimeout(() => {
+      this.dots.buttonPress.visible = false;
+      this._buttonPressTimer = null;
+    }, durationMs);
   }
 
   /** 現在姿勢のドット位置 (赤) */
