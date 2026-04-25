@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-002445';
-import { BleClient }    from './lib/BleClient.js?v=20260426-002445';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-002445';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-002445';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-002445';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-064441';
+import { BleClient }    from './lib/BleClient.js?v=20260426-064441';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-064441';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-064441';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-064441';
 
 const html = htm.bind(h);
 
@@ -1502,6 +1502,7 @@ function App() {
                   <th class="px-2 py-1 text-left">Btn</th>
                   <th class="px-2 py-1 text-left">Posture</th>
                   <th class="px-2 py-1 text-left">Accel</th>
+                  <th class="px-2 py-1 text-left">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -1532,6 +1533,14 @@ function App() {
                       </td>
                       <td class="px-2 py-1 font-mono ${r.accel ? '' : 'text-slate-300'}">
                         ${r.accel ? `≥${r.accel.abs_threshold?.toFixed(1)}g` : '-'}
+                      </td>
+                      <td class="px-2 py-1 font-mono ${r.action && r.action.keys && r.action.keys.length > 0 ? '' : 'text-red-400'}">
+                        ${r.action ? html`
+                          <span class="text-[9px] text-slate-400">${r.action.type_name || '?'}</span>
+                          ${r.action.keys && r.action.keys.length > 0 ? html`
+                            <span class="ml-1">${r.action.keys.map(hidCodeToName).join(' ')}</span>
+                          ` : html`<span class="ml-1 text-red-500">空!</span>`}
+                        ` : '-'}
                       </td>
                     </tr>
                   `;
@@ -1960,11 +1969,16 @@ function App() {
       </div>
     </div>
 
-    <footer class="mt-4 text-center text-xs text-slate-400">
-      Burst Motion | USB:115200 / BLE NUS | JSON Lines | Auto-reconnect 対応
-      <span class="ml-2 px-2 py-0.5 bg-slate-100 rounded font-mono">
-        v${appVersion || 'dev'}${appDeployedAt ? ` (${appDeployedAt})` : ''}
+    <footer class="mt-4 text-center text-xs text-slate-400 space-x-2">
+      <span>Burst Motion | USB:115200 / BLE NUS | JSON Lines</span>
+      <span class="px-2 py-0.5 bg-slate-100 rounded font-mono">
+        Web v${appVersion || 'dev'}${appDeployedAt ? ` (${appDeployedAt})` : ''}
       </span>
+      ${deviceInfo ? html`
+        <span class="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded font-mono">
+          FW ${deviceInfo.fw}${deviceInfo.fw_phase ? ` Phase ${deviceInfo.fw_phase}` : ''}${deviceInfo.fw_build ? ` (${deviceInfo.fw_build})` : ''}
+        </span>
+      ` : null}
     </footer>
   </div>
   `;
