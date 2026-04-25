@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-001319';
-import { BleClient }    from './lib/BleClient.js?v=20260426-001319';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-001319';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-001319';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-001319';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-002445';
+import { BleClient }    from './lib/BleClient.js?v=20260426-002445';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-002445';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-002445';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-002445';
 
 const html = htm.bind(h);
 
@@ -52,6 +52,10 @@ function App() {
   const [ruleKey, setRuleKey] = useState('a');
   const [ruleMode, setRuleMode] = useState('oneshot');
   const [ruleName, setRuleName] = useState('');
+  // キー入力モード: 'single' (単一キー、名前付き対応) / 'macro' (連続入力、カンマ区切り)
+  const [ruleInputMode, setRuleInputMode] = useState('single');
+  const [ruleKeysList, setRuleKeysList] = useState('');  // 例: "DOWN,RIGHT,p"
+  const [ruleKeyInterval, setRuleKeyInterval] = useState(30);
   // HOLD_START_END で終了側に別キー (空なら同じキーを release のみ)
   const [endKey, setEndKey] = useState('');
   // 終了側の修飾キー
@@ -332,13 +336,17 @@ function App() {
   useEffect(() => {
     const stored = JSON.parse(localStorage.getItem('burst_motion_rule_postures') || '{}');
     const refs = ruleList.map((r) => {
-      // 1. FW 応答に posture が含まれていれば優先
+      // 1. FW 応答に posture が含まれていれば優先 (Phase 5.9 で quat も含む)
       if (r.posture && r.posture.euler) {
         const local = stored[r.id];
+        // FW 側 quat を最優先、なければ localStorage から (Phase 5.7 旧データ用)
+        const fwQuat = r.posture.quat;
+        const localQuat = local?.quat;
+        const q = (fwQuat && fwQuat.length === 4) ? fwQuat : localQuat;
         return {
           id: r.id, name: r.name,
           roll: r.posture.euler[0], pitch: r.posture.euler[1], yaw: r.posture.euler[2],
-          qw: local?.quat?.[0], qx: local?.quat?.[1], qy: local?.quat?.[2], qz: local?.quat?.[3],
+          qw: q?.[0], qx: q?.[1], qy: q?.[2], qz: q?.[3],
         };
       }
       // 2. localStorage から
@@ -447,7 +455,10 @@ function App() {
     };
     const onTriggerHit = (ev) => {
       const d = ev.detail;
-      setTriggerFlash({ id: d.id, name: d.rule_name, phase: d.phase, t: Date.now() });
+      setTriggerFlash({
+        id: d.id, name: d.rule_name, phase: d.phase, t: Date.now(),
+        keys: d.keys, action_type: d.action_type, modifiers: d.modifiers,
+      });
       // 1 秒後にフラッシュを消す
       setTimeout(() => setTriggerFlash((cur) => cur && cur.t === d.t ? null : cur), 1000);
       // 2D マップで該当ルール点を緑フラッシュ (500ms 後に元の色)
@@ -754,6 +765,18 @@ function App() {
         r.end_duration_ms = 30;
       }
     }
+    // キー入力 (単一 or 連続マクロ)
+    if (ruleInputMode === 'macro' && ruleKeysList.trim()) {
+      const arr = ruleKeysList.split(/[\s,]+/).filter(Boolean);
+      if (arr.length > 0) {
+        r.keys = arr;
+        r.interval_ms = parseInt(ruleKeyInterval, 10) || 30;
+        // single 用 r.key は無視されるよう削除
+        delete r.key;
+      }
+    } else if (ruleKey) {
+      r.key = ruleKey;   // 1 文字 ASCII or 名前付き ("ARROW_RIGHT" 等)
+    }
     const mods = buildModifiers();
     if (mods > 0) r.modifiers = mods;
     sendCmd({ cmd: 'rule.add', r });
@@ -934,6 +957,23 @@ function App() {
       (b.pull_mode | 0) === (currentButtons[i].pull_mode | 0)
     );
   })();
+
+  // HID キーコード → 表示名 (BleCombo 規約、ASCII printable はそのまま)
+  const hidCodeToName = (c) => {
+    if (typeof c !== 'number') return '?';
+    if (c >= 0x20 && c <= 0x7e) return String.fromCharCode(c);
+    const map = {
+      0x80: 'L-Ctrl', 0x81: 'L-Shift', 0x82: 'L-Alt', 0x83: 'L-Win',
+      0x84: 'R-Ctrl', 0x85: 'R-Shift', 0x86: 'R-Alt', 0x87: 'R-Win',
+      0xB0: 'Enter', 0xB1: 'Esc', 0xB2: 'BS', 0xB3: 'Tab',
+      0xC1: 'Caps', 0xCE: 'PrtSc',
+      0xC2: 'F1', 0xC3: 'F2', 0xC4: 'F3', 0xC5: 'F4', 0xC6: 'F5', 0xC7: 'F6',
+      0xC8: 'F7', 0xC9: 'F8', 0xCA: 'F9', 0xCB: 'F10', 0xCC: 'F11', 0xCD: 'F12',
+      0xD1: 'Ins', 0xD2: 'Home', 0xD3: 'PgUp', 0xD4: 'Del', 0xD5: 'End', 0xD6: 'PgDn',
+      0xD7: '→', 0xD8: '←', 0xD9: '↓', 0xDA: '↑',
+    };
+    return map[c] || `0x${c.toString(16).padStart(2, '0')}`;
+  };
 
   // Euler [deg] → Quaternion [w,x,y,z] 変換 (ZYX 順、Mahony Filter / 一般的な航空規約)
   // サンプルプロファイルの posture.euler から quat を生成、rule.add に含める。
@@ -1437,10 +1477,15 @@ function App() {
           </div>
         ` : null}
 
-        <!-- 発火フラッシュ -->
+        <!-- 発火フラッシュ (発火時に何が入力されたか見えるように) -->
         ${triggerFlash ? html`
           <div class="mb-3 p-2 bg-yellow-100 border border-yellow-400 rounded animate-pulse text-sm font-semibold text-yellow-800">
-            🔥 #${triggerFlash.id} ${triggerFlash.name} ${triggerFlash.phase}
+            🔥 #${triggerFlash.id} <b>${triggerFlash.name}</b> ${triggerFlash.phase}
+            ${triggerFlash.keys && triggerFlash.keys.length > 0 ? html`
+              → <span class="ml-1 px-2 py-0.5 bg-yellow-300 rounded font-mono">
+                ${triggerFlash.keys.map(hidCodeToName).join(' ')}
+              </span>
+            ` : null}
           </div>
         ` : null}
 
@@ -1615,15 +1660,41 @@ function App() {
               <label class="flex items-center gap-0.5"><input type="checkbox" checked=${modShift} onChange=${(e)=>setModShift(e.target.checked)} />Shift</label>
               <label class="flex items-center gap-0.5"><input type="checkbox" checked=${modAlt} onChange=${(e)=>setModAlt(e.target.checked)} />Alt</label>
               <label class="flex items-center gap-0.5"><input type="checkbox" checked=${modGui} onChange=${(e)=>setModGui(e.target.checked)} />Win</label>
+              <span class="ml-3">入力:</span>
+              <select value=${ruleInputMode} onChange=${(e) => setRuleInputMode(e.target.value)}
+                class="border rounded px-1 py-0.5">
+                <option value="single">単一キー</option>
+                <option value="macro">連続入力 (macro)</option>
+              </select>
             </div>
-            <div class="flex items-center gap-2">
-              <span class="text-xs">+ キー:</span>
-              <input type="text" value=${ruleKey} onInput=${(e) => setRuleKey(e.target.value)}
-                maxlength="1" class="border rounded px-2 py-1 w-12 text-center font-mono" />
-              <span class="text-xs text-slate-500">
-                ${modCtrl?'Ctrl+':''}${modShift?'Shift+':''}${modAlt?'Alt+':''}${modGui?'Win+':''}${ruleKey}
-              </span>
-            </div>
+            ${ruleInputMode === 'single' ? html`
+              <div class="flex items-center gap-2 flex-wrap text-xs">
+                <span>キー:</span>
+                <input type="text" value=${ruleKey} onInput=${(e) => setRuleKey(e.target.value)}
+                  placeholder="a / ARROW_RIGHT / F1 / ENTER 等"
+                  class="border rounded px-2 py-1 w-44 font-mono" />
+                <span class="text-slate-500">
+                  ${modCtrl?'Ctrl+':''}${modShift?'Shift+':''}${modAlt?'Alt+':''}${modGui?'Win+':''}<b>${ruleKey}</b>
+                </span>
+              </div>
+              <div class="text-[10px] text-slate-500 mt-1">
+                対応: 1 文字 ASCII / ARROW_LEFT,RIGHT,UP,DOWN / ENTER / ESC / TAB / SPACE / BACKSPACE / DELETE / HOME / END / PAGE_UP / PAGE_DOWN / F1〜F24
+              </div>
+            ` : html`
+              <div class="flex items-center gap-2 flex-wrap text-xs">
+                <span>キー列:</span>
+                <input type="text" value=${ruleKeysList} onInput=${(e) => setRuleKeysList(e.target.value)}
+                  placeholder="DOWN, RIGHT, p"
+                  class="border rounded px-2 py-1 flex-1 font-mono min-w-48" />
+                <span>間隔:</span>
+                <input type="number" min="10" max="500" step="10" value=${ruleKeyInterval}
+                  onInput=${(e) => setRuleKeyInterval(e.target.value)}
+                  class="border rounded px-1 py-0.5 w-16 font-mono" /> ms
+              </div>
+              <div class="text-[10px] text-slate-500 mt-1">
+                カンマ/空白区切り。各キーを順次 press → ${ruleKeyInterval}ms 待機 → release。例: 波動拳 = "DOWN, RIGHT, P"
+              </div>
+            `}
           </div>
 
           ${ruleMode === 'hold_start_end' ? html`
