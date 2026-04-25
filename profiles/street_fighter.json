@@ -46,9 +46,9 @@
       "ui_mode": "oneshot",
       "button_idx": 3,
       "button_state": 0,
-      "posture": { "euler": [45, -30, 0], "euler_tol": [15, 15, 180] },
+      "posture": { "euler": [45, 75, 0], "euler_tol": [25, 15, 180] },
       "accel_abs_threshold": 2.5,
-      "keys": ["RIGHT", "DOWN", "DOWN+RIGHT", "DOWN+RIGHT+p"],
+      "keys": ["RIGHT", "DOWN", "DOWN+RIGHT+a"],
       "interval_ms": 50,
       "cooldown_ms": 800
     },
