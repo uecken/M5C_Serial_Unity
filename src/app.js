@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-080334';
-import { BleClient }    from './lib/BleClient.js?v=20260426-080334';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-080334';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-080334';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-080334';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-080745';
+import { BleClient }    from './lib/BleClient.js?v=20260426-080745';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-080745';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-080745';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-080745';
 
 const html = htm.bind(h);
 
@@ -96,9 +96,9 @@ function App() {
     localStorage.getItem('burst_motion_hardware') || 'm5stickc'
   );
 
-  // ルール作成時のボタン条件
-  const [ruleButtonEnabled, setRuleButtonEnabled] = useState(false);
-  const [ruleButtonIdx, setRuleButtonIdx] = useState(1);
+  // ルール作成時のボタン条件 (デフォルト: Btn3 押下中、M5StickC レガシー互換)
+  const [ruleButtonEnabled, setRuleButtonEnabled] = useState(true);
+  const [ruleButtonIdx, setRuleButtonIdx] = useState(3);
   const [ruleButtonState, setRuleButtonState] = useState(0);  // 0=押下中、1=解放中
 
   // 6 点キャリブ ウィザード
@@ -877,6 +877,17 @@ function App() {
 
   // 現在 Hardware の buttons 配列 (空配列なら定義未取得 or 該当機種なし)
   const currentButtons = hardwareDefs[selectedHardware]?.buttons || [];
+
+  // Hardware 切替時、ボタン条件のデフォルト idx を最後 (= 通常使用される独立ボタン) に追従
+  // M5StickC なら 3 (Btn3=G26)、M5Atom S3 なら 1 (Btn=G41)
+  useEffect(() => {
+    if (currentButtons.length > 0) {
+      const lastIdx = currentButtons[currentButtons.length - 1].idx;
+      // 現在 idx が選択肢にない場合のみ追従 (ユーザー手動選択を尊重)
+      const exists = currentButtons.some((b) => b.idx === ruleButtonIdx);
+      if (!exists) setRuleButtonIdx(lastIdx);
+    }
+  }, [selectedHardware, currentButtons.length]);
 
   // FW 側の現在のボタン GPIO 構成 (hw.buttons.get の応答)
   const [fwButtons, setFwButtons] = useState(null);  // null = 未取得、配列 = FW の現在値

@@ -35,7 +35,7 @@
       "ui_mode": "oneshot",
       "button_idx": 3,
       "button_state": 0,
-      "posture": { "euler": [0, -45, 0], "euler_tol": [25, 15, 180] },
+      "posture": { "euler": [-179, 0, 0], "euler_tol": [15, 25, 180] },
       "accel_abs_threshold": 2.0,
       "keys": ["DOWN", "DOWN+RIGHT", "RIGHT", "RIGHT+p"],
       "interval_ms": 50,
