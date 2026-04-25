@@ -29,6 +29,17 @@
       "accel_abs_threshold": 1.8,
       "key": "k",
       "cooldown_ms": 400
+    },
+    {
+      "name": "hadoken",
+      "ui_mode": "oneshot",
+      "button_idx": 3,
+      "button_state": 0,
+      "posture": { "euler": [173, -3, 0], "euler_tol": [15, 15, 180] },
+      "accel_abs_threshold": 1.5,
+      "keys": ["DOWN", "RIGHT", "a"],
+      "interval_ms": 30,
+      "cooldown_ms": 600
     }
   ]
 }
