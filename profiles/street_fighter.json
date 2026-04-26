@@ -2,7 +2,7 @@
   "schema": "burst_motion_sample_v1",
   "id": "street_fighter",
   "title": "🥊 ストリートファイター Zero (miniplay.com) — 移動+技",
-  "description": "M5StickC 基本姿勢 R+90 (縦持ち、LCD 左)。Btn3 OFF (release) で姿勢に応じた移動 (HOLD)、Btn3 ON (push) で技繰り出し (ONESHOT)。移動中に Btn3 押すと移動キーが自動 release、技発動。離すと移動 HOLD 再開。",
+  "description": "M5StickC 基本姿勢 R+90 (縦持ち、LCD 右)。Btn1 (G0、M5 ロゴ) OFF で姿勢に応じた移動 (HOLD)、Btn1 ON で技繰り出し (ONESHOT)。移動中に Btn1 押すと移動キーが自動 release、技発動。離すと移動 HOLD 再開。",
   "hardware_required": ["m5stickc", "m5stickc_plus", "m5stickc_2"],
   "engine": {
     "closest_only": true,
@@ -13,7 +13,7 @@
     {
       "name": "move_right",
       "ui_mode": "hold_start_only",
-      "button_idx": 3,
+      "button_idx": 1,
       "button_state": 1,
       "posture": { "euler": [150, 0, 0], "euler_tol": [30, 25, 180] },
       "key": "ARROW_RIGHT",
@@ -22,7 +22,7 @@
     {
       "name": "move_left",
       "ui_mode": "hold_start_only",
-      "button_idx": 3,
+      "button_idx": 1,
       "button_state": 1,
       "posture": { "euler": [30, 0, 0], "euler_tol": [30, 25, 180] },
       "key": "ARROW_LEFT",
@@ -31,7 +31,7 @@
     {
       "name": "jump",
       "ui_mode": "hold_start_only",
-      "button_idx": 3,
+      "button_idx": 1,
       "button_state": 1,
       "posture": { "euler": [90, 45, 0], "euler_tol": [180, 15, 180] },
       "key": "ARROW_UP",
@@ -40,7 +40,7 @@
     {
       "name": "crouch",
       "ui_mode": "hold_start_only",
-      "button_idx": 3,
+      "button_idx": 1,
       "button_state": 1,
       "posture": { "euler": [90, -45, 0], "euler_tol": [180, 15, 180] },
       "key": "ARROW_DOWN",
@@ -49,7 +49,7 @@
     {
       "name": "punch",
       "ui_mode": "oneshot",
-      "button_idx": 3,
+      "button_idx": 1,
       "button_state": 0,
       "posture": { "euler": [90, 0, 0], "euler_tol": [25, 25, 180] },
       "key": "s",
@@ -59,7 +59,7 @@
     {
       "name": "kick",
       "ui_mode": "oneshot",
-      "button_idx": 3,
+      "button_idx": 1,
       "button_state": 0,
       "posture": { "euler": [30, 0, 0], "euler_tol": [30, 25, 180] },
       "accel_abs_threshold": 1.8,
@@ -69,7 +69,7 @@
     {
       "name": "hadoken",
       "ui_mode": "oneshot",
-      "button_idx": 3,
+      "button_idx": 1,
       "button_state": 0,
       "posture": { "euler": [-179, 0, 0], "euler_tol": [15, 25, 180] },
       "accel_abs_threshold": 2.0,
@@ -80,7 +80,7 @@
     {
       "name": "shoryuken",
       "ui_mode": "oneshot",
-      "button_idx": 3,
+      "button_idx": 1,
       "button_state": 0,
       "posture": { "euler": [0, 75, 0], "euler_tol": [180, 15, 180] },
       "accel_abs_threshold": 2.5,
@@ -91,7 +91,7 @@
     {
       "name": "tatsumaki",
       "ui_mode": "oneshot",
-      "button_idx": 3,
+      "button_idx": 1,
       "button_state": 0,
       "posture": { "euler": [0, -75, 0], "euler_tol": [180, 15, 180] },
       "accel_abs_threshold": 2.0,

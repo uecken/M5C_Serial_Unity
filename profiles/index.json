@@ -35,8 +35,8 @@
     },
     {
       "id": "street_fighter",
-      "title": "🥊 ストリートファイター Zero (miniplay.com)",
-      "description": "Btn3 OFF=移動 (右傾→/左傾←/上向↑/下向↓ 矢印キー HOLD)、Btn3 ON=技 (基本punch=s/左振kick=a/波動拳/昇竜拳/竜巻旋風脚)。移動中に押すと自動切替。9 ルール。",
+      "title": "🥊 ストリートファイター Zero (要 Btn1 / G0)",
+      "description": "Btn1 (G0、M5 ロゴ) OFF=移動 (右傾→/左傾←/上向↑/下向↓ 矢印キー HOLD)、Btn1 ON=技 (基本punch=s/左振kick=a/波動拳/昇竜拳/竜巻旋風脚)。基本姿勢 R+90 (縦持ち、LCD 右)。9 ルール。",
       "tags": ["game", "fighting", "button", "macro", "sf-zero"],
       "rule_count": 9,
       "file": "street_fighter.json"
