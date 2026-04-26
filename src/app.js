@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-091558';
-import { BleClient }    from './lib/BleClient.js?v=20260426-091558';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-091558';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-091558';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-091558';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-092029';
+import { BleClient }    from './lib/BleClient.js?v=20260426-092029';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-092029';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-092029';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-092029';
 
 const html = htm.bind(h);
 
@@ -311,20 +311,26 @@ function App() {
     if (gridRef.current && sensor.roll !== undefined) {
       gridRef.current.setCurrent(sensor.roll, sensor.pitch);
     }
-    // 最近傍ルール計算 (Quaternion angleTo)
-    if (ruleReferences.length > 0 && sensor.qw !== undefined) {
+    // 最近傍ルール計算 (Phase 5.21: FW Phase 5.15 互換 — Roll/Pitch tol 正規化)
+    // 旧 Quaternion 内積版だと FW NVS から quat=[0,0,0,0] で読込まれた場合に全ルール 180° で
+    // 配列順最初のルール (例: move_right) が常に選ばれる問題があった。
+    // FW と同じアルゴリズム (Roll wrap + tol 重み付け) で UI 側も一致させる。
+    if (ruleReferences.length > 0 && sensor.roll !== undefined) {
       const findClosest = () => {
-        let minAngle = Infinity;
+        let minDist = Infinity;
         let idx = -1;
-        const cur = { w: sensor.qw, x: sensor.qx, y: sensor.qy, z: sensor.qz };
         ruleReferences.forEach((r, i) => {
-          if (r.qw === undefined) return;
-          // 内積
-          let dot = cur.w*r.qw + cur.x*r.qx + cur.y*r.qy + cur.z*r.qz;
-          if (dot < 0) dot = -dot;
-          if (dot > 1) dot = 1;
-          const angle = 2 * Math.acos(dot);
-          if (angle < minAngle) { minAngle = angle; idx = i; }
+          if (r.roll === undefined || r.pitch === undefined) return;
+          let dr = sensor.roll - r.roll;
+          while (dr > 180) dr -= 360;
+          while (dr < -180) dr += 360;
+          const dp = sensor.pitch - r.pitch;
+          const tr = (r.rollTol && r.rollTol > 0.001) ? r.rollTol : 180;
+          const tp = (r.pitchTol && r.pitchTol > 0.001) ? r.pitchTol : 90;
+          const drn = dr / tr;
+          const dpn = dp / tp;
+          const dist = drn*drn + dpn*dpn;
+          if (dist < minDist) { minDist = dist; idx = i; }
         });
         return idx;
       };
@@ -332,7 +338,7 @@ function App() {
       if (idx !== closestRuleIdx) setClosestRuleIdx(idx);
       if (idx >= 0) {
         const r = ruleReferences[idx];
-        viewerRef.current.setClosestDot(r.qw, r.qx, r.qy, r.qz);
+        if (r.qw !== undefined) viewerRef.current.setClosestDot(r.qw, r.qx, r.qy, r.qz);
         gridRef.current?.setClosest(idx);
       }
     } else {
@@ -346,6 +352,9 @@ function App() {
   useEffect(() => {
     const stored = JSON.parse(localStorage.getItem('burst_motion_rule_postures') || '{}');
     const refs = ruleList.map((r) => {
+      // Phase 5.21: button_state=1 (release で発火、移動系 HOLD) は 2D マップから除外
+      // 「ボタン押下しないルールを 2D マップに入れると分かりにくい」というユーザー指摘への対応
+      if (r.button && r.button.state === 1) return null;
       // 1. FW 応答に posture が含まれていれば優先 (Phase 5.9 で quat も含む、Phase 5.16 で tol も)
       if (r.posture && r.posture.euler) {
         const local = stored[r.id];
@@ -1502,6 +1511,33 @@ function App() {
           </div>
         </div>
       </div>
+
+      <!-- 移動 HOLD 状態インジケータ (button_state=1 のルール用、2D マップ外で表示) -->
+      ${ruleList.some((r) => r.button && r.button.state === 1) ? html`
+        <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-3 lg:col-span-2">
+          <div class="flex items-center gap-3 flex-wrap">
+            <span class="text-xs font-semibold text-slate-600">🕹 移動 HOLD (Btn 解放中):</span>
+            ${ruleList.filter((r) => r.button && r.button.state === 1).map((r) => {
+              const active = r.current_state >= 0;
+              const keyName = r.action && r.action.keys && r.action.keys.length > 0
+                ? hidCodeToName(r.action.keys[0])
+                : '?';
+              return html`
+                <div class="flex items-center gap-1 px-2 py-1 rounded
+                  ${active ? 'bg-emerald-200 text-emerald-900 ring-2 ring-emerald-500 animate-pulse'
+                           : 'bg-slate-100 text-slate-500'}">
+                  <span class="font-semibold text-xs">${r.name}</span>
+                  <span class="font-mono text-sm">${keyName}</span>
+                  ${active ? html`<span class="text-xs">●HOLD</span>` : null}
+                </div>
+              `;
+            })}
+          </div>
+          <div class="text-[10px] text-slate-500 mt-1">
+            姿勢条件を満たし、Btn3 を <b>離している</b> 間 HOLD 入力。Btn3 押下で自動解除→技モードへ移行。
+          </div>
+        </div>
+      ` : null}
 
       <!-- Roll/Pitch 2D グリッド -->
       <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 lg:col-span-2">
