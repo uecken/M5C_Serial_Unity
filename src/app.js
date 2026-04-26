@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-102047';
-import { BleClient }    from './lib/BleClient.js?v=20260426-102047';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-102047';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-102047';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-102047';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-103056';
+import { BleClient }    from './lib/BleClient.js?v=20260426-103056';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-103056';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-103056';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-103056';
 
 const html = htm.bind(h);
 
@@ -99,9 +99,9 @@ function App() {
     localStorage.getItem('burst_motion_hardware') || 'm5stickc'
   );
 
-  // ルール作成時のボタン条件 (デフォルト: Btn3=一番手前のボタン、Phase 5.26 で復帰)
+  // ルール作成時のボタン条件 (デフォルト: Btn1=一番手前のボタン、Phase 5.29 でユーザー確定)
   const [ruleButtonEnabled, setRuleButtonEnabled] = useState(true);
-  const [ruleButtonIdx, setRuleButtonIdx] = useState(3);
+  const [ruleButtonIdx, setRuleButtonIdx] = useState(1);
   const [ruleButtonState, setRuleButtonState] = useState(0);  // 0=押下中、1=解放中
 
   // 6 点キャリブ ウィザード
@@ -958,14 +958,13 @@ function App() {
   // 現在 Hardware の buttons 配列 (空配列なら定義未取得 or 該当機種なし)
   const currentButtons = hardwareDefs[selectedHardware]?.buttons || [];
 
-  // Hardware 切替時、ボタン条件のデフォルト idx を最後 (= 一番手前/独立した物理ボタン) に追従
-  // M5StickC なら 3 (Btn3=G26、一番手前の独立ボタン)、M5Atom S3 なら 1 (Btn=G41 のみ)
+  // Hardware 切替時、ボタン条件のデフォルト idx を 1 (= 一番手前のボタン) に追従
+  // M5StickC なら 1 (Btn1=G0、M5 ロゴ)、M5Atom S3 なら 1 (Btn=G41 唯一) — 全機種で idx=1 が標準
   useEffect(() => {
     if (currentButtons.length > 0) {
-      const lastIdx = currentButtons[currentButtons.length - 1].idx;
-      // 現在 idx が選択肢にない場合のみ追従 (ユーザー手動選択を尊重)
+      const firstIdx = currentButtons[0].idx;
       const exists = currentButtons.some((b) => b.idx === ruleButtonIdx);
-      if (!exists) setRuleButtonIdx(lastIdx);
+      if (!exists) setRuleButtonIdx(firstIdx);
     }
   }, [selectedHardware, currentButtons.length]);
 

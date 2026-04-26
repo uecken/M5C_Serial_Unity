@@ -35,10 +35,10 @@
     },
     {
       "id": "street_fighter",
-      "title": "🥊 ストリートファイター Zero (要 Btn3 / G26)",
-      "description": "Btn3 (一番手前) OFF=移動 (右傾→/左傾←/奥倒し↑/手前倒し↓)、Btn3 ON=技 (punch=s/kick=a/波動拳/昇竜拳/竜巻旋風脚)。基本姿勢 R+90 (縦持ち、LCD 左)、Pitch 軸は jump/crouch のみ反転。9 ルール。",
+      "title": "🥊 ストリートファイター Zero (要 Btn1 / G0)",
+      "description": "Btn1 (一番手前) OFF=移動 (右傾→/左傾←/奥倒し↑/手前倒し↓)、Btn1 ON=技 (punch=s/波動拳/昇竜拳/竜巻旋風脚)。基本姿勢 R+90 (縦持ち、LCD 右)、hadoken は LCD 上向け水平 (R0/P0) で振り。8 ルール。",
       "tags": ["game", "fighting", "button", "macro", "sf-zero"],
-      "rule_count": 9,
+      "rule_count": 8,
       "file": "street_fighter.json"
     }
   ]
