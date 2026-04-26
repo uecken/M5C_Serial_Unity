@@ -15,7 +15,7 @@
       "ui_mode": "hold_start_only",
       "button_idx": 3,
       "button_state": 1,
-      "posture": { "euler": [120, 0, 0], "euler_tol": [25, 25, 180] },
+      "posture": { "euler": [150, 0, 0], "euler_tol": [30, 25, 180] },
       "key": "ARROW_RIGHT",
       "cooldown_ms": 0
     },
@@ -24,7 +24,7 @@
       "ui_mode": "hold_start_only",
       "button_idx": 3,
       "button_state": 1,
-      "posture": { "euler": [60, 0, 0], "euler_tol": [25, 25, 180] },
+      "posture": { "euler": [30, 0, 0], "euler_tol": [30, 25, 180] },
       "key": "ARROW_LEFT",
       "cooldown_ms": 0
     },
@@ -33,7 +33,7 @@
       "ui_mode": "hold_start_only",
       "button_idx": 3,
       "button_state": 1,
-      "posture": { "euler": [90, 30, 0], "euler_tol": [180, 15, 180] },
+      "posture": { "euler": [90, 45, 0], "euler_tol": [180, 15, 180] },
       "key": "ARROW_UP",
       "cooldown_ms": 0
     },
@@ -42,7 +42,7 @@
       "ui_mode": "hold_start_only",
       "button_idx": 3,
       "button_state": 1,
-      "posture": { "euler": [90, -30, 0], "euler_tol": [180, 15, 180] },
+      "posture": { "euler": [90, -45, 0], "euler_tol": [180, 15, 180] },
       "key": "ARROW_DOWN",
       "cooldown_ms": 0
     },
@@ -53,14 +53,15 @@
       "button_state": 0,
       "posture": { "euler": [90, 0, 0], "euler_tol": [25, 25, 180] },
       "key": "s",
-      "cooldown_ms": 200
+      "cooldown_ms": 200,
+      "_comment": "基本姿勢 R+90 ± 25 / Pitch 0 ± 25 内で発火 = ±25° 以内のニュートラル領域"
     },
     {
       "name": "kick",
       "ui_mode": "oneshot",
       "button_idx": 3,
       "button_state": 0,
-      "posture": { "euler": [60, 0, 0], "euler_tol": [25, 25, 180] },
+      "posture": { "euler": [30, 0, 0], "euler_tol": [30, 25, 180] },
       "accel_abs_threshold": 1.8,
       "key": "a",
       "cooldown_ms": 400
