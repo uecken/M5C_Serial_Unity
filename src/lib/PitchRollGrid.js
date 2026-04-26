@@ -8,11 +8,106 @@ export class PitchRollGrid {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.references = [];   // [{roll, pitch, name?}, ...]
+    this.references = [];   // [{roll, pitch, name?, rollTol, pitchTol, id}, ...]
     this.current = null;    // {roll, pitch}
     this.closest = null;    // 最近傍登録 index
-    this.firingIdx = -1;    // 発火フラッシュ中のルール index
+    this.firingIdx = -1;
     this._firingTimer = null;
+    // Phase 5.28: ドラッグ編集
+    this.onRuleEdit = null; // (id, {roll?, pitch?, rollTol?, pitchTol?}) => void
+    this._drag = null;      // {idx, mode: 'center'|'edge-l'|'edge-r'|'edge-t'|'edge-b', startX, startY}
+    canvas.addEventListener('mousedown', this._onMouseDown.bind(this));
+    canvas.addEventListener('mousemove', this._onMouseMove.bind(this));
+    canvas.addEventListener('mouseup',   this._onMouseUp.bind(this));
+    canvas.addEventListener('mouseleave', this._onMouseUp.bind(this));
+    canvas.style.cursor = 'crosshair';
+  }
+
+  setEditCallback(cb) { this.onRuleEdit = cb; }
+
+  // hit-test: 中央点 (12px 半径以内) or 矩形境界 (10px 以内) を判定
+  _hitTest(mx, my) {
+    for (let i = this.references.length - 1; i >= 0; i--) {
+      const r = this.references[i];
+      const cx = this._rollToX(r.roll);
+      const cy = this._pitchToY(r.pitch);
+      const dCenter = Math.hypot(mx - cx, my - cy);
+      if (dCenter <= 12) return { idx: i, mode: 'center' };
+      if (typeof r.rollTol === 'number' && typeof r.pitchTol === 'number'
+          && r.rollTol < 170 && r.pitchTol < 85) {
+        const xL = this._rollToX(r.roll - r.rollTol);
+        const xR = this._rollToX(r.roll + r.rollTol);
+        const yT = this._pitchToY(r.pitch + r.pitchTol);
+        const yB = this._pitchToY(r.pitch - r.pitchTol);
+        if (Math.abs(my - yT) < 6 && mx >= xL - 6 && mx <= xR + 6) return { idx: i, mode: 'edge-t' };
+        if (Math.abs(my - yB) < 6 && mx >= xL - 6 && mx <= xR + 6) return { idx: i, mode: 'edge-b' };
+        if (Math.abs(mx - xL) < 6 && my >= yT - 6 && my <= yB + 6) return { idx: i, mode: 'edge-l' };
+        if (Math.abs(mx - xR) < 6 && my >= yT - 6 && my <= yB + 6) return { idx: i, mode: 'edge-r' };
+      }
+    }
+    return null;
+  }
+
+  _eventToCanvas(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    const sx = this.canvas.width / rect.width;
+    const sy = this.canvas.height / rect.height;
+    return { x: (e.clientX - rect.left) * sx, y: (e.clientY - rect.top) * sy };
+  }
+
+  _onMouseDown(e) {
+    const { x, y } = this._eventToCanvas(e);
+    const hit = this._hitTest(x, y);
+    if (hit) {
+      this._drag = hit;
+      e.preventDefault();
+    }
+  }
+
+  _onMouseMove(e) {
+    const { x, y } = this._eventToCanvas(e);
+    if (!this._drag) {
+      const hit = this._hitTest(x, y);
+      this.canvas.style.cursor = hit
+        ? (hit.mode === 'center' ? 'move'
+          : (hit.mode.startsWith('edge-l') || hit.mode.startsWith('edge-r')) ? 'ew-resize'
+          : 'ns-resize')
+        : 'crosshair';
+      return;
+    }
+    const r = this.references[this._drag.idx];
+    if (!r) return;
+    // canvas 座標 → Roll/Pitch 角度に逆変換
+    const margin = 30;
+    const W = this.canvas.width;
+    const newRoll  = ((x - margin) / (W - 2 * margin)) * 360 - 180;
+    const margin2 = 20;
+    const H = this.canvas.height;
+    const newPitch = -(((y - (H - margin2)) / (H - 2 * margin2)) * 180) - 90;
+    if (this._drag.mode === 'center') {
+      r.roll = Math.max(-180, Math.min(180, Math.round(newRoll)));
+      r.pitch = Math.max(-90, Math.min(90, Math.round(newPitch)));
+    } else if (this._drag.mode === 'edge-l' || this._drag.mode === 'edge-r') {
+      const newTol = Math.max(5, Math.min(180, Math.round(Math.abs(newRoll - r.roll))));
+      r.rollTol = newTol;
+    } else if (this._drag.mode === 'edge-t' || this._drag.mode === 'edge-b') {
+      const newTol = Math.max(5, Math.min(90, Math.round(Math.abs(newPitch - r.pitch))));
+      r.pitchTol = newTol;
+    }
+    this.draw();
+  }
+
+  _onMouseUp(e) {
+    if (this._drag && this.onRuleEdit) {
+      const r = this.references[this._drag.idx];
+      if (r && r.id !== undefined) {
+        this.onRuleEdit(r.id, {
+          roll: r.roll, pitch: r.pitch, rollTol: r.rollTol, pitchTol: r.pitchTol,
+        });
+      }
+    }
+    this._drag = null;
+    this.canvas.style.cursor = 'crosshair';
   }
 
   // 発火したルールを緑フラッシュ表示。durationMs 経過後に元に戻る

@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-101850';
-import { BleClient }    from './lib/BleClient.js?v=20260426-101850';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-101850';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-101850';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-101850';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-102047';
+import { BleClient }    from './lib/BleClient.js?v=20260426-102047';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-102047';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-102047';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-102047';
 
 const html = htm.bind(h);
 
@@ -225,16 +225,71 @@ function App() {
     };
   }, [canvasRef.current]);
 
-  // 2D グリッド初期化
+  // 2D グリッド初期化 (Phase 5.28: ドラッグ編集対応)
   useEffect(() => {
     if (!gridCanvasRef.current) return;
     if (gridRef.current) return;
     gridRef.current = new PitchRollGrid(gridCanvasRef.current);
     gridRef.current.resize();
+    // ドラッグでルール姿勢/tol 編集 → rule.update を送信
+    gridRef.current.setEditCallback((id, changes) => {
+      const rule = ruleListRef.current?.find((r) => r.id === id);
+      if (!rule) return;
+      // 既存ルールを取り直し、posture を上書きして rule.add で再登録 (= 上書き)
+      const r = {
+        id: rule.id,
+        name: rule.name,
+        ui_mode: rule.loop ? (rule.states_count === 1 ? 'hold_start_only' : 'hold_start_end') : 'oneshot',
+        posture: {
+          euler: [
+            changes.roll  !== undefined ? changes.roll  : rule.posture.euler[0],
+            changes.pitch !== undefined ? changes.pitch : rule.posture.euler[1],
+            rule.posture.euler[2] || 0,
+          ],
+          euler_tol: [
+            changes.rollTol  !== undefined ? changes.rollTol  : rule.posture.euler_tol[0],
+            changes.pitchTol !== undefined ? changes.pitchTol : rule.posture.euler_tol[1],
+            rule.posture.euler_tol[2] || 180,
+          ],
+          judge_by: rule.posture.judge_by || 'euler',
+        },
+      };
+      // posture.euler から quat 計算
+      r.posture.quat = eulerToQuat(r.posture.euler[0], r.posture.euler[1], r.posture.euler[2]);
+      // button / accel / action 再生成 (一覧から復元)
+      if (rule.button) { r.button_idx = rule.button.idx; r.button_state = rule.button.state; }
+      if (rule.accel) r.accel_abs_threshold = rule.accel.abs_threshold;
+      if (rule.action) {
+        if (rule.action.type_name === 'fire_macro') {
+          r.keys = rule.action.keys.map((c, i) => {
+            const m = (rule.action.key_modes && rule.action.key_modes[i]) || 0;
+            const name = String.fromCharCode(c) || `0x${c.toString(16)}`;
+            if (m === 1) return '+' + name;
+            if (m === 2) return '-' + name;
+            if (m === 3) return '!';
+            return name;
+          });
+          r.interval_ms = rule.action.interval_ms || 30;
+        } else if (rule.action.keys && rule.action.keys.length > 0) {
+          r.key = String.fromCharCode(rule.action.keys[rule.action.keys.length - 1]);
+        }
+      }
+      // クリア → 同 ID で再登録 (rule.add は同 id を上書きする想定だが、安全のため remove + add)
+      if (activeClient) {
+        activeClient.send({ cmd: 'rule.remove', id: rule.id })
+          .then(() => new Promise((res) => setTimeout(res, 60)))
+          .then(() => activeClient.send({ cmd: 'rule.add', r }))
+          .catch(() => {});
+      }
+    });
     const onResize = () => gridRef.current?.resize();
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, [gridCanvasRef.current]);
+
+  // ruleList を ref で参照可能に (PitchRollGrid からの edit callback 用)
+  const ruleListRef = useRef([]);
+  useEffect(() => { ruleListRef.current = ruleList; }, [ruleList]);
 
   // 時系列波形チャート初期化 (Accel & Gyro、各 XYZ + RMS)
   useEffect(() => {
