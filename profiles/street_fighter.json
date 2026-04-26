@@ -1,8 +1,8 @@
 {
   "schema": "burst_motion_sample_v1",
   "id": "street_fighter",
-  "title": "🥊 ストリートファイター Zero (miniplay.com)",
-  "description": "M5StickC 基本姿勢 R+90 (縦持ち、LCD 左)。Btn3 押下で姿勢別の SF Zero (miniplay.com) コマンド入力。",
+  "title": "🥊 ストリートファイター Zero (miniplay.com) — 移動+技",
+  "description": "M5StickC 基本姿勢 R+90 (縦持ち、LCD 左)。Btn3 OFF (release) で姿勢に応じた移動 (HOLD)、Btn3 ON (push) で技繰り出し (ONESHOT)。移動中に Btn3 押すと移動キーが自動 release、技発動。離すと移動 HOLD 再開。",
   "hardware_required": ["m5stickc", "m5stickc_plus", "m5stickc_2"],
   "engine": {
     "closest_only": true,
@@ -10,6 +10,42 @@
     "cooldown_ms": 300
   },
   "rules": [
+    {
+      "name": "move_right",
+      "ui_mode": "hold_start_only",
+      "button_idx": 3,
+      "button_state": 1,
+      "posture": { "euler": [120, 0, 0], "euler_tol": [25, 25, 180] },
+      "key": "ARROW_RIGHT",
+      "cooldown_ms": 0
+    },
+    {
+      "name": "move_left",
+      "ui_mode": "hold_start_only",
+      "button_idx": 3,
+      "button_state": 1,
+      "posture": { "euler": [60, 0, 0], "euler_tol": [25, 25, 180] },
+      "key": "ARROW_LEFT",
+      "cooldown_ms": 0
+    },
+    {
+      "name": "jump",
+      "ui_mode": "hold_start_only",
+      "button_idx": 3,
+      "button_state": 1,
+      "posture": { "euler": [90, 30, 0], "euler_tol": [180, 15, 180] },
+      "key": "ARROW_UP",
+      "cooldown_ms": 0
+    },
+    {
+      "name": "crouch",
+      "ui_mode": "hold_start_only",
+      "button_idx": 3,
+      "button_state": 1,
+      "posture": { "euler": [90, -30, 0], "euler_tol": [180, 15, 180] },
+      "key": "ARROW_DOWN",
+      "cooldown_ms": 0
+    },
     {
       "name": "punch",
       "ui_mode": "oneshot",
