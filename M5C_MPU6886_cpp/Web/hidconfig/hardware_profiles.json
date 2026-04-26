@@ -1,0 +1,61 @@
+{
+  "schema": "burst_motion_hardware_v1",
+  "description": "Hardware 別のボタン定義 (button_idx は 1-origin、bitmap は 0-bit から)。FW 側 src/hal/<board>/ButtonsGpio.hpp と同期させる必須。",
+  "hardware": {
+    "m5stickc": {
+      "title": "M5StickC",
+      "mcu": "ESP32 PICO D4",
+      "imu": "MPU6886",
+      "fw_env": "m5stick-c-v2",
+      "buttons": [
+        { "idx": 1, "name": "Btn1 (G0)",  "gpio": 0,  "active_low": true,  "pull_mode": 1, "location": "GPIO 0  (BOOT 兼用、SW で GND 落とし)", "default_label": "M5" },
+        { "idx": 2, "name": "Btn2 (G36)", "gpio": 36, "active_low": false, "pull_mode": 0, "location": "GPIO 36 (input only、3.3V 入力で押下)", "default_label": "B" },
+        { "idx": 3, "name": "Btn3 (G26)", "gpio": 26, "active_low": true,  "pull_mode": 1, "location": "GPIO 26 (active_low + INPUT_PULLUP、SW で GND 落とし)", "default_label": "C" }
+      ],
+      "note": "レガシー motion_controller 互換 (G0/G36/G26)。FW デフォルト + NVS で永続化。Web UI から hw.buttons.set で変更可能。"
+    },
+    "m5stickc_plus": {
+      "title": "M5StickC Plus",
+      "mcu": "ESP32 PICO D4",
+      "imu": "MPU6886",
+      "fw_env": "m5stickc-plus-v2",
+      "buttons": [
+        { "idx": 1, "name": "Btn1 (G0)",  "gpio": 0,  "active_low": true,  "pull_mode": 1, "location": "GPIO 0  (BOOT 兼用)", "default_label": "M5" },
+        { "idx": 2, "name": "Btn2 (G36)", "gpio": 36, "active_low": false, "pull_mode": 0, "location": "GPIO 36 (input only)", "default_label": "B" },
+        { "idx": 3, "name": "Btn3 (G26)", "gpio": 26, "active_low": true,  "pull_mode": 1, "location": "GPIO 26 (active_low + PU)", "default_label": "C" }
+      ],
+      "note": "M5StickC レガシー互換。Plus 上面の GPIO 35 ボタンを使う場合は hw.buttons.set で変更。"
+    },
+    "m5stickc_2": {
+      "title": "M5StickC Plus2",
+      "mcu": "ESP32 PICO V3-02",
+      "imu": "MPU6886",
+      "fw_env": "m5stickc-plus2-v2",
+      "buttons": [
+        { "idx": 1, "name": "Btn1 (G0)",  "gpio": 0,  "active_low": true,  "pull_mode": 1, "location": "GPIO 0  (BOOT 兼用)", "default_label": "M5" },
+        { "idx": 2, "name": "Btn2 (G36)", "gpio": 36, "active_low": false, "pull_mode": 0, "location": "GPIO 36 (input only)", "default_label": "B" },
+        { "idx": 3, "name": "Btn3 (G26)", "gpio": 26, "active_low": true,  "pull_mode": 1, "location": "GPIO 26 (active_low + PU)", "default_label": "C" }
+      ]
+    },
+    "m5atom_s3": {
+      "title": "M5Atom S3",
+      "mcu": "ESP32-S3",
+      "imu": "MPU6886",
+      "fw_env": "m5atom-s3-v2",
+      "buttons": [
+        { "idx": 1, "name": "Btn",  "gpio": 41, "location": "LCD 下面の M5 ロゴ (LCD タッチ風)", "active_low": true, "default_label": "Center" }
+      ]
+    },
+    "motion_burst": {
+      "title": "Motion Burst (自作)",
+      "mcu": "ESP32-S3 (暫定)",
+      "imu": "MPU6050 (旧) / LSM6DSV16X (量産)",
+      "fw_env": "motion-burst-v2",
+      "buttons": [
+        { "idx": 1, "name": "BtnA", "gpio": 0,  "location": "未確定 (PCB 設計中)", "active_low": true, "default_label": "A" },
+        { "idx": 2, "name": "BtnB", "gpio": 1,  "location": "未確定",              "active_low": true, "default_label": "B" }
+      ],
+      "note": "Phase 5 量産設計で確定予定、仮の GPIO"
+    }
+  }
+}

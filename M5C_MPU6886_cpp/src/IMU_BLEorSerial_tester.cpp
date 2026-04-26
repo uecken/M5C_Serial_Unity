@@ -1261,7 +1261,7 @@ static void ButtonSessionLoop(void* arg) {
         bleCombo.setDelay(7);
       }
     }
-1
+
     //===ボタン判定===
     for(uint8_t i=0; i<sizeof(mc.events_bool); i++){
       //ボタン押下判定
@@ -1700,14 +1700,17 @@ void calibrateMPU(){
 
 
 void calibrateMPUtoLittleFS(){
-  float gyroSumX,gyroSumY,gyroSumZ;
-  float accSumX,accSumY,accSumZ;
-  float calibCount = 500;
-  Serial.println("Calibrating...");
-
+  // NOTE: この関数は C3/S3 (外付け MPU6050) 専用。
+  // M5StickC は MotionController に mpu/aOX/gOX 等のメンバを持たないため
+  // (M5.Imu API を使う)、M5StickC ビルド時はスキップする。
+  // 2026-04-24: M5StickC ビルド失敗修正のため #if で囲み
   #if defined(ESP32C3) || defined(ESP32S3)
+    float gyroSumX=0, gyroSumY=0, gyroSumZ=0;
+    float accSumX=0, accSumY=0, accSumZ=0;
+    float calibCount = 500;
+    Serial.println("Calibrating...");
+
     for (int i = 0; i < calibCount; i++) {
-      //mc.mpu.getMotion6(&mc.ax, &mc.ay, &mc.az, &mc.gx, &mc.gy, &mc.gz);
       mc.mpu.getRealRotation(&mc.gx, &mc.gy, &mc.gz);
       mc.mpu.getRealAcceleration(&mc.ax, &mc.ay, &mc.az);
       gyroSumX += mc.gx;
@@ -1718,37 +1721,35 @@ void calibrateMPUtoLittleFS(){
       accSumZ += mc.az;
       vTaskDelay(10);
     }
-  #endif
 
     mc.gOX = gyroSumX/calibCount;
     mc.gOY = gyroSumY/calibCount;
     mc.gOZ = gyroSumZ/calibCount;
     mc.aOX = accSumX/calibCount;
     mc.aOY = accSumY/calibCount;
-    mc.aOZ = (accSumZ/calibCount) - 1.0;//重力加速度1G、つまりM5ボタンが上向きで行う想定
-  //aOZ = (accSumZ/calibCount) + 1.0;//重力加速度1G、つまりM5ボタンが下向きで行う想定
-  //aOZ = (accSumZ/calibCount);//
-  Serial.println("Calibrating...OK");
-  Serial.printf("%3.3f %3.3f %3.3f %3.3f %3.3f %3.3f", mc.aOX, mc.aOY, mc.aOZ, mc.gOX , mc.gOY , mc.gOZ);
+    mc.aOZ = (accSumZ/calibCount) - 1.0;
+    Serial.println("Calibrating...OK");
+    Serial.printf("%3.3f %3.3f %3.3f %3.3f %3.3f %3.3f", mc.aOX, mc.aOY, mc.aOZ, mc.gOX , mc.gOY , mc.gOZ);
 
-  // LittleFSにキャリブレーションデータを保存
-  mc.saveCalibrationData();
+    mc.saveCalibrationData();
 
-  // 保存されたデータを検証
-  float oldAOX = mc.aOX, oldAOY = mc.aOY, oldAOZ = mc.aOZ, oldGOX = mc.gOX, oldGOY = mc.gOY, oldGOZ = mc.gOZ;
-  if (mc.loadCalibrationData()) {
-    if (oldAOX == mc.aOX && oldAOY == mc.aOY && oldAOZ == mc.aOZ &&
-        oldGOX == mc.gOX && oldGOY == mc.gOY && oldGOZ == mc.gOZ) {
-      Serial.println("Calibration data verified successfully");
+    float oldAOX = mc.aOX, oldAOY = mc.aOY, oldAOZ = mc.aOZ, oldGOX = mc.gOX, oldGOY = mc.gOY, oldGOZ = mc.gOZ;
+    if (mc.loadCalibrationData()) {
+      if (oldAOX == mc.aOX && oldAOY == mc.aOY && oldAOZ == mc.aOZ &&
+          oldGOX == mc.gOX && oldGOY == mc.gOY && oldGOZ == mc.gOZ) {
+        Serial.println("Calibration data verified successfully");
+      } else {
+        Serial.println("ERROR: Calibration data verification failed");
+      }
     } else {
-      Serial.println("ERROR: Calibration data verification failed");
+      Serial.println("ERROR: Failed to load calibration data for verification");
     }
-  } else {
-    Serial.println("ERROR: Failed to load calibration data for verification");
-  }
 
-  Serial.printf("Calibration values: aOX=%f, aOY=%f, aOZ=%f, gOX=%f, gOY=%f, gOZ=%f\n", 
-                mc.aOX, mc.aOY, mc.aOZ, mc.gOX, mc.gOY, mc.gOZ);
+    Serial.printf("Calibration values: aOX=%f, aOY=%f, aOZ=%f, gOX=%f, gOY=%f, gOZ=%f\n",
+                  mc.aOX, mc.aOY, mc.aOZ, mc.gOX, mc.gOY, mc.gOZ);
+  #else
+    Serial.println("calibrateMPUtoLittleFS: skipped on M5StickC build (uses M5.Imu API)");
+  #endif
 }
 
 

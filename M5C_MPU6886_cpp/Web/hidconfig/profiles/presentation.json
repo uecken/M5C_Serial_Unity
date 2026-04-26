@@ -1,0 +1,35 @@
+{
+  "schema": "burst_motion_sample_v1",
+  "id": "presentation",
+  "title": "🎤 プレゼンテーション",
+  "description": "右傾け→次ページ (→ ARROW_RIGHT)、左傾け→前ページ (← ARROW_LEFT)、振って→ポインタ切替 (b)。Phase 5.9 で矢印キー直接対応。",
+  "engine": {
+    "closest_only": false,
+    "button_lock_window_ms": 500,
+    "cooldown_ms": 800
+  },
+  "rules": [
+    {
+      "name": "next_slide",
+      "ui_mode": "oneshot",
+      "posture": { "euler": [40, 0, 0], "euler_tol": [15, 180, 180] },
+      "key": "ARROW_RIGHT",
+      "cooldown_ms": 800
+    },
+    {
+      "name": "prev_slide",
+      "ui_mode": "oneshot",
+      "posture": { "euler": [-40, 0, 0], "euler_tol": [15, 180, 180] },
+      "key": "ARROW_LEFT",
+      "cooldown_ms": 800
+    },
+    {
+      "name": "pointer_toggle",
+      "ui_mode": "oneshot",
+      "posture": { "euler": [0, 30, 0], "euler_tol": [180, 15, 180] },
+      "accel_abs_threshold": 2.5,
+      "key": "b",
+      "cooldown_ms": 1500
+    }
+  ]
+}

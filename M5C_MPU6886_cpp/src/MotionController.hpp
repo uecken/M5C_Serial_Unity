@@ -267,7 +267,8 @@ class MotionController{
             //pinMode(RIGHT_RING, INPUT);
             //pinMode(RIGHT_MIDDLE, INPUT);
             //pinMode(RIGHT_INDEX, INPUT);
-        #endif
+          #endif   // close ESP32C3/ESP32S3
+        #endif     // close ILLUMITRACK_R (以前ここが抜けていた: 2026-04-24 修正)
 
         #if defined(ESP32C3) || defined(ESP32S3)
             Serial.begin(115200);
@@ -1176,102 +1177,116 @@ class MotionController{
     const char* calibrationFile = "/calibration.dat";
 
     void saveCalibrationData() {
+    // 2026-04-24: aOX 等は C3/S3 メンバのみ、M5StickC では no-op
+    #if defined(ESP32C3) || defined(ESP32S3)
     File file = LittleFS.open(calibrationFile, "w");
     if(!file){
         Serial.println("Failed to open calibration file for writing");
         return;
     }
-    
+
     file.write((uint8_t*)&aOX, sizeof(aOX));
     file.write((uint8_t*)&aOY, sizeof(aOY));
     file.write((uint8_t*)&aOZ, sizeof(aOZ));
     file.write((uint8_t*)&gOX, sizeof(gOX));
     file.write((uint8_t*)&gOY, sizeof(gOY));
     file.write((uint8_t*)&gOZ, sizeof(gOZ));
-    
+
     file.close();
     Serial.println("Calibration data saved to LittleFS");
+    #else
+    Serial.println("saveCalibrationData: no-op on M5StickC");
+    #endif
     }
 
     bool loadCalibrationData() {
+    #if defined(ESP32C3) || defined(ESP32S3)
     File file = LittleFS.open(calibrationFile, "r");
     if(!file){
         Serial.println("No calibration file found");
         return false;
     }
-    
+
     if(file.read((uint8_t*)&aOX, sizeof(aOX)) &&
         file.read((uint8_t*)&aOY, sizeof(aOY)) &&
         file.read((uint8_t*)&aOZ, sizeof(aOZ)) &&
         file.read((uint8_t*)&gOX, sizeof(gOX)) &&
         file.read((uint8_t*)&gOY, sizeof(gOY)) &&
         file.read((uint8_t*)&gOZ, sizeof(gOZ))) {
-        
+
         file.close();
         Serial.println("Calibration data loaded from LittleFS");
         return true;
     }
-    
+
     file.close();
     Serial.println("Failed to read calibration data");
     return false;
+    #else
+    return false;
+    #endif
     }
 
     void calibrateMPUtoLittleFS(){
-        float gyroSumX,gyroSumY,gyroSumZ;
-        float accSumX,accSumY,accSumZ;
-        float calibCount = 500;
-        Serial.println("Calibrating...");
-
+        // C3/S3 用 (外付け MPU6050 DMP)。M5StickC は M5.Imu を使うため no-op。
+        // 2026-04-24 修正: M5StickC build で aOX/gOX 等がメンバに無いため全体を #if 囲み
         #if defined(ESP32C3) || defined(ESP32S3)
+            float gyroSumX=0, gyroSumY=0, gyroSumZ=0;
+            float accSumX=0, accSumY=0, accSumZ=0;
+            float calibCount = 500;
+            Serial.println("Calibrating...");
+
             for (int i = 0; i < calibCount; i++) {
-            //mc.mpu.getMotion6(&mc.ax, &mc.ay, &mc.az, &mc.gx, &mc.gy, &mc.gz);
-            mpu.getRealRotation(&gx, &gy, &gz);
-            mpu.getRealAcceleration(&ax, &ay, &az);
-            gyroSumX += gx;
-            gyroSumY += gy;
-            gyroSumZ += gz;
-            accSumX += ax;
-            accSumY += ay;
-            accSumZ += az;
-            vTaskDelay(10);
+                mpu.getRealRotation(&gx, &gy, &gz);
+                mpu.getRealAcceleration(&ax, &ay, &az);
+                gyroSumX += gx;
+                gyroSumY += gy;
+                gyroSumZ += gz;
+                accSumX += ax;
+                accSumY += ay;
+                accSumZ += az;
+                vTaskDelay(10);
             }
-        #endif
 
             gOX = gyroSumX/calibCount;
             gOY = gyroSumY/calibCount;
             gOZ = gyroSumZ/calibCount;
             aOX = accSumX/calibCount;
             aOY = accSumY/calibCount;
-            aOZ = (accSumZ/calibCount) - 1.0;//重力加速度1G、つまりM5ボタンが上向きで行う想定
-        //aOZ = (accSumZ/calibCount) + 1.0;//重力加速度1G、つまりM5ボタンが下向きで行う想定
-        //aOZ = (accSumZ/calibCount);//
-        Serial.println("Calibrating...OK");
-        Serial.printf("%3.3f %3.3f %3.3f %3.3f %3.3f %3.3f", aOX, aOY, aOZ, gOX , gOY , gOZ);
+            aOZ = (accSumZ/calibCount) - 1.0;
+            Serial.println("Calibrating...OK");
+            Serial.printf("%3.3f %3.3f %3.3f %3.3f %3.3f %3.3f", aOX, aOY, aOZ, gOX , gOY , gOZ);
 
-        // LittleFSにキャリブレーションデータを保存
-        saveCalibrationData();
+            saveCalibrationData();
 
-        // 保存されたデータを検証
-        float oldAOX = aOX, oldAOY = aOY, oldAOZ = aOZ, oldGOX = gOX, oldGOY = gOY, oldGOZ = gOZ;
-        if (loadCalibrationData()) {
-            if (oldAOX == aOX && oldAOY == aOY && oldAOZ == aOZ &&
-                oldGOX == gOX && oldGOY == gOY && oldGOZ == gOZ) {
-            Serial.println("Calibration data verified successfully");
+            float oldAOX = aOX, oldAOY = aOY, oldAOZ = aOZ, oldGOX = gOX, oldGOY = gOY, oldGOZ = gOZ;
+            if (loadCalibrationData()) {
+                if (oldAOX == aOX && oldAOY == aOY && oldAOZ == aOZ &&
+                    oldGOX == gOX && oldGOY == gOY && oldGOZ == gOZ) {
+                Serial.println("Calibration data verified successfully");
+                } else {
+                Serial.println("ERROR: Calibration data verification failed");
+                }
             } else {
-            Serial.println("ERROR: Calibration data verification failed");
+                Serial.println("ERROR: Failed to load calibration data for verification");
             }
-        } else {
-            Serial.println("ERROR: Failed to load calibration data for verification");
-        }
 
-        Serial.printf("Calibration values: aOX=%f, aOY=%f, aOZ=%f, gOX=%f, gOY=%f, gOZ=%f\n", 
-                        aOX, aOY, aOZ, gOX, gOY, gOZ);
+            Serial.printf("Calibration values: aOX=%f, aOY=%f, aOZ=%f, gOX=%f, gOY=%f, gOZ=%f\n",
+                            aOX, aOY, aOZ, gOX, gOY, gOZ);
+        #else
+            Serial.println("MotionController::calibrateMPUtoLittleFS: no-op on M5StickC");
+        #endif
     }
 
     void offsetSensorData(){
-        ax -= aOX; ay -= aOY; az -= aOZ;
-        gx -= gOX; gy -= gOY; gz -= gOZ;
+        // NOTE: ax/ay/az/gx/gy/gz および aOX/gOX 等は
+        //       ESP32C3/ESP32S3 ビルド時のみメンバとして存在 (MPU6050 DMP用)。
+        //       M5StickC は M5.Imu API を使うため、ここは no-op。
+        //       2026-04-24 修正
+        #if defined(ESP32C3) || defined(ESP32S3)
+            ax -= aOX; ay -= aOY; az -= aOZ;
+            gx -= gOX; gy -= gOY; gz -= gOZ;
+        #endif
     }
 
 
@@ -1309,4 +1324,4 @@ class MotionController{
         }
     }
 };
-#endif
+// 2026-04-24: 末尾の孤立 #endif を削除 (対応する #ifndef がない)

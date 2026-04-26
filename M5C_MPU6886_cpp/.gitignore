@@ -5,3 +5,7 @@
 .vscode/ipch
 SlimeVR-Tracker-ESP-main/*
 
+# Web 開発用自己署名証明書 (個人マシン固有、リポジトリに含めない)
+Web/hidconfig/cert.pem
+Web/hidconfig/key.pem
+
