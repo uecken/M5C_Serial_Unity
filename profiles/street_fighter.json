@@ -1,8 +1,8 @@
 {
   "schema": "burst_motion_sample_v1",
   "id": "street_fighter",
-  "title": "🥊 ストリートファイター 風 (SF Zero on miniplay 用)",
-  "description": "M5StickC 基本姿勢 R+90/P0 (縦持ち)。Btn3 (G26) 押下で SF Zero (miniplay.com) のキー入力。BUTTON_1=z (LP), BUTTON_2=x (MP), BUTTON_3=a (LK), BUTTON_4=s (MK), L=q (HP), R=e (HK)。",
+  "title": "🥊 ストリートファイター Zero (miniplay.com)",
+  "description": "M5StickC 基本姿勢 R+90 (縦持ち、LCD 左)。Btn3 押下で姿勢別の SF Zero (miniplay.com) コマンド入力。",
   "hardware_required": ["m5stickc", "m5stickc_plus", "m5stickc_2"],
   "engine": {
     "closest_only": true,
@@ -11,23 +11,13 @@
   },
   "rules": [
     {
-      "name": "midkick",
+      "name": "punch",
       "ui_mode": "oneshot",
       "button_idx": 3,
       "button_state": 0,
       "posture": { "euler": [90, 0, 0], "euler_tol": [25, 25, 180] },
       "key": "s",
       "cooldown_ms": 200
-    },
-    {
-      "name": "punch",
-      "ui_mode": "oneshot",
-      "button_idx": 3,
-      "button_state": 0,
-      "posture": { "euler": [120, 0, 0], "euler_tol": [25, 25, 180] },
-      "accel_abs_threshold": 1.8,
-      "key": "x",
-      "cooldown_ms": 400
     },
     {
       "name": "kick",
@@ -46,7 +36,7 @@
       "button_state": 0,
       "posture": { "euler": [-179, 0, 0], "euler_tol": [15, 25, 180] },
       "accel_abs_threshold": 2.0,
-      "keys": ["DOWN", "DOWN+RIGHT", "RIGHT", "RIGHT+z"],
+      "keys": ["DOWN", "DOWN+RIGHT", "RIGHT", "RIGHT+a"],
       "interval_ms": 50,
       "cooldown_ms": 600
     },
@@ -57,7 +47,7 @@
       "button_state": 0,
       "posture": { "euler": [0, 75, 0], "euler_tol": [180, 15, 180] },
       "accel_abs_threshold": 2.5,
-      "keys": ["RIGHT", "DOWN", "DOWN+RIGHT+z"],
+      "keys": ["RIGHT", "DOWN", "DOWN+RIGHT+a"],
       "interval_ms": 50,
       "cooldown_ms": 800
     },
@@ -66,9 +56,9 @@
       "ui_mode": "oneshot",
       "button_idx": 3,
       "button_state": 0,
-      "posture": { "euler": [-45, -30, 0], "euler_tol": [15, 15, 180] },
+      "posture": { "euler": [0, -75, 0], "euler_tol": [180, 15, 180] },
       "accel_abs_threshold": 2.0,
-      "keys": ["DOWN", "DOWN+LEFT", "LEFT", "LEFT+a"],
+      "keys": ["DOWN", "DOWN+LEFT", "LEFT", "LEFT+z"],
       "interval_ms": 50,
       "cooldown_ms": 700
     }
