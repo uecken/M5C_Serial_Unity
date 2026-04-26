@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-090608';
-import { BleClient }    from './lib/BleClient.js?v=20260426-090608';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-090608';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-090608';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-090608';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-091218';
+import { BleClient }    from './lib/BleClient.js?v=20260426-091218';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-091218';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-091218';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-091218';
 
 const html = htm.bind(h);
 
@@ -130,6 +130,13 @@ function App() {
   const [showWorldAxes, setShowWorldAxes] = useState(false);
   const [showBodyAxes, setShowBodyAxes] = useState(false);
   const [showGravity, setShowGravity] = useState(false);
+  // 加速度・ジャイロ時間波形 ON/OFF (Phase 5.19、ユーザー要望)
+  const [showCharts, setShowCharts] = useState(
+    localStorage.getItem('burst_motion_show_charts') !== 'false'
+  );
+  useEffect(() => {
+    localStorage.setItem('burst_motion_show_charts', showCharts ? 'true' : 'false');
+  }, [showCharts]);
 
   // ルール姿勢から計算した登録参照点
   const [ruleReferences, setRuleReferences] = useState([]);  // [{id, name, roll, pitch, yaw, qw, qx, qy, qz}]
@@ -1374,7 +1381,15 @@ function App() {
         <h2 class="font-semibold mb-3">🔧 デバイス</h2>
         ${deviceInfo ? html`
           <dl class="grid grid-cols-2 gap-x-2 gap-y-1 text-sm">
-            <dt class="text-slate-500">FW:</dt><dd>${deviceInfo.fw || '—'}</dd>
+            <dt class="text-slate-500">FW:</dt>
+            <dd>
+              ${deviceInfo.fw || '—'}
+              ${deviceInfo.fw_phase ? html` <span class="px-1.5 py-0.5 ml-1 bg-emerald-100 text-emerald-700 text-[11px] font-mono font-semibold rounded">Phase ${deviceInfo.fw_phase}</span>` : null}
+            </dd>
+            ${deviceInfo.fw_build ? html`
+              <dt class="text-slate-500">Build:</dt>
+              <dd class="font-mono text-[11px]">${deviceInfo.fw_build}</dd>
+            ` : null}
             <dt class="text-slate-500">Board:</dt><dd>${deviceInfo.board || '—'}</dd>
             <dt class="text-slate-500">IMU:</dt><dd>${deviceInfo.imu || '—'} ${deviceInfo.imu_ok === false ? '❌' : ''}</dd>
             <dt class="text-slate-500">Uptime:</dt><dd>${deviceInfo.uptime ? (deviceInfo.uptime / 1000).toFixed(1) + 's' : '—'}</dd>
@@ -1415,6 +1430,10 @@ function App() {
           <label class="flex items-center gap-1 cursor-pointer">
             <input type="checkbox" checked=${showGravity} onChange=${(e) => setShowGravity(e.target.checked)} />
             <span>重力ベクトル (水色)</span>
+          </label>
+          <label class="flex items-center gap-1 cursor-pointer ml-3 border-l pl-3">
+            <input type="checkbox" checked=${showCharts} onChange=${(e) => setShowCharts(e.target.checked)} />
+            <span>📈 加速度/ジャイロ時間波形</span>
           </label>
         </div>
         <canvas ref=${canvasRef} style="width:100%; height:240px; display:block; border-radius:6px; background:#000;"></canvas>
@@ -1459,8 +1478,8 @@ function App() {
           </div>
         ` : html`<p class="text-xs text-slate-400 mt-2 text-center">${streamRate === 0 ? 'Stream OFF (3D は QW/Q* 受信で動作)' : '待機中…'}</p>`}
 
-        <!-- 時系列波形チャート (Accel & Gyro 各 XYZ + RMS) -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-3">
+        <!-- 時系列波形チャート (Accel & Gyro 各 XYZ + RMS、Phase 5.19 で ON/OFF 可) -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-3" style=${showCharts ? '' : 'display:none'}>
           <div>
             <div class="text-[10px] text-slate-500 mb-0.5 flex items-center gap-2 font-mono">
               <span>Accel [g] 時系列</span>
