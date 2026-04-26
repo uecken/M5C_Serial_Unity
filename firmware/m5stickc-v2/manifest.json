@@ -1,6 +1,6 @@
 {
     "name": "Burst Motion (M5StickC)",
-    "version": "2.0.0-dev (2026-04-26 09:30)",
+    "version": "2.0.0-dev (2026-04-26 10:18)",
     "home_assistant_domain": "burst_motion",
     "funding_url": "https://protopedia.net/prototype/1988",
     "new_install_prompt_erase": false,

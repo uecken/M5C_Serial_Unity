@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-101356';
-import { BleClient }    from './lib/BleClient.js?v=20260426-101356';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-101356';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-101356';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-101356';
+import { SerialClient } from './lib/SerialClient.js?v=20260426-101850';
+import { BleClient }    from './lib/BleClient.js?v=20260426-101850';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-101850';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-101850';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-101850';
 
 const html = htm.bind(h);
 
@@ -1645,6 +1645,17 @@ function App() {
           </button>
         </div>
         <div class="flex gap-2 flex-wrap items-center">
+          <span class="text-xs text-slate-500 mr-1">矢印キー (即発火):</span>
+          <button onClick=${() => hidTest('fire', { key: 'ARROW_LEFT'  })} disabled=${!connected} class="px-3 py-1 text-sm bg-indigo-200 hover:bg-indigo-300 rounded disabled:opacity-40 font-mono">←</button>
+          <button onClick=${() => hidTest('fire', { key: 'ARROW_DOWN'  })} disabled=${!connected} class="px-3 py-1 text-sm bg-indigo-200 hover:bg-indigo-300 rounded disabled:opacity-40 font-mono">↓</button>
+          <button onClick=${() => hidTest('fire', { key: 'ARROW_UP'    })} disabled=${!connected} class="px-3 py-1 text-sm bg-indigo-200 hover:bg-indigo-300 rounded disabled:opacity-40 font-mono">↑</button>
+          <button onClick=${() => hidTest('fire', { key: 'ARROW_RIGHT' })} disabled=${!connected} class="px-3 py-1 text-sm bg-indigo-200 hover:bg-indigo-300 rounded disabled:opacity-40 font-mono">→</button>
+          <span class="text-xs text-slate-500 mr-1 ml-3">特殊:</span>
+          <button onClick=${() => hidTest('fire', { key: 'ENTER' })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">Enter</button>
+          <button onClick=${() => hidTest('fire', { key: 'SPACE' })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">Space</button>
+          <button onClick=${() => hidTest('fire', { key: 'ESC' })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">Esc</button>
+        </div>
+        <div class="flex gap-2 flex-wrap items-center mt-2">
           <span class="text-xs text-slate-500 mr-1">マウス (即実行):</span>
           <button onClick=${() => hidTest('mouse_move', { dx: 50, dy: 0 })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">→ 50,0</button>
           <button onClick=${() => hidTest('mouse_move', { dx: -50, dy: 0 })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">← -50,0</button>
