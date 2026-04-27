@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260426-192911';
-import { BleClient }    from './lib/BleClient.js?v=20260426-192911';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260426-192911';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260426-192911';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260426-192911';
+import { SerialClient } from './lib/SerialClient.js?v=20260427-143250';
+import { BleClient }    from './lib/BleClient.js?v=20260427-143250';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260427-143250';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260427-143250';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260427-143250';
 
 const html = htm.bind(h);
 
@@ -148,6 +148,8 @@ function App() {
 
   // Closest-only モード: FW 側で最近傍ルールだけ発火させる
   const [closestOnlyMode, setClosestOnlyMode] = useState(false);
+  // Phase 5.32: 動作モード (engine = TriggerEngine、mouse = ハードコード air mouse)
+  const [deviceMode, setDeviceMode] = useState('engine');
   // Button-edge lock パラメータ
   const [lockWindowMs, setLockWindowMs] = useState(500);
   const [lockCooldownMs, setLockCooldownMs] = useState(300);
@@ -162,7 +164,9 @@ function App() {
     }
     if (deviceInfo?.lock_window_ms) setLockWindowMs(deviceInfo.lock_window_ms);
     if (deviceInfo?.lock_cooldown_ms !== undefined) setLockCooldownMs(deviceInfo.lock_cooldown_ms);
-  }, [deviceInfo?.closest_only, deviceInfo?.lock_window_ms, deviceInfo?.lock_cooldown_ms]);
+    // Phase 5.32: device_mode 反映
+    if (deviceInfo?.device_mode) setDeviceMode(deviceInfo.device_mode);
+  }, [deviceInfo?.closest_only, deviceInfo?.lock_window_ms, deviceInfo?.lock_cooldown_ms, deviceInfo?.device_mode]);
 
   // 'lock' イベント受信 (FW: lock.acquired / lock.fired / lock.expired)
   useEffect(() => {
@@ -557,6 +561,10 @@ function App() {
       }
       if (d.cmd === 'engine.closest_only' && typeof d.enabled === 'boolean') {
         setClosestOnlyMode(d.enabled);
+      }
+      // Phase 5.32: mode.set の ack に device_mode が含まれる
+      if (d.cmd === 'mode.set' && typeof d.device_mode === 'string') {
+        setDeviceMode(d.device_mode);
       }
     };
 
@@ -1380,6 +1388,17 @@ function App() {
               ` : null}
             ` : html`<span class="chip bg-amber-100 text-amber-700">FW 取得中…</span>`}
           </div>
+          <!-- Phase 5.32: 動作モード切替 (Engine / Mouse) -->
+          <div class="flex gap-1 bg-slate-100 rounded-lg p-1" title="動作モード: Engine=ルール評価、Mouse=エアマウス (Btn3=左、Btn2=右、両押し=ホイール)">
+            <button onClick=${() => sendCmd({ cmd: 'mode.set', mode: 'engine' })}
+              class="px-3 py-1 text-sm rounded ${deviceMode === 'engine' ? 'bg-white shadow font-semibold' : 'text-slate-500'}">
+              🎯 Engine
+            </button>
+            <button onClick=${() => sendCmd({ cmd: 'mode.set', mode: 'mouse' })}
+              class="px-3 py-1 text-sm rounded ${deviceMode === 'mouse' ? 'bg-white shadow font-semibold' : 'text-slate-500'}">
+              🖱 Mouse
+            </button>
+          </div>
           <button onClick=${handleDisconnect} class="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg">切断</button>
         ` : html`
           <button onClick=${handleConnect}
@@ -1390,6 +1409,18 @@ function App() {
         `}
       </div>
     </header>
+
+    <!-- Phase 5.32: Mouse モード中の説明バナー -->
+    ${connected && deviceMode === 'mouse' ? html`
+      <div class="mb-3 p-3 bg-sky-50 border-l-4 border-sky-400 text-sm">
+        <div class="font-semibold text-sky-800 mb-1">🖱 Mouse モード動作中</div>
+        <ul class="text-xs text-sky-700 list-disc ml-5 space-y-0.5">
+          <li>IMU ジャイロでカーソル移動 (Yaw=横、Pitch=縦、deadzone 3°/s、感度 8 px/deg)</li>
+          <li>${(deviceInfo?.board || selectedHardware) === 'm5stickc' ? html`<b>Btn3</b> (G26、一番手前) = 左クリック / <b>Btn2</b> (G36) = 右クリック / <b>同時押し</b> = ホイール (Pitch で上下スクロール、30°/ノッチ)` : html`Btn 配列に依存。M5StickC 以外は未検証`}</li>
+          <li>ルール (TriggerEngine) は無効化中。Engine モードに戻すと現在の active profile が再評価されます</li>
+        </ul>
+      </div>
+    ` : null}
 
     <!-- FW Phase 古い警告 (Closest-only ON で Phase < 5.15 = tol 重み付け未対応) -->
     ${connected && closestOnlyMode && deviceInfo?.fw_phase && parseFloat(deviceInfo.fw_phase) < 5.15 ? html`
