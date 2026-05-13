@@ -4,13 +4,27 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260514-040035';
-import { BleClient }    from './lib/BleClient.js?v=20260514-040035';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-040035';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-040035';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-040035';
+import { SerialClient } from './lib/SerialClient.js?v=20260514-040500';
+import { BleClient }    from './lib/BleClient.js?v=20260514-040500';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-040500';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-040500';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-040500';
 
 const html = htm.bind(h);
+
+// Phase 5.34: posture.euler [Roll, Pitch] → 8 方向名 (U/D/L/R/UL/UR/DL/DR/·)
+// Kano-canonical の `directionToCondition()` 逆引き
+function postureToDirection(euler) {
+  if (!Array.isArray(euler)) return '·';
+  const r = euler[0];
+  const p = euler[1];
+  // Roll: +60=L, +90=center, +120=R (±15° 許容)
+  const rollName = (r > 105) ? 'R' : (r < 75) ? 'L' : '';
+  // Pitch: +30=U, 0=center, -30=D (±10° 許容)
+  const pitchName = (p > 15) ? 'U' : (p < -15) ? 'D' : '';
+  const combined = pitchName + rollName;
+  return combined || '·';   // 基本姿勢 = center
+}
 
 // ==========================================================
 // グローバル: 接続クライアント (USB / BLE どちらか active)
@@ -443,6 +457,24 @@ function App() {
     setRuleReferences(refs);
     if (gridRef.current) {
       gridRef.current.setReferences(refs);
+      // Phase 5.34: SEQUENCE rule (states_count > 1) を別レイヤで連結描画
+      const sequences = ruleList
+        .filter((r) => Array.isArray(r.states) && r.states.length > 1)
+        .map((r) => ({
+          id: r.id,
+          name: r.name,
+          currentState: r.current_state,
+          waypoints: r.states
+            .filter((s) => s.posture && Array.isArray(s.posture.euler))
+            .map((s) => ({
+              roll: s.posture.euler[0],
+              pitch: s.posture.euler[1],
+              rollTol: s.posture.euler_tol?.[0],
+              pitchTol: s.posture.euler_tol?.[1],
+            })),
+        }))
+        .filter((seq) => seq.waypoints.length > 1);
+      gridRef.current.setSequences(sequences);
     }
     if (viewerRef.current) {
       const quats = refs.filter(r => r.qw !== undefined).map(r => ({
@@ -1901,7 +1933,22 @@ function App() {
                         ${btnEval || '-'}
                       </td>
                       <td class="px-2 py-1 font-mono ${r.posture ? '' : 'text-slate-300'}">
-                        ${r.posture ? `R${r.posture.euler[0]?.toFixed(0)}P${r.posture.euler[1]?.toFixed(0)}±${r.posture.euler_tol[0]?.toFixed(0)}` : '-'}
+                        ${r.states && r.states.length > 1 ? html`
+                          <span class="inline-flex items-center gap-0.5 text-xs">
+                            ${r.states.map((s, i) => {
+                              if (!s.posture || !Array.isArray(s.posture.euler)) return null;
+                              const dirName = postureToDirection(s.posture.euler);
+                              const active = r.current_state === i;
+                              return html`
+                                <span class="px-1 rounded ${active ? 'bg-emerald-200 text-emerald-900 font-bold' : 'bg-violet-100 text-violet-800'}"
+                                      title="state[${i}] R${s.posture.euler[0]?.toFixed(0)} P${s.posture.euler[1]?.toFixed(0)} ±R${s.posture.euler_tol?.[0]?.toFixed(0)}/P${s.posture.euler_tol?.[1]?.toFixed(0)}">
+                                  ${dirName}
+                                </span>
+                                ${i < r.states.length - 1 ? html`<span class="text-violet-400">→</span>` : null}
+                              `;
+                            })}
+                          </span>
+                        ` : (r.posture ? html`R${r.posture.euler[0]?.toFixed(0)}P${r.posture.euler[1]?.toFixed(0)}±${r.posture.euler_tol[0]?.toFixed(0)}` : '-')}
                       </td>
                       <td class="px-2 py-1 font-mono ${r.accel ? '' : 'text-slate-300'}">
                         ${r.accel ? `≥${r.accel.abs_threshold?.toFixed(1)}g` : '-'}

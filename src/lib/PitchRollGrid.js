@@ -132,6 +132,13 @@ export class PitchRollGrid {
     this.draw();
   }
 
+  // Phase 5.34: 複数 waypoint の SEQUENCE rule を別レイヤで描画
+  // seqs = [{id, name, currentState, waypoints: [{roll, pitch, rollTol, pitchTol}, ...]}, ...]
+  setSequences(seqs) {
+    this.sequences = seqs || [];
+    this.draw();
+  }
+
   setClosest(idx) {
     this.closest = idx;
     this.draw();
@@ -248,10 +255,104 @@ export class PitchRollGrid {
       }
     });
 
+    // Phase 5.34: SEQUENCE 描画 (waypoint 連結 + 番号 + 矢印)
+    //   既存 references の上に描画。色: 紫系 (橙単点と区別)。
+    //   currentState 強調: 滞在中 = 緑塗り、未到達 = 紫薄塗り
+    if (this.sequences && this.sequences.length > 0) {
+      this._drawSequences();
+    }
+
     // 現在姿勢 (赤、上から描く)
     if (this.current) {
       this._plotPoint(this.current.roll, this.current.pitch, '#ef4444', 6);
     }
+  }
+
+  _drawSequences() {
+    const { ctx } = this;
+    this.sequences.forEach((seq) => {
+      const wps = seq.waypoints || [];
+      if (wps.length < 1) return;
+      const cur = seq.currentState >= 0 ? seq.currentState : -1;
+      // 各 waypoint 矩形 (tol) を薄く描画
+      wps.forEach((wp, i) => {
+        const isActive = (i === cur);
+        const isPassed = (cur >= 0 && i < cur);
+        const fillStyle = isActive
+          ? 'rgba(34,197,94,0.32)'           // 緑 (state 滞在中)
+          : isPassed
+          ? 'rgba(139,92,246,0.10)'          // 紫薄 (通過済)
+          : 'rgba(139,92,246,0.22)';         // 紫 (未到達)
+        const strokeStyle = isActive
+          ? 'rgba(21,128,61,0.9)'
+          : 'rgba(109,40,217,0.55)';
+        if (typeof wp.rollTol === 'number' && typeof wp.pitchTol === 'number'
+            && wp.rollTol < 170 && wp.pitchTol < 85) {
+          const yTop = this._pitchToY(wp.pitch + wp.pitchTol);
+          const yBot = this._pitchToY(wp.pitch - wp.pitchTol);
+          this._fillRollRangeY(ctx, wp.roll, wp.rollTol, yTop, yBot, fillStyle, strokeStyle);
+        }
+      });
+      // waypoint 間の矢印
+      for (let i = 0; i < wps.length - 1; i++) {
+        const x1 = this._rollToX(wps[i].roll);
+        const y1 = this._pitchToY(wps[i].pitch);
+        const x2 = this._rollToX(wps[i + 1].roll);
+        const y2 = this._pitchToY(wps[i + 1].pitch);
+        ctx.strokeStyle = (cur >= 0 && i < cur) ? 'rgba(139,92,246,0.4)' : 'rgba(109,40,217,0.8)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash((cur >= 0 && i < cur) ? [3, 3] : []);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // 矢じり
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+        const headSize = 7;
+        ctx.beginPath();
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - headSize * Math.cos(angle - Math.PI / 6),
+                   y2 - headSize * Math.sin(angle - Math.PI / 6));
+        ctx.lineTo(x2 - headSize * Math.cos(angle + Math.PI / 6),
+                   y2 - headSize * Math.sin(angle + Math.PI / 6));
+        ctx.closePath();
+        ctx.fillStyle = (cur >= 0 && i < cur) ? 'rgba(139,92,246,0.4)' : 'rgba(109,40,217,0.85)';
+        ctx.fill();
+      }
+      // 各 waypoint に番号 + 中心点を描画
+      wps.forEach((wp, i) => {
+        const x = this._rollToX(wp.roll);
+        const y = this._pitchToY(wp.pitch);
+        const isActive = (i === cur);
+        const isPassed = (cur >= 0 && i < cur);
+        const radius = isActive ? 9 : 7;
+        const fill = isActive ? '#22c55e' : isPassed ? '#a78bfa' : '#8b5cf6';
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, 2 * Math.PI);
+        ctx.fillStyle = fill;
+        ctx.fill();
+        ctx.strokeStyle = '#1e293b';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        // 番号 (1-indexed で表示)
+        ctx.fillStyle = '#ffffff';
+        ctx.font = `bold ${isActive ? 11 : 9}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${i + 1}`, x, y);
+        ctx.textAlign = 'start';
+        ctx.textBaseline = 'alphabetic';
+      });
+      // 名前ラベルを waypoint[0] 近くに
+      if (seq.name && wps[0]) {
+        const x = this._rollToX(wps[0].roll);
+        const y = this._pitchToY(wps[0].pitch);
+        ctx.fillStyle = '#581c87';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.fillText(seq.name, x + 12, y + 4);
+      }
+    });
   }
 
   // Roll 範囲 [center - tol, center + tol] を ±180° wrap 考慮で 1〜2 矩形描画
