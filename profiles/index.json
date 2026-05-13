@@ -43,9 +43,9 @@
     },
     {
       "id": "harry_potter_wand",
-      "title": "🪄 Harry Potter Wand (5 呪文)",
-      "description": "M5C を杖として振り、5 呪文 (Lumos / Wingardium Leviosa / Expelliarmus / Protego / Stupefy) を発動。最後の waypoint で呪文名がテキスト入力される。8 方向シーケンス (Kano 流) で判定。ボタン併用も可 (button_idx 追加)。Phase 5.33+ 必須。",
-      "tags": ["magic", "wand", "harry-potter", "demo", "sequence", "text-input"],
+      "title": "🪄 Harry Potter Wand (5 呪文、要 Btn3)",
+      "description": "M5C を杖として振り、5 呪文 (Lumos / Wingardium Leviosa / Expelliarmus / Protego / Stupefy) を発動。Btn3 (一番手前) 押下中だけ判定 (Kano ワンド方式)、Btn3 で部分シーケンス衝突を回避。Phase 5.33+ 必須。",
+      "tags": ["magic", "wand", "harry-potter", "demo", "sequence", "text-input", "button"],
       "rule_count": 5,
       "file": "harry_potter_wand.json"
     }
