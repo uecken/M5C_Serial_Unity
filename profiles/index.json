@@ -40,6 +40,14 @@
       "tags": ["game", "fighting", "button", "macro", "sf-zero"],
       "rule_count": 8,
       "file": "street_fighter.json"
+    },
+    {
+      "id": "harry_potter_wand",
+      "title": "🪄 Harry Potter Wand (5 呪文)",
+      "description": "M5C を杖として振り、5 呪文 (Lumos / Wingardium Leviosa / Expelliarmus / Protego / Stupefy) を発動。最後の waypoint で呪文名がテキスト入力される。8 方向シーケンス (Kano 流) で判定。ボタン併用も可 (button_idx 追加)。Phase 5.33+ 必須。",
+      "tags": ["magic", "wand", "harry-potter", "demo", "sequence", "text-input"],
+      "rule_count": 5,
+      "file": "harry_potter_wand.json"
     }
   ]
 }

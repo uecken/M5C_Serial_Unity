@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260427-143250';
-import { BleClient }    from './lib/BleClient.js?v=20260427-143250';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260427-143250';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260427-143250';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260427-143250';
+import { SerialClient } from './lib/SerialClient.js?v=20260514-031714';
+import { BleClient }    from './lib/BleClient.js?v=20260514-031714';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-031714';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-031714';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-031714';
 
 const html = htm.bind(h);
 
@@ -1224,6 +1224,25 @@ function App() {
       const hasComboMacro = data.rules.some((r) =>
         Array.isArray(r.keys) && r.keys.some((s) => typeof s === 'string' && s.includes('+'))
       );
+      // Phase 5.33 チェック: directions[] ショートハンド (ハリポタワンド) は Phase 5.33+ 必須
+      const hasDirections = data.rules.some((r) => Array.isArray(r.directions));
+      if (hasDirections && fwPhaseNum < 5.33) {
+        const ok = confirm(
+          `⚠ FW Phase ${fwPhase || '不明'} は directions[] ショートハンド未対応\n\n` +
+          `このサンプルは Harry Potter Wand (Phase 5.33+) で導入された\n` +
+          `8 方向シーケンス機能を使っています。\n` +
+          `旧 FW では directions が無視され、すべてのルールが空 condition の\n` +
+          `ONESHOT として登録されてしまいます。\n\n` +
+          `FW を Phase 5.33+ にフラッシュしてから再度適用してください。\n\n` +
+          `そのまま適用しますか? (動作しません)`
+        );
+        if (!ok) {
+          setSampleLoading(null);
+          setSampleStatus('❌ キャンセル: FW Phase 不足 (5.33+ 必須)');
+          setTimeout(() => setSampleStatus(''), 5000);
+          return;
+        }
+      }
       if (hasComboMacro && fwPhaseNum < 5.14) {
         const ok = confirm(
           `⚠ FW Phase ${fwPhase || '不明'} は同時押し macro 未対応です\n\n` +
