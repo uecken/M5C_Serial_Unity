@@ -13,7 +13,7 @@
       "name": "lumos",
       "directions": ["U", "U"],
       "button_idx": 3,
-      "button_state": 1,
+      "button_state": 0,
       "type_text": "lumos\n",
       "cooldown_ms": 1500,
       "_comment": "Btn3 押下中に杖先を 2 回上げる → \"lumos\" 入力"
@@ -22,7 +22,7 @@
       "name": "wingardium_leviosa",
       "directions": ["DR", "R", "UR", "D"],
       "button_idx": 3,
-      "button_state": 1,
+      "button_state": 0,
       "type_text": "wingardium leviosa\n",
       "cooldown_ms": 2000,
       "_comment": "Btn3 押下中に swish & flick: 右下→右→右上→下 (Kano/Hogwarts-Legacy-Wand 互換)"
@@ -31,7 +31,7 @@
       "name": "expelliarmus",
       "directions": ["R", "UR"],
       "button_idx": 3,
-      "button_state": 1,
+      "button_state": 0,
       "type_text": "expelliarmus\n",
       "cooldown_ms": 1500,
       "_comment": "Btn3 押下中に右→右上、武装解除のように振り上げる"
@@ -40,7 +40,7 @@
       "name": "protego",
       "directions": ["DR", "UR"],
       "button_idx": 3,
-      "button_state": 1,
+      "button_state": 0,
       "type_text": "protego\n",
       "cooldown_ms": 1500,
       "_comment": "Btn3 押下中に右下→右上、盾を立てるような斜め振り上げ"
@@ -49,7 +49,7 @@
       "name": "stupefy",
       "directions": ["DL", "R", "DL"],
       "button_idx": 3,
-      "button_state": 1,
+      "button_state": 0,
       "type_text": "stupefy\n",
       "cooldown_ms": 1500,
       "_comment": "Btn3 押下中に左下→右→左下、ジグザグの失神術"
