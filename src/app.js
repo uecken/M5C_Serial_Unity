@@ -4,12 +4,12 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260514-140715';
-import { BleClient }    from './lib/BleClient.js?v=20260514-140715';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-140715';
-import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260514-140715';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-140715';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-140715';
+import { SerialClient } from './lib/SerialClient.js?v=20260514-141425';
+import { BleClient }    from './lib/BleClient.js?v=20260514-141425';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-141425';
+import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260514-141425';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-141425';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-141425';
 
 const html = htm.bind(h);
 
@@ -1975,25 +1975,39 @@ function App() {
             `}
           </div>
           <!-- Phase 5.39.2.4: 最終 trigger.hit event の状態 debug 表示 (F12 不要) -->
-          <div class="text-[11px] mt-1 px-2 py-1 rounded font-mono bg-slate-100 border border-slate-300">
+          <div class="text-[11px] mt-1 px-2 py-1 rounded font-mono bg-slate-100 border border-slate-300 flex items-center gap-2 flex-wrap">
             ${lastTriggerHit ? html`
               <span class="font-semibold">最終 trigger.hit:</span>
-              <span class="ml-1 ${lastTriggerHit.phase === 'enter' ? 'text-emerald-700 font-bold' : 'text-slate-700'}">
+              <span class="${lastTriggerHit.phase === 'enter' ? 'text-emerald-700 font-bold' : 'text-slate-700'}">
                 phase=<b>${lastTriggerHit.phase}</b>
               </span>
-              <span class="ml-2">id=${lastTriggerHit.id}</span>
-              <span class="ml-2">${lastTriggerHit.rule_name}</span>
-              <span class="ml-2 ${Array.isArray(lastTriggerHit.q_ref) ? 'text-emerald-700' : 'text-red-600 font-semibold'}">
+              <span>id=${lastTriggerHit.id}</span>
+              <span>${lastTriggerHit.rule_name}</span>
+              <span class="${Array.isArray(lastTriggerHit.q_ref) ? 'text-emerald-700' : 'text-red-600 font-semibold'}">
                 q_ref=${Array.isArray(lastTriggerHit.q_ref)
                   ? `[${lastTriggerHit.q_ref.map((v) => v.toFixed(3)).join(',')}] ✓`
                   : `${lastTriggerHit.q_ref === undefined ? '未送信(undef)' : JSON.stringify(lastTriggerHit.q_ref)} ✗`}
               </span>
-              <span class="ml-2 text-slate-400">
+              <span class="text-slate-400">
                 ${((Date.now() - lastTriggerHit.t) / 1000).toFixed(1)}s 前
               </span>
             ` : html`
               <span class="text-slate-400">trigger.hit イベント未受信 (Btn3 押下で発火)</span>
             `}
+            <span class="ml-auto flex items-center gap-2">
+              <span class="text-slate-500">watch:</span>
+              <span class="${watchEnabled ? 'text-emerald-700 font-bold' : 'text-red-600 font-bold'}">
+                ${watchEnabled ? 'ON ✓' : 'OFF ✗'}
+              </span>
+              <button onClick=${() => {
+                  sendCmd({ cmd: 'watch.set', enabled: true });
+                  setWatchEnabled(true);
+                }}
+                class="px-2 py-0.5 rounded bg-emerald-200 hover:bg-emerald-300 text-emerald-900 text-[10px]"
+                title="watch.set enabled=true を強制再送 (trigger.hit を受信するため)">
+                🔁 watch ON 再送
+              </button>
+            </span>
           </div>
         ` : null}
         ${sensor ? html`
