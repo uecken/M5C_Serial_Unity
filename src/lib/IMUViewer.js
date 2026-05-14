@@ -121,15 +121,35 @@ export class IMUViewer {
   setShowBodyAxes(v)  { this.bodyAxes.visible = v; }
   setShowGravity(v)   { this.gravityArrow.visible = v; }
 
-  /** 重力ベクトル更新 (3D 矢印を重力方向に向ける)
-   * accel は m/s^2、ノルムで正規化して向きベクトルに */
+  /** 重力ベクトル更新 (3D 矢印を world 座標系の重力方向に向ける)
+   *
+   *   Phase 5.34.1 修正:
+   *   旧実装は body frame の accel をそのまま world frame として使っていたため、
+   *   デバイスが回転すると矢印が反対方向に向く誤動作があった。
+   *
+   *   正しい計算:
+   *     1. accel (body frame, m/s²) を Three の body 軸に remap
+   *     2. M5StickC mesh の現在クォータニオンで body → world に rotate
+   *     3. 加速度計の出力 = 重力への反作用 (UP 方向) なので negate して重力方向 (DOWN) に
+   *     4. gravityArrow は scene 直下に居るので、矢印の +Y を gravity 方向に向けるよう quaternion 設定
+   *
+   *   結果: 静止状態では矢印は常に world -Y (画面下) を指す。デバイスを振ると
+   *         一時的に揺れる (= リニア加速度の影響が見える)。
+   */
   setGravityVector(ax, ay, az) {
     if (!this.gravityArrow.visible) return;
-    // 軸変換: M5C(ax,ay,az) → Three(-ax, az, ay)
-    const v = new THREE.Vector3(-ax, az, ay).normalize();
-    // gravityArrow は +Y 方向に伸びる前提 → v に向ける
+    // 1. M5C body 軸 → Three body 軸 remap
+    const bodyAccel = new THREE.Vector3(-ax, az, ay);
+    const mag = bodyAccel.length();
+    if (mag < 1e-6) return;
+    bodyAccel.divideScalar(mag);
+    // 2. body → world: m5StickC の現在クォータニオンを適用
+    const worldAccel = bodyAccel.applyQuaternion(this.m5StickC.quaternion);
+    // 3. accel (反作用、UP) を negate → 重力方向 (DOWN)
+    const gravityDir = worldAccel.negate();
+    // 4. arrow +Y を gravityDir に向ける
     const up = new THREE.Vector3(0, 1, 0);
-    const q = new THREE.Quaternion().setFromUnitVectors(up, v);
+    const q = new THREE.Quaternion().setFromUnitVectors(up, gravityDir);
     this.gravityArrow.quaternion.copy(q);
   }
 
