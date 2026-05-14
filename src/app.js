@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260514-103023';
-import { BleClient }    from './lib/BleClient.js?v=20260514-103023';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-103023';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-103023';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-103023';
+import { SerialClient } from './lib/SerialClient.js?v=20260514-103727';
+import { BleClient }    from './lib/BleClient.js?v=20260514-103727';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-103727';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-103727';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-103727';
 
 const html = htm.bind(h);
 
@@ -50,8 +50,8 @@ function App() {
   // Phase 5.36: sensor 即時参照用 ref (常に最新)、 React state とは独立
   //   重い imperative API (3D viewer / 2D grid / closest rule) は ref 経由で full rate
   //   UI 表示の setSensor は 10Hz throttle (App 再 render 削減)
+  //   (ruleReferencesRef は既存定義あり、line ~181)
   const sensorRef = useRef(null);
-  const ruleReferencesRef = useRef([]);
   const lastSetSensorMsRef = useRef(0);
   const lastClosestIdxRef = useRef(-1);
   // Phase 5.35: パフォーマンス計測オーバーレイ
@@ -420,15 +420,9 @@ function App() {
     return () => clearInterval(id);
   }, []);
 
-  // Phase 5.36: ruleReferences state → ref に同期 (onSensor handler から直接参照)
-  useEffect(() => {
-    ruleReferencesRef.current = ruleReferences;
-  }, [ruleReferences]);
-
   // Phase 5.36: 旧 useEffect の重い imperative 処理は onSensor handler に移行
   //   (handler が ref ベースで viewer / grid / closest を full rate 直接更新)
-  //   ここでは UI 表示用に setSensor が 10Hz throttled 後の更新だけ拾う場合の
-  //   軽い後処理 (現状なし) を将来書く。今は no-op。
+  //   ruleReferences → ref 同期は line ~185 の既存 useEffect が担う
 
   // ruleList 更新時に reference 座標を更新
   // 優先: FW rule.list 応答の posture (新 FW)、フォールバック: localStorage (姿勢キャプチャ時保存)
