@@ -124,7 +124,14 @@ export class PitchRollGrid {
 
   setCurrent(roll, pitch) {
     this.current = { roll, pitch };
-    this.draw();
+    // Phase 5.36: 高頻度呼出 (sensor stream 50Hz 等) に対し draw を 30Hz cap
+    //   sensor は毎回 current 更新するが、canvas redraw コストが大きいので throttle。
+    //   setReferences / setSequences / setFiring 等の event-driven 呼出は cap 対象外で即時 draw。
+    const now = performance.now();
+    if (!this._lastCurrentDrawMs || (now - this._lastCurrentDrawMs) >= 33) {
+      this._lastCurrentDrawMs = now;
+      this.draw();
+    }
   }
 
   setReferences(refs) {

@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260514-101336';
-import { BleClient }    from './lib/BleClient.js?v=20260514-101336';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-101336';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-101336';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-101336';
+import { SerialClient } from './lib/SerialClient.js?v=20260514-103023';
+import { BleClient }    from './lib/BleClient.js?v=20260514-103023';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-103023';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-103023';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-103023';
 
 const html = htm.bind(h);
 
@@ -47,6 +47,13 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [deviceInfo, setDeviceInfo] = useState(null);
   const [sensor, setSensor] = useState(null);
+  // Phase 5.36: sensor 即時参照用 ref (常に最新)、 React state とは独立
+  //   重い imperative API (3D viewer / 2D grid / closest rule) は ref 経由で full rate
+  //   UI 表示の setSensor は 10Hz throttle (App 再 render 削減)
+  const sensorRef = useRef(null);
+  const ruleReferencesRef = useRef([]);
+  const lastSetSensorMsRef = useRef(0);
+  const lastClosestIdxRef = useRef(-1);
   // Phase 5.35: パフォーマンス計測オーバーレイ
   //   sensorPktCount: SerialClient で受信した sensor packet 数 (1 秒間隔でカウンタリセット)
   //   sensorRate:     直近 1 秒の sensor 到着レート (Hz)
@@ -413,56 +420,15 @@ function App() {
     return () => clearInterval(id);
   }, []);
 
-  // sensor 受信時に 3D viewer + 2D グリッド + 最近傍ルール更新
+  // Phase 5.36: ruleReferences state → ref に同期 (onSensor handler から直接参照)
   useEffect(() => {
-    if (!sensor || !viewerRef.current) return;
-    if (sensor.qw !== undefined) {
-      viewerRef.current.setQuaternion(sensor.qw, sensor.qx, sensor.qy, sensor.qz);
-      // 球面の現在位置 dot
-      viewerRef.current.setCurrentDot(sensor.qw, sensor.qx, sensor.qy, sensor.qz);
-    }
-    if (sensor.ax !== undefined) {
-      viewerRef.current.setGravityVector(sensor.ax, sensor.ay, sensor.az);
-    }
-    // 2D グリッド
-    if (gridRef.current && sensor.roll !== undefined) {
-      gridRef.current.setCurrent(sensor.roll, sensor.pitch);
-    }
-    // 最近傍ルール計算 (Phase 5.21: FW Phase 5.15 互換 — Roll/Pitch tol 正規化)
-    // 旧 Quaternion 内積版だと FW NVS から quat=[0,0,0,0] で読込まれた場合に全ルール 180° で
-    // 配列順最初のルール (例: move_right) が常に選ばれる問題があった。
-    // FW と同じアルゴリズム (Roll wrap + tol 重み付け) で UI 側も一致させる。
-    if (ruleReferences.length > 0 && sensor.roll !== undefined) {
-      const findClosest = () => {
-        let minDist = Infinity;
-        let idx = -1;
-        ruleReferences.forEach((r, i) => {
-          if (r.roll === undefined || r.pitch === undefined) return;
-          let dr = sensor.roll - r.roll;
-          while (dr > 180) dr -= 360;
-          while (dr < -180) dr += 360;
-          const dp = sensor.pitch - r.pitch;
-          const tr = (r.rollTol && r.rollTol > 0.001) ? r.rollTol : 180;
-          const tp = (r.pitchTol && r.pitchTol > 0.001) ? r.pitchTol : 90;
-          const drn = dr / tr;
-          const dpn = dp / tp;
-          const dist = drn*drn + dpn*dpn;
-          if (dist < minDist) { minDist = dist; idx = i; }
-        });
-        return idx;
-      };
-      const idx = findClosest();
-      if (idx !== closestRuleIdx) setClosestRuleIdx(idx);
-      if (idx >= 0) {
-        const r = ruleReferences[idx];
-        if (r.qw !== undefined) viewerRef.current.setClosestDot(r.qw, r.qx, r.qy, r.qz);
-        gridRef.current?.setClosest(idx);
-      }
-    } else {
-      viewerRef.current.setClosestDot(null);
-      gridRef.current?.setClosest(-1);
-    }
-  }, [sensor, ruleReferences]);
+    ruleReferencesRef.current = ruleReferences;
+  }, [ruleReferences]);
+
+  // Phase 5.36: 旧 useEffect の重い imperative 処理は onSensor handler に移行
+  //   (handler が ref ベースで viewer / grid / closest を full rate 直接更新)
+  //   ここでは UI 表示用に setSensor が 10Hz throttled 後の更新だけ拾う場合の
+  //   軽い後処理 (現状なし) を将来書く。今は no-op。
 
   // ruleList 更新時に reference 座標を更新
   // 優先: FW rule.list 応答の posture (新 FW)、フォールバック: localStorage (姿勢キャプチャ時保存)
@@ -580,7 +546,64 @@ function App() {
     };
     const onSensor = (ev) => {
       perfCountersRef.current.sensorPktCount++;
-      setSensor(ev.detail);
+      const detail = ev.detail;
+      // Phase 5.36: sensor を常に ref に保持 (state より速い)
+      sensorRef.current = detail;
+
+      // ---- 1) 重い imperative API 呼出を full rate で直接実行 ----
+      const viewer = viewerRef.current;
+      const grid = gridRef.current;
+      if (viewer && detail.qw !== undefined) {
+        viewer.setQuaternion(detail.qw, detail.qx, detail.qy, detail.qz);
+        viewer.setCurrentDot(detail.qw, detail.qx, detail.qy, detail.qz);
+      }
+      if (viewer && detail.ax !== undefined) {
+        viewer.setGravityVector(detail.ax, detail.ay, detail.az);
+      }
+      if (grid && detail.roll !== undefined) {
+        // PitchRollGrid の setCurrent は内部で 30Hz draw cap (Phase 5.36)
+        grid.setCurrent(detail.roll, detail.pitch);
+      }
+      // 最近傍ルール計算 (Roll/Pitch tol 正規化、FW Phase 5.15 互換)
+      const refs = ruleReferencesRef.current;
+      if (refs.length > 0 && detail.roll !== undefined) {
+        let minDist = Infinity;
+        let bestIdx = -1;
+        for (let i = 0; i < refs.length; i++) {
+          const r = refs[i];
+          if (r.roll === undefined || r.pitch === undefined) continue;
+          let dr = detail.roll - r.roll;
+          while (dr > 180) dr -= 360;
+          while (dr < -180) dr += 360;
+          const dp = detail.pitch - r.pitch;
+          const tr = (r.rollTol && r.rollTol > 0.001) ? r.rollTol : 180;
+          const tp = (r.pitchTol && r.pitchTol > 0.001) ? r.pitchTol : 90;
+          const drn = dr / tr;
+          const dpn = dp / tp;
+          const dist = drn * drn + dpn * dpn;
+          if (dist < minDist) { minDist = dist; bestIdx = i; }
+        }
+        if (bestIdx !== lastClosestIdxRef.current) {
+          lastClosestIdxRef.current = bestIdx;
+          if (bestIdx >= 0) {
+            const r = refs[bestIdx];
+            if (viewer && r.qw !== undefined) viewer.setClosestDot(r.qw, r.qx, r.qy, r.qz);
+            grid?.setClosest(bestIdx);
+            setClosestRuleIdx(bestIdx);   // UI 強調用、変化時のみ
+          } else {
+            if (viewer) viewer.setClosestDot(null);
+            grid?.setClosest(-1);
+            setClosestRuleIdx(-1);
+          }
+        }
+      }
+
+      // ---- 2) React state は 10 Hz throttle (UI 表示用) ----
+      const nowMs = Date.now();
+      if ((nowMs - lastSetSensorMsRef.current) >= 100) {
+        lastSetSensorMsRef.current = nowMs;
+        setSensor(detail);
+      }
       // Stream タイミング統計
       const now = performance.now();
       const fwT = ev.detail.t;
