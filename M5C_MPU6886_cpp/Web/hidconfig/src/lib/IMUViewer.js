@@ -89,6 +89,17 @@ export class IMUViewer {
     this._buttonPressTimer = null;
 
     this.referenceDots = [];   // 登録ルール用、橙
+    this.referenceDotIds = []; // referenceDots と並列に rule id を保持 (Phase 5.39.2 選択フォーカス用)
+    this.selectedRuleId = -1;  // Phase 5.39.2: -1 = 全表示、>=0 = その rule だけ濃色
+
+    // ---- Phase 5.39.2: 目標軌跡 (waypoint Slerp 接続、紫色 Line) ----
+    this.targetTrajectoryLine = null;
+
+    // ---- Phase 5.39.2: 過去軌跡 trail (自分の動き、赤系) ----
+    this._trail = [];                         // [{q: THREE.Quaternion, t: ms}, ...]
+    this._trailDurationMs = 3000;
+    this.trailLine = null;                    // THREE.Line (vertex colors)
+    this._initTrailLine();
 
     // 状態
     this.targetQuat = new THREE.Quaternion();
@@ -109,6 +120,142 @@ export class IMUViewer {
     return new THREE.Mesh(g, m);
   }
 
+  // ---- Phase 5.39.2: trail Line 初期化 (最大 3 秒 × 50Hz = 150 vertex 程度を想定) ----
+  _initTrailLine() {
+    const MAX_TRAIL_POINTS = 256;
+    const positions = new Float32Array(MAX_TRAIL_POINTS * 3);
+    const colors    = new Float32Array(MAX_TRAIL_POINTS * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
+    geo.setDrawRange(0, 0);
+    const mat = new THREE.LineBasicMaterial({ vertexColors: true, linewidth: 2 });
+    this.trailLine = new THREE.Line(geo, mat);
+    this.scene.add(this.trailLine);
+    this._trailMaxPoints = MAX_TRAIL_POINTS;
+  }
+
+  /** Phase 5.39.2: 選択 rule の強調表示 (-1 で解除) */
+  setSelectedRuleId(id) {
+    this.selectedRuleId = (typeof id === 'number') ? id : -1;
+    this._applySelectionStyle();
+  }
+
+  /** referenceDots の色 / opacity を selectedRuleId に応じて再設定 */
+  _applySelectionStyle() {
+    const sel = this.selectedRuleId;
+    for (let i = 0; i < this.referenceDots.length; i++) {
+      const d = this.referenceDots[i];
+      const id = this.referenceDotIds[i];
+      const isSel = (sel === -1 || id === sel);
+      const mat = d.material;
+      if (isSel) {
+        mat.color.setHex(0xffa500);  // 橙 (通常)
+        mat.transparent = false;
+        mat.opacity = 1.0;
+      } else {
+        mat.color.setHex(0x808080);  // 灰
+        mat.transparent = true;
+        mat.opacity = 0.20;
+      }
+      mat.needsUpdate = true;
+    }
+    // 選択解除 (-1) 時は目標軌跡を消す
+    if (sel === -1 && this.targetTrajectoryLine) {
+      this.targetTrajectoryLine.visible = false;
+    } else if (this.targetTrajectoryLine) {
+      this.targetTrajectoryLine.visible = true;
+    }
+  }
+
+  /** Phase 5.39.2: 目標軌跡 (waypoint 間を Slerp 弧で接続)
+   *  waypoints = [{qw,qx,qy,qz}, ...] (M5C 軸基準、IMUViewer 内で軸変換)
+   */
+  setTargetTrajectory(waypoints) {
+    // 既存 line を削除
+    if (this.targetTrajectoryLine) {
+      this.scene.remove(this.targetTrajectoryLine);
+      this.targetTrajectoryLine.geometry.dispose();
+      this.targetTrajectoryLine.material.dispose();
+      this.targetTrajectoryLine = null;
+    }
+    if (!waypoints || waypoints.length < 2) return;
+    // 各 waypoint quat を Three 軸系に変換
+    const quats = waypoints.map((w) => new THREE.Quaternion(-w.qx, w.qz, w.qy, w.qw));
+    const SEG = 32;
+    const points = [];
+    for (let i = 0; i < quats.length - 1; i++) {
+      const qa = quats[i];
+      const qb = quats[i + 1];
+      for (let s = 0; s <= SEG; s++) {
+        const t = s / SEG;
+        const q = qa.clone().slerp(qb, t);
+        points.push(this._quatToSpherePoint(q).clone().multiplyScalar(1.01));
+      }
+    }
+    const geo = new THREE.BufferGeometry().setFromPoints(points);
+    const mat = new THREE.LineBasicMaterial({ color: 0x8b5cf6, linewidth: 2 });
+    this.targetTrajectoryLine = new THREE.Line(geo, mat);
+    this.scene.add(this.targetTrajectoryLine);
+    // 選択中以外は非表示 (selectedRuleId === -1 で消す)
+    if (this.selectedRuleId === -1) this.targetTrajectoryLine.visible = false;
+  }
+
+  /** Phase 5.39.2: 過去軌跡 trail に新点を追加 (M5C 軸 quat) */
+  addTrailPoint(qw, qx, qy, qz, timestamp) {
+    const t = (typeof timestamp === 'number') ? timestamp : performance.now();
+    const q = new THREE.Quaternion(-qx, qz, qy, qw);
+    this._trail.push({ q, t });
+    this._pruneTrail(t);
+    this._updateTrailGeometry(t);
+  }
+
+  /** 3 秒経過点を削除 */
+  _pruneTrail(now) {
+    const cutoff = now - this._trailDurationMs;
+    while (this._trail.length > 0 && this._trail[0].t < cutoff) {
+      this._trail.shift();
+    }
+    if (this._trail.length > this._trailMaxPoints) {
+      this._trail.splice(0, this._trail.length - this._trailMaxPoints);
+    }
+  }
+
+  /** trail Line geometry を再構築 (古いほど薄く、新しいほど濃く) */
+  _updateTrailGeometry(now) {
+    if (!this.trailLine) return;
+    const geo = this.trailLine.geometry;
+    const posAttr = geo.getAttribute('position');
+    const colAttr = geo.getAttribute('color');
+    const n = this._trail.length;
+    for (let i = 0; i < n; i++) {
+      const e = this._trail[i];
+      const p = this._quatToSpherePoint(e.q).clone().multiplyScalar(1.005);
+      posAttr.setXYZ(i, p.x, p.y, p.z);
+      const age = (now - e.t) / this._trailDurationMs;        // 0 (新) → 1 (古)
+      const alpha = Math.max(0, 1 - age);                     // 古いほど薄い → 色を白に fade
+      // 赤 (0xef4444 = 0.937, 0.267, 0.267) を alpha でフェード (黒へ寄せる)
+      const r = 0.937 * alpha;
+      const g = 0.267 * alpha;
+      const b = 0.267 * alpha;
+      colAttr.setXYZ(i, r, g, b);
+    }
+    posAttr.needsUpdate = true;
+    colAttr.needsUpdate = true;
+    geo.setDrawRange(0, n);
+  }
+
+  /** trail 全消去 (例えば state[0] enter 時 = ボタン押下時) */
+  clearTrail() {
+    this._trail.length = 0;
+    if (this.trailLine) this.trailLine.geometry.setDrawRange(0, 0);
+  }
+
+  /** trail 履歴の保持時間 (ms) */
+  setTrailDurationMs(ms) {
+    this._trailDurationMs = Math.max(200, ms | 0);
+  }
+
   /** Quaternion 設定 (M5StickC IMU 軸 → Three.js 軸の変換含む) */
   setQuaternion(qw, qx, qy, qz) {
     // 旧版互換: THREE.Quaternion(-qx, qz, qy, qw)
@@ -121,32 +268,63 @@ export class IMUViewer {
   setShowBodyAxes(v)  { this.bodyAxes.visible = v; }
   setShowGravity(v)   { this.gravityArrow.visible = v; }
 
-  /** 重力ベクトル更新 (3D 矢印を重力方向に向ける)
-   * accel は m/s^2、ノルムで正規化して向きベクトルに */
+  /** 重力ベクトル更新 (3D 矢印を world 座標系の重力方向に向ける)
+   *
+   *   Phase 5.34.1 修正:
+   *   旧実装は body frame の accel をそのまま world frame として使っていたため、
+   *   デバイスが回転すると矢印が反対方向に向く誤動作があった。
+   *
+   *   正しい計算:
+   *     1. accel (body frame, m/s²) を Three の body 軸に remap
+   *     2. M5StickC mesh の現在クォータニオンで body → world に rotate
+   *     3. 加速度計の出力 = 重力への反作用 (UP 方向) なので negate して重力方向 (DOWN) に
+   *     4. gravityArrow は scene 直下に居るので、矢印の +Y を gravity 方向に向けるよう quaternion 設定
+   *
+   *   結果: 静止状態では矢印は常に world -Y (画面下) を指す。デバイスを振ると
+   *         一時的に揺れる (= リニア加速度の影響が見える)。
+   */
   setGravityVector(ax, ay, az) {
     if (!this.gravityArrow.visible) return;
-    // 軸変換: M5C(ax,ay,az) → Three(-ax, az, ay)
-    const v = new THREE.Vector3(-ax, az, ay).normalize();
-    // gravityArrow は +Y 方向に伸びる前提 → v に向ける
+    // 1. M5C body 軸 → Three body 軸 remap
+    const bodyAccel = new THREE.Vector3(-ax, az, ay);
+    const mag = bodyAccel.length();
+    if (mag < 1e-6) return;
+    bodyAccel.divideScalar(mag);
+    // 2. body → world: m5StickC の現在クォータニオンを適用
+    const worldAccel = bodyAccel.applyQuaternion(this.m5StickC.quaternion);
+    // 3. accel (反作用、UP) を negate → 重力方向 (DOWN)
+    const gravityDir = worldAccel.negate();
+    // 4. arrow +Y を gravityDir に向ける
     const up = new THREE.Vector3(0, 1, 0);
-    const q = new THREE.Quaternion().setFromUnitVectors(up, v);
+    const q = new THREE.Quaternion().setFromUnitVectors(up, gravityDir);
     this.gravityArrow.quaternion.copy(q);
   }
 
-  /** 登録ルール姿勢を球面に橙ドットで配置 (旧版互換、見やすい大きさ) */
-  setReferenceQuaternions(quats) {
+  /** 登録ルール姿勢を球面に橙ドットで配置 (旧版互換、見やすい大きさ)
+   *  Phase 5.39.2: ids 引数を追加 (selection focus 用、与えなければ全て -1 扱い)
+   */
+  setReferenceQuaternions(quats, ids) {
     // 既存ドット消去
     for (const d of this.referenceDots) {
       this.scene.remove(d);
       d.geometry.dispose();
+      d.material.dispose();
     }
     this.referenceDots = [];
-    for (const q of quats) {
+    this.referenceDotIds = [];
+    for (let i = 0; i < quats.length; i++) {
+      const q = quats[i];
       const d = this._makeDot(0xffa500, 0.07);   // 橙、見やすい大きさ
+      // selection focus 用に material.transparent を有効化
+      d.material.transparent = true;
+      d.material.opacity = 1.0;
       d.position.copy(this._quatToSpherePoint(q));
       this.scene.add(d);
       this.referenceDots.push(d);
+      this.referenceDotIds.push(Array.isArray(ids) ? (ids[i] ?? -1) : -1);
     }
+    // 現在の selectedRuleId に応じた style を再適用
+    this._applySelectionStyle();
   }
 
   /** ボタン押下時の姿勢を球面に紫ドットで表示 (旧版互換)
@@ -202,8 +380,20 @@ export class IMUViewer {
     this.targetQuat.identity();
   }
 
+  // Phase 5.35: RAF frame count (perf overlay 用)
+  getFrameCount() { const n = this._frameCount || 0; this._frameCount = 0; return n; }
+
+  /** Phase 5.39.2: タブ非表示時は描画停止 (CPU 節約) */
+  setRenderEnabled(enabled) {
+    const was = this._renderEnabled !== false;
+    this._renderEnabled = !!enabled;
+    if (!was && this._renderEnabled) requestAnimationFrame(this._tick);
+  }
+
   _tick() {
     if (!this._running) return;
+    if (this._renderEnabled === false) return;   // Phase 5.39.2: タブ非表示時は描画停止
+    this._frameCount = (this._frameCount || 0) + 1;
     // base からの相対回転を M5StickC モデルに適用 (球体は固定、ユーザー仕様)
     const q = this.qRef.clone().multiply(this.targetQuat);
     this.m5StickC.quaternion.slerp(q, this.smoothing);

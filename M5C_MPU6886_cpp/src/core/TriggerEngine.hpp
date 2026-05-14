@@ -4,10 +4,16 @@
 #pragma once
 #include "types.hpp"
 #include <vector>
+#include <ArduinoJson.h>
 
 namespace BurstMotion {
 
 class IHidSink;  // forward declaration
+
+// Phase 5.39.2.7: watch event の出力先 callback
+// 主目的: trigger.hit / lock event を USB Serial + BLE NUS 両方に routing
+// (旧実装は Serial.printf 直接呼出で BLE NUS 接続中の Web に届かない問題対策)
+using EventOutputFn = void(*)(JsonDocument& doc);
 
 class TriggerEngine {
 public:
@@ -30,6 +36,9 @@ public:
 
     // watch (trigger.hit イベント通知)
     void setWatchEnabled(bool enabled) { watch_enabled_ = enabled; }
+
+    // Phase 5.39.2.7: watch event の出力 routing 設定 (USB Serial + BLE NUS 両方経由用)
+    void setEventOutputFn(EventOutputFn fn) { event_output_fn_ = fn; }
 
     // Closest-only モード: 姿勢条件が enabled な idle ルール群のうち、
     // 現在 quat と最も近い 1 つだけを発火対象にする (旧 getClosestPK3 互換)
@@ -63,6 +72,7 @@ private:
     IHidSink* hid_sink_;
     bool watch_enabled_;
     bool closest_only_mode_;
+    EventOutputFn event_output_fn_ = nullptr;
 
     // Button-edge lock 状態
     uint16_t lock_window_ms_   = 500;   // lock 維持時間 (default 500ms)
@@ -87,7 +97,10 @@ private:
     void evaluateRulePostureSelected(ActionRule& rule, const SensorState& s);
 
     // Condition 判定 (全サブ条件を logic_op で結合)
-    bool matchCondition(const Condition& cond, const SensorState& s) const;
+    // Phase 5.39: rule を非 const で取り、stillness_since_ms / q_ref を読書する。
+    //             rule == nullptr の呼び出しは stillness/相対 quat 機能を無効化する後方互換パス。
+    bool matchCondition(const Condition& cond, const SensorState& s,
+                        ActionRule* rule = nullptr) const;
 
     // Action 実行 (HID 送信)
     void executeAction(const Action& action);

@@ -69,6 +69,14 @@ public:
 
     void moveMouse(int16_t dx, int16_t dy, int8_t wheel = 0) override {
         if (!enabled_ || !isConnected()) return;
+        // Phase 5.23: BLE HID Mouse の X/Y 軸反転対応
+        //   ユーザー検証: 5 年前の motion_controller (旧 SW) と比較して M5StickC の
+        //   物理的な向き (持ち方の基本姿勢) が反転している。旧 SW は M5C 横持ちで
+        //   右傾け = マウス右移動だったが、新 FW (Phase 5.17) で基本姿勢を縦持ち R+90 に
+        //   変更したため、ホスト座標系との対応がずれて「→ 50,0」入力で左に動く事象発生。
+        //   両軸を反転して標準動作 (+X=右, +Y=下) に揃える。
+        dx = -dx;
+        dy = -dy;
         // BleCombo.move は signed char (-127..+127) 制限
         while (dx > 127 || dx < -127 || dy > 127 || dy < -127) {
             int8_t step_x = dx > 127 ? 127 : (dx < -127 ? -127 : dx);
@@ -84,6 +92,16 @@ public:
         if (!enabled_ || !isConnected()) return;
         ble_combo_.press((MouseButton)buttons);
         delay(10);
+        ble_combo_.release((MouseButton)buttons);
+    }
+
+    void pressMouseButton(uint8_t buttons) override {
+        if (!enabled_ || !isConnected()) return;
+        ble_combo_.press((MouseButton)buttons);
+    }
+
+    void releaseMouseButton(uint8_t buttons) override {
+        if (!isConnected()) return;
         ble_combo_.release((MouseButton)buttons);
     }
 

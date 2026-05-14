@@ -1,8 +1,8 @@
 {
   "schema": "burst_motion_sample_v1",
   "id": "street_fighter",
-  "title": "🥊 ストリートファイター Zero (miniplay.com)",
-  "description": "M5StickC 基本姿勢 R+90 (縦持ち、LCD 左)。Btn3 押下で姿勢別の SF Zero (miniplay.com) コマンド入力。",
+  "title": "🥊 ストリートファイター Zero (miniplay.com) — 移動+技",
+  "description": "M5StickC 基本姿勢 R+90 (縦持ち、LCD 左)。Btn3 (G26、一番手前のボタン) OFF で姿勢に応じた移動 (HOLD)、Btn3 ON で技繰り出し (ONESHOT)。jump/crouch は Pitch +40 以上→↑、-40 以下→↓ (Phase 5.30、LCD 左持ちの感覚反転)。",
   "hardware_required": ["m5stickc", "m5stickc_plus", "m5stickc_2"],
   "engine": {
     "closest_only": true,
@@ -10,6 +10,44 @@
     "cooldown_ms": 300
   },
   "rules": [
+    {
+      "name": "move_right",
+      "ui_mode": "hold_start_only",
+      "button_idx": 3,
+      "button_state": 1,
+      "posture": { "euler": [150, 0, 0], "euler_tol": [30, 25, 180] },
+      "key": "ARROW_RIGHT",
+      "cooldown_ms": 0
+    },
+    {
+      "name": "move_left",
+      "ui_mode": "hold_start_only",
+      "button_idx": 3,
+      "button_state": 1,
+      "posture": { "euler": [30, 0, 0], "euler_tol": [30, 25, 180] },
+      "key": "ARROW_LEFT",
+      "cooldown_ms": 0
+    },
+    {
+      "name": "jump",
+      "ui_mode": "hold_start_only",
+      "button_idx": 3,
+      "button_state": 1,
+      "posture": { "euler": [90, 65, 0], "euler_tol": [180, 25, 180] },
+      "key": "ARROW_UP",
+      "cooldown_ms": 0,
+      "_comment": "Phase 5.30: Pitch +40 以上 (M5C 上端を手前に倒す、LCD 左持ち) で ↑ ジャンプ"
+    },
+    {
+      "name": "crouch",
+      "ui_mode": "hold_start_only",
+      "button_idx": 3,
+      "button_state": 1,
+      "posture": { "euler": [90, -65, 0], "euler_tol": [180, 25, 180] },
+      "key": "ARROW_DOWN",
+      "cooldown_ms": 0,
+      "_comment": "Phase 5.30: Pitch -40 以下 (M5C 上端を奥に倒す、LCD 左持ち) で ↓ しゃがみ"
+    },
     {
       "name": "punch",
       "ui_mode": "oneshot",
@@ -20,25 +58,16 @@
       "cooldown_ms": 200
     },
     {
-      "name": "kick",
-      "ui_mode": "oneshot",
-      "button_idx": 3,
-      "button_state": 0,
-      "posture": { "euler": [60, 0, 0], "euler_tol": [25, 25, 180] },
-      "accel_abs_threshold": 1.8,
-      "key": "a",
-      "cooldown_ms": 400
-    },
-    {
       "name": "hadoken",
       "ui_mode": "oneshot",
       "button_idx": 3,
       "button_state": 0,
-      "posture": { "euler": [-179, 0, 0], "euler_tol": [15, 25, 180] },
+      "posture": { "euler": [0, 0, 0], "euler_tol": [25, 25, 180] },
       "accel_abs_threshold": 2.0,
       "keys": ["DOWN", "DOWN+RIGHT", "RIGHT", "RIGHT+a"],
       "interval_ms": 50,
-      "cooldown_ms": 600
+      "cooldown_ms": 600,
+      "_comment": "Phase 5.29: 横倒し姿勢 (LCD 上向け、R±25 P±25) で振り → ↓↘→+a"
     },
     {
       "name": "shoryuken",

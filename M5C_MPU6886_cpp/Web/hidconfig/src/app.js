@@ -7,10 +7,25 @@ import htm from 'htm';
 import { SerialClient } from './lib/SerialClient.js';
 import { BleClient }    from './lib/BleClient.js';
 import { IMUViewer }    from './lib/IMUViewer.js';
+import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js';
 import { PitchRollGrid } from './lib/PitchRollGrid.js';
 import { TimeSeriesChart } from './lib/TimeSeriesChart.js';
 
 const html = htm.bind(h);
+
+// Phase 5.34: posture.euler [Roll, Pitch] → 8 方向名 (U/D/L/R/UL/UR/DL/DR/·)
+// Kano-canonical の `directionToCondition()` 逆引き
+function postureToDirection(euler) {
+  if (!Array.isArray(euler)) return '·';
+  const r = euler[0];
+  const p = euler[1];
+  // Roll: +60=L, +90=center, +120=R (±15° 許容)
+  const rollName = (r > 105) ? 'R' : (r < 75) ? 'L' : '';
+  // Pitch: +30=U, 0=center, -30=D (±10° 許容)
+  const pitchName = (p > 15) ? 'U' : (p < -15) ? 'D' : '';
+  const combined = pitchName + rollName;
+  return combined || '·';   // 基本姿勢 = center
+}
 
 // ==========================================================
 // グローバル: 接続クライアント (USB / BLE どちらか active)
@@ -33,6 +48,30 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [deviceInfo, setDeviceInfo] = useState(null);
   const [sensor, setSensor] = useState(null);
+  // Phase 5.36: sensor 即時参照用 ref (常に最新)、 React state とは独立
+  //   重い imperative API (3D viewer / 2D grid / closest rule) は ref 経由で full rate
+  //   UI 表示の setSensor は 10Hz throttle (App 再 render 削減)
+  //   (ruleReferencesRef は既存定義あり、line ~181)
+  const sensorRef = useRef(null);
+  const lastSetSensorMsRef = useRef(0);
+  const lastClosestIdxRef = useRef(-1);
+  // Phase 5.35: パフォーマンス計測オーバーレイ
+  //   sensorPktCount: SerialClient で受信した sensor packet 数 (1 秒間隔でカウンタリセット)
+  //   sensorRate:     直近 1 秒の sensor 到着レート (Hz)
+  //   renderRate:     React App コンポーネントが再 render された頻度 (Hz)
+  //   gridDrawRate:   PitchRollGrid.draw() 呼び出し頻度 (Hz)
+  //   rafRate:        IMUViewer の RAF 駆動 frame rate (Hz)
+  const [perfStats, setPerfStats] = useState({ sensorRate: 0, renderRate: 0, gridDrawRate: 0, rafRate: 0, bytesPerSec: 0 });
+  const perfCountersRef = useRef({
+    sensorPktCount: 0,
+    renderCount: 0,
+    gridDrawCount: 0,
+    rafCount: 0,
+    bytesIn: 0,
+    lastTick: Date.now(),
+  });
+  // useEffect の deps を経由しない、毎 render 加算するカウンタ
+  perfCountersRef.current.renderCount++;
   const [streamRate, setStreamRate] = useState(0);
   const [log, setLog] = useState([]);
   const [autoConnect, setAutoConnect] = useState(
@@ -66,14 +105,24 @@ function App() {
   const [ruleList, setRuleList] = useState([]);   // FW から取得した rule 一覧
   const [triggerFlash, setTriggerFlash] = useState(null);  // {id, phase, name, t}
   const [watchEnabled, setWatchEnabled] = useState(false);
+  // Phase 5.39.2.4: 相対 3D デバッグ用 — 最後の trigger.hit event の内容
+  const [lastTriggerHit, setLastTriggerHit] = useState(null);  // {phase, q_ref, id, name, t}
 
   // 姿勢キャプチャ (Euler [r,p,y]、tol [r,p,y])
   const [startPosture, setStartPosture] = useState(null);   // {euler:[r,p,y], tol:[r,p,y]} | null
   const [endPosture, setEndPosture] = useState(null);
+  // Phase 5.39: Hold with Waypoints — 中間姿勢 (最大 2 個) と判定基準
+  const [midPostures, setMidPostures] = useState([]);   // [{euler, euler_tol, quat} | null, ...] 最大 2 個
+  const [postureBasis, setPostureBasis] = useState('absolute');   // 'absolute' (default、Mahony 起動基準) | 'relative' (button 押下時を基準)
   const [postureTol, setPostureTol] = useState(15);   // ±degrees (一律、簡易)
   // 軸別 tol オーバーライド (Phase 5.15、空 or 0 なら postureTol 使用、180 で軸を実質除外)
   const [postureTolRoll, setPostureTolRoll] = useState('');
   const [postureTolPitch, setPostureTolPitch] = useState('');
+  // Phase 5.38: 判定軸の個別 ON/OFF (OFF の軸は euler_tol=180 で実質除外)
+  // Default: Roll/Pitch=true (通常のジェスチャ判定)、Yaw=false (Mahony Yaw はドリフトしやすいため既定 OFF)
+  const [postureUseRoll, setPostureUseRoll] = useState(true);
+  const [postureUsePitch, setPostureUsePitch] = useState(true);
+  const [postureUseYaw, setPostureUseYaw] = useState(false);
   // 姿勢判定方法: "euler" (default、Roll/Pitch tol)、"quat" (Quaternion 内積)
   const [postureJudgeBy, setPostureJudgeBy] = useState('euler');
 
@@ -99,7 +148,7 @@ function App() {
     localStorage.getItem('burst_motion_hardware') || 'm5stickc'
   );
 
-  // ルール作成時のボタン条件 (デフォルト: Btn3 押下中、M5StickC レガシー互換)
+  // ルール作成時のボタン条件 (デフォルト: Btn3=一番手前のボタン)
   const [ruleButtonEnabled, setRuleButtonEnabled] = useState(true);
   const [ruleButtonIdx, setRuleButtonIdx] = useState(3);
   const [ruleButtonState, setRuleButtonState] = useState(0);  // 0=押下中、1=解放中
@@ -120,16 +169,34 @@ function App() {
   const viewerRef = useRef(null);
   const gridCanvasRef = useRef(null);
   const gridRef = useRef(null);
+  // Phase 5.39.2: 相対 3D ビュア (一人称視点) 用 canvas + viewer ref
+  const relativeCanvasRef = useRef(null);
+  const relativeViewerRef = useRef(null);
+  // Phase 5.39.2: 相対モード rule 登録時の qRef キャプチャ用 (開始姿勢時の sensor.quat を一時保持)
+  //   ref で持つので state 再 render を引き起こさない
+  const qRefCaptureRef = useRef(null);   // [qw, qx, qy, qz] | null
   const hidTimerRef = useRef(null);
   const accelChartCanvasRef = useRef(null);
   const accelChartRef = useRef(null);
   const gyroChartCanvasRef = useRef(null);
   const gyroChartRef = useRef(null);
 
+  // Phase 5.39.2: ビュータブ ('absolute' | '2d' | 'relative')、デフォルト absolute
+  const [viewerTab, setViewerTab] = useState('absolute');
+  // Phase 5.39.2: 選択 rule (rule.list 行クリックで切替、-1 = 未選択)
+  const [selectedRuleId, setSelectedRuleId] = useState(-1);
+
   // 3D 表示オプション (旧 UI 互換)
   const [showWorldAxes, setShowWorldAxes] = useState(false);
   const [showBodyAxes, setShowBodyAxes] = useState(false);
   const [showGravity, setShowGravity] = useState(false);
+  // 加速度・ジャイロ時間波形 ON/OFF (Phase 5.19、ユーザー要望)
+  const [showCharts, setShowCharts] = useState(
+    localStorage.getItem('burst_motion_show_charts') !== 'false'
+  );
+  useEffect(() => {
+    localStorage.setItem('burst_motion_show_charts', showCharts ? 'true' : 'false');
+  }, [showCharts]);
 
   // ルール姿勢から計算した登録参照点
   const [ruleReferences, setRuleReferences] = useState([]);  // [{id, name, roll, pitch, yaw, qw, qx, qy, qz}]
@@ -141,6 +208,8 @@ function App() {
 
   // Closest-only モード: FW 側で最近傍ルールだけ発火させる
   const [closestOnlyMode, setClosestOnlyMode] = useState(false);
+  // Phase 5.32: 動作モード (engine = TriggerEngine、mouse = ハードコード air mouse)
+  const [deviceMode, setDeviceMode] = useState('engine');
   // Button-edge lock パラメータ
   const [lockWindowMs, setLockWindowMs] = useState(500);
   const [lockCooldownMs, setLockCooldownMs] = useState(300);
@@ -155,7 +224,9 @@ function App() {
     }
     if (deviceInfo?.lock_window_ms) setLockWindowMs(deviceInfo.lock_window_ms);
     if (deviceInfo?.lock_cooldown_ms !== undefined) setLockCooldownMs(deviceInfo.lock_cooldown_ms);
-  }, [deviceInfo?.closest_only, deviceInfo?.lock_window_ms, deviceInfo?.lock_cooldown_ms]);
+    // Phase 5.32: device_mode 反映
+    if (deviceInfo?.device_mode) setDeviceMode(deviceInfo.device_mode);
+  }, [deviceInfo?.closest_only, deviceInfo?.lock_window_ms, deviceInfo?.lock_cooldown_ms, deviceInfo?.device_mode]);
 
   // 'lock' イベント受信 (FW: lock.acquired / lock.fired / lock.expired)
   useEffect(() => {
@@ -218,16 +289,90 @@ function App() {
     };
   }, [canvasRef.current]);
 
-  // 2D グリッド初期化
+  // Phase 5.39.2: 相対 3D ビュア (一人称視点) 初期化、relative タブ表示時のみ canvas マウント
+  useEffect(() => {
+    if (!relativeCanvasRef.current) return;
+    if (relativeViewerRef.current) return;
+    relativeViewerRef.current = new RelativeIMUViewer(relativeCanvasRef.current);
+    return () => {
+      if (relativeViewerRef.current) {
+        relativeViewerRef.current.destroy();
+        relativeViewerRef.current = null;
+      }
+    };
+  }, [relativeCanvasRef.current]);
+
+  // Phase 5.39.2: タブ切替時に各ビュアの RAF を ON/OFF (非表示タブの CPU 節約)
+  useEffect(() => {
+    viewerRef.current?.setRenderEnabled?.(viewerTab === 'absolute');
+    relativeViewerRef.current?.setRenderEnabled?.(viewerTab === 'relative');
+  }, [viewerTab]);
+
+  // 2D グリッド初期化 (Phase 5.28: ドラッグ編集対応)
   useEffect(() => {
     if (!gridCanvasRef.current) return;
     if (gridRef.current) return;
     gridRef.current = new PitchRollGrid(gridCanvasRef.current);
     gridRef.current.resize();
+    // ドラッグでルール姿勢/tol 編集 → rule.update を送信
+    gridRef.current.setEditCallback((id, changes) => {
+      const rule = ruleListRef.current?.find((r) => r.id === id);
+      if (!rule) return;
+      // 既存ルールを取り直し、posture を上書きして rule.add で再登録 (= 上書き)
+      const r = {
+        id: rule.id,
+        name: rule.name,
+        ui_mode: rule.loop ? (rule.states_count === 1 ? 'hold_start_only' : 'hold_start_end') : 'oneshot',
+        posture: {
+          euler: [
+            changes.roll  !== undefined ? changes.roll  : rule.posture.euler[0],
+            changes.pitch !== undefined ? changes.pitch : rule.posture.euler[1],
+            rule.posture.euler[2] || 0,
+          ],
+          euler_tol: [
+            changes.rollTol  !== undefined ? changes.rollTol  : rule.posture.euler_tol[0],
+            changes.pitchTol !== undefined ? changes.pitchTol : rule.posture.euler_tol[1],
+            rule.posture.euler_tol[2] || 180,
+          ],
+          judge_by: rule.posture.judge_by || 'euler',
+        },
+      };
+      // posture.euler から quat 計算
+      r.posture.quat = eulerToQuat(r.posture.euler[0], r.posture.euler[1], r.posture.euler[2]);
+      // button / accel / action 再生成 (一覧から復元)
+      if (rule.button) { r.button_idx = rule.button.idx; r.button_state = rule.button.state; }
+      if (rule.accel) r.accel_abs_threshold = rule.accel.abs_threshold;
+      if (rule.action) {
+        if (rule.action.type_name === 'fire_macro') {
+          r.keys = rule.action.keys.map((c, i) => {
+            const m = (rule.action.key_modes && rule.action.key_modes[i]) || 0;
+            const name = String.fromCharCode(c) || `0x${c.toString(16)}`;
+            if (m === 1) return '+' + name;
+            if (m === 2) return '-' + name;
+            if (m === 3) return '!';
+            return name;
+          });
+          r.interval_ms = rule.action.interval_ms || 30;
+        } else if (rule.action.keys && rule.action.keys.length > 0) {
+          r.key = String.fromCharCode(rule.action.keys[rule.action.keys.length - 1]);
+        }
+      }
+      // クリア → 同 ID で再登録 (rule.add は同 id を上書きする想定だが、安全のため remove + add)
+      if (activeClient) {
+        activeClient.send({ cmd: 'rule.remove', id: rule.id })
+          .then(() => new Promise((res) => setTimeout(res, 60)))
+          .then(() => activeClient.send({ cmd: 'rule.add', r }))
+          .catch(() => {});
+      }
+    });
     const onResize = () => gridRef.current?.resize();
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, [gridCanvasRef.current]);
+
+  // ruleList を ref で参照可能に (PitchRollGrid からの edit callback 用)
+  const ruleListRef = useRef([]);
+  useEffect(() => { ruleListRef.current = ruleList; }, [ruleList]);
 
   // 時系列波形チャート初期化 (Accel & Gyro、各 XYZ + RMS)
   useEffect(() => {
@@ -289,56 +434,45 @@ function App() {
   useEffect(() => { viewerRef.current?.setShowBodyAxes(showBodyAxes); }, [showBodyAxes]);
   useEffect(() => { viewerRef.current?.setShowGravity(showGravity); }, [showGravity]);
 
-  // sensor 受信時に 3D viewer + 2D グリッド + 最近傍ルール更新
+  // Phase 5.35: 1 秒ごとに perf カウンタを集計してオーバーレイへ反映
   useEffect(() => {
-    if (!sensor || !viewerRef.current) return;
-    if (sensor.qw !== undefined) {
-      viewerRef.current.setQuaternion(sensor.qw, sensor.qx, sensor.qy, sensor.qz);
-      // 球面の現在位置 dot
-      viewerRef.current.setCurrentDot(sensor.qw, sensor.qx, sensor.qy, sensor.qz);
-    }
-    if (sensor.ax !== undefined) {
-      viewerRef.current.setGravityVector(sensor.ax, sensor.ay, sensor.az);
-    }
-    // 2D グリッド
-    if (gridRef.current && sensor.roll !== undefined) {
-      gridRef.current.setCurrent(sensor.roll, sensor.pitch);
-    }
-    // 最近傍ルール計算 (Quaternion angleTo)
-    if (ruleReferences.length > 0 && sensor.qw !== undefined) {
-      const findClosest = () => {
-        let minAngle = Infinity;
-        let idx = -1;
-        const cur = { w: sensor.qw, x: sensor.qx, y: sensor.qy, z: sensor.qz };
-        ruleReferences.forEach((r, i) => {
-          if (r.qw === undefined) return;
-          // 内積
-          let dot = cur.w*r.qw + cur.x*r.qx + cur.y*r.qy + cur.z*r.qz;
-          if (dot < 0) dot = -dot;
-          if (dot > 1) dot = 1;
-          const angle = 2 * Math.acos(dot);
-          if (angle < minAngle) { minAngle = angle; idx = i; }
-        });
-        return idx;
-      };
-      const idx = findClosest();
-      if (idx !== closestRuleIdx) setClosestRuleIdx(idx);
-      if (idx >= 0) {
-        const r = ruleReferences[idx];
-        viewerRef.current.setClosestDot(r.qw, r.qx, r.qy, r.qz);
-        gridRef.current?.setClosest(idx);
-      }
-    } else {
-      viewerRef.current.setClosestDot(null);
-      gridRef.current?.setClosest(-1);
-    }
-  }, [sensor, ruleReferences]);
+    const id = setInterval(() => {
+      const now = Date.now();
+      const c = perfCountersRef.current;
+      const dt = (now - c.lastTick) / 1000;
+      if (dt <= 0) return;
+      // PitchRollGrid と IMUViewer のカウンタも回収 (getter があれば)
+      const grid = gridRef.current;
+      const viewer = viewerRef.current;
+      const gridDraws = (grid && typeof grid.getDrawCount === 'function') ? grid.getDrawCount() : 0;
+      const rafCount  = (viewer && typeof viewer.getFrameCount === 'function') ? viewer.getFrameCount() : 0;
+      setPerfStats({
+        sensorRate:  c.sensorPktCount / dt,
+        renderRate:  c.renderCount / dt,
+        bytesPerSec: c.bytesIn / dt,
+        gridDrawRate: gridDraws / dt,
+        rafRate: rafCount / dt,
+      });
+      c.sensorPktCount = 0;
+      c.renderCount    = 0;
+      c.bytesIn        = 0;
+      c.lastTick       = now;
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Phase 5.36: 旧 useEffect の重い imperative 処理は onSensor handler に移行
+  //   (handler が ref ベースで viewer / grid / closest を full rate 直接更新)
+  //   ruleReferences → ref 同期は line ~185 の既存 useEffect が担う
 
   // ruleList 更新時に reference 座標を更新
   // 優先: FW rule.list 応答の posture (新 FW)、フォールバック: localStorage (姿勢キャプチャ時保存)
   useEffect(() => {
     const stored = JSON.parse(localStorage.getItem('burst_motion_rule_postures') || '{}');
     const refs = ruleList.map((r) => {
+      // Phase 5.21: button_state=1 (release で発火、移動系 HOLD) は 2D マップから除外
+      // 「ボタン押下しないルールを 2D マップに入れると分かりにくい」というユーザー指摘への対応
+      if (r.button && r.button.state === 1) return null;
       // 1. FW 応答に posture が含まれていれば優先 (Phase 5.9 で quat も含む、Phase 5.16 で tol も)
       if (r.posture && r.posture.euler) {
         const local = stored[r.id];
@@ -368,17 +502,96 @@ function App() {
     setRuleReferences(refs);
     if (gridRef.current) {
       gridRef.current.setReferences(refs);
+      // Phase 5.34: SEQUENCE rule (states_count > 1) を別レイヤで連結描画
+      const sequences = ruleList
+        .filter((r) => Array.isArray(r.states) && r.states.length > 1)
+        .map((r) => ({
+          id: r.id,
+          name: r.name,
+          currentState: r.current_state,
+          waypoints: r.states
+            .filter((s) => s.posture && Array.isArray(s.posture.euler))
+            .map((s) => ({
+              roll: s.posture.euler[0],
+              pitch: s.posture.euler[1],
+              rollTol: s.posture.euler_tol?.[0],
+              pitchTol: s.posture.euler_tol?.[1],
+            })),
+        }))
+        .filter((seq) => seq.waypoints.length > 1);
+      gridRef.current.setSequences(sequences);
     }
     if (viewerRef.current) {
-      const quats = refs.filter(r => r.qw !== undefined).map(r => ({
-        w: r.qw, x: r.qx, y: r.qy, z: r.qz
-      }));
+      // Phase 5.39.2: setTargetTrajectory が受け取る {qw,qx,qy,qz} 形式に合わせ、ID も並列で渡す
+      const qrefs = refs.filter(r => r.qw !== undefined);
+      const ids = qrefs.map((r) => r.id);
       import('three').then((THREE) => {
-        const tquats = quats.map(q => new THREE.Quaternion(-q.x, q.z, q.y, q.w));
-        viewerRef.current?.setReferenceQuaternions(tquats);
+        const tquats = qrefs.map(q => new THREE.Quaternion(-q.qx, q.qz, q.qy, q.qw));
+        viewerRef.current?.setReferenceQuaternions(tquats, ids);
       });
     }
   }, [ruleList]);
+
+  // Phase 5.39.2: selectedRuleId 変化を各ビュア / グリッドに反映
+  //   - PitchRollGrid: 選択以外を globalAlpha=0.18 で淡色化
+  //   - IMUViewer (絶対): 選択 rule の絶対 quat 目標軌跡を描画
+  //   - RelativeIMUViewer (相対): 選択 rule が posture_basis='relative' なら相対 waypoint を配置
+  useEffect(() => {
+    gridRef.current?.setSelectedRuleId?.(selectedRuleId);
+    viewerRef.current?.setSelectedRuleId?.(selectedRuleId);
+
+    const rule = ruleList.find((r) => r.id === selectedRuleId);
+    if (!rule) {
+      // 選択解除 → 軌跡を消す
+      viewerRef.current?.setTargetTrajectory?.([]);
+      relativeViewerRef.current?.setSelectedRule?.(null);
+      return;
+    }
+    // 絶対 3D ビュアの目標軌跡 (絶対 quat、選択中 rule のみ濃い実線)
+    if (rule.posture_basis !== 'relative') {
+      // 絶対モード rule: states[].posture.quat or posture.quat を連結
+      const wps = [];
+      if (Array.isArray(rule.states) && rule.states.length > 0) {
+        for (const s of rule.states) {
+          if (s.posture?.quat && s.posture.quat.length === 4) {
+            wps.push({ qw: s.posture.quat[0], qx: s.posture.quat[1], qy: s.posture.quat[2], qz: s.posture.quat[3] });
+          } else if (Array.isArray(s.posture?.euler)) {
+            const e = s.posture.euler;
+            const q = eulerToQuatLocal(e[0], e[1], e[2]);
+            wps.push({ qw: q[0], qx: q[1], qy: q[2], qz: q[3] });
+          }
+        }
+      } else if (rule.posture?.quat && rule.posture.quat.length === 4) {
+        const q = rule.posture.quat;
+        wps.push({ qw: q[0], qx: q[1], qy: q[2], qz: q[3] });
+      }
+      viewerRef.current?.setTargetTrajectory?.(wps);
+      relativeViewerRef.current?.setSelectedRule?.(null);
+    } else {
+      // 相対モード rule: RelativeIMUViewer に渡す。絶対ビュアの軌跡は消す
+      //   (target は q_ref からの相対オフセットなので絶対座標では描けない)
+      viewerRef.current?.setTargetTrajectory?.([]);
+      relativeViewerRef.current?.setSelectedRule?.(rule);
+      // 相対 3D タブを推奨ハイライト (タブ名のドット表示は render で対応)
+    }
+  }, [selectedRuleId, ruleList]);
+
+  // ローカル Euler [Roll, Pitch, Yaw] (deg) → quat [w, x, y, z] (ZYX、Mahony 系)
+  //   selectedRuleId useEffect 内から呼ぶための前方宣言代替 (function expression を const に展開)
+  function eulerToQuatLocal(rollDeg, pitchDeg, yawDeg) {
+    const r = (rollDeg  * Math.PI / 180) / 2;
+    const p = (pitchDeg * Math.PI / 180) / 2;
+    const y = (yawDeg   * Math.PI / 180) / 2;
+    const cr = Math.cos(r), sr = Math.sin(r);
+    const cp = Math.cos(p), sp = Math.sin(p);
+    const cy = Math.cos(y), sy = Math.sin(y);
+    return [
+      cr*cp*cy + sr*sp*sy,
+      sr*cp*cy - cr*sp*sy,
+      cr*sp*cy + sr*cp*sy,
+      cr*cp*sy - sr*sp*cy,
+    ];
+  }
 
   const addLog = useCallback((dir, text) => {
     setLog((prev) => {
@@ -416,6 +629,10 @@ function App() {
     const isNoiseTx = (obj) => obj?.cmd === 'hw.buttons.get';
     const isNoiseRx = (line) => typeof line === 'string' && line.includes('"type":"hw.buttons"');
     const onRaw = (ev) => {
+      // Phase 5.35: 受信総 bytes をカウント (sensor packet 以外も含む実総量)
+      if (typeof ev.detail === 'string') {
+        perfCountersRef.current.bytesIn += ev.detail.length + 1;  // +1 = \n
+      }
       if (isNoiseRx(ev.detail)) return;
       addLog('rx', ev.detail);
     };
@@ -424,7 +641,73 @@ function App() {
       addLog('tx', JSON.stringify(ev.detail));
     };
     const onSensor = (ev) => {
-      setSensor(ev.detail);
+      perfCountersRef.current.sensorPktCount++;
+      const detail = ev.detail;
+      // Phase 5.36: sensor を常に ref に保持 (state より速い)
+      sensorRef.current = detail;
+
+      // ---- 1) 重い imperative API 呼出を full rate で直接実行 ----
+      const viewer = viewerRef.current;
+      const relViewer = relativeViewerRef.current;
+      const grid = gridRef.current;
+      if (viewer && detail.qw !== undefined) {
+        viewer.setQuaternion(detail.qw, detail.qx, detail.qy, detail.qz);
+        viewer.setCurrentDot(detail.qw, detail.qx, detail.qy, detail.qz);
+        // Phase 5.39.2: 過去軌跡 trail に現在 quat を追加 (絶対ビュア、3 秒履歴)
+        viewer.addTrailPoint?.(detail.qw, detail.qx, detail.qy, detail.qz, detail.t);
+      }
+      // Phase 5.39.2: 相対 3D ビュアにも sensor.quat を渡す (worldGroup 逆回転 + trail)
+      if (relViewer && detail.qw !== undefined) {
+        relViewer.setQuaternion(detail.qw, detail.qx, detail.qy, detail.qz);
+        relViewer.addTrailPoint(detail.qw, detail.qx, detail.qy, detail.qz, detail.t);
+      }
+      if (viewer && detail.ax !== undefined) {
+        viewer.setGravityVector(detail.ax, detail.ay, detail.az);
+      }
+      if (grid && detail.roll !== undefined) {
+        // PitchRollGrid の setCurrent は内部で 30Hz draw cap (Phase 5.36)
+        grid.setCurrent(detail.roll, detail.pitch);
+      }
+      // 最近傍ルール計算 (Roll/Pitch tol 正規化、FW Phase 5.15 互換)
+      const refs = ruleReferencesRef.current;
+      if (refs.length > 0 && detail.roll !== undefined) {
+        let minDist = Infinity;
+        let bestIdx = -1;
+        for (let i = 0; i < refs.length; i++) {
+          const r = refs[i];
+          if (r.roll === undefined || r.pitch === undefined) continue;
+          let dr = detail.roll - r.roll;
+          while (dr > 180) dr -= 360;
+          while (dr < -180) dr += 360;
+          const dp = detail.pitch - r.pitch;
+          const tr = (r.rollTol && r.rollTol > 0.001) ? r.rollTol : 180;
+          const tp = (r.pitchTol && r.pitchTol > 0.001) ? r.pitchTol : 90;
+          const drn = dr / tr;
+          const dpn = dp / tp;
+          const dist = drn * drn + dpn * dpn;
+          if (dist < minDist) { minDist = dist; bestIdx = i; }
+        }
+        if (bestIdx !== lastClosestIdxRef.current) {
+          lastClosestIdxRef.current = bestIdx;
+          if (bestIdx >= 0) {
+            const r = refs[bestIdx];
+            if (viewer && r.qw !== undefined) viewer.setClosestDot(r.qw, r.qx, r.qy, r.qz);
+            grid?.setClosest(bestIdx);
+            setClosestRuleIdx(bestIdx);   // UI 強調用、変化時のみ
+          } else {
+            if (viewer) viewer.setClosestDot(null);
+            grid?.setClosest(-1);
+            setClosestRuleIdx(-1);
+          }
+        }
+      }
+
+      // ---- 2) React state は 10 Hz throttle (UI 表示用) ----
+      const nowMs = Date.now();
+      if ((nowMs - lastSetSensorMsRef.current) >= 100) {
+        lastSetSensorMsRef.current = nowMs;
+        setSensor(detail);
+      }
       // Stream タイミング統計
       const now = performance.now();
       const fwT = ev.detail.t;
@@ -475,6 +758,30 @@ function App() {
         const idx = ruleReferencesRef.current.findIndex((r) => r.id === d.id);
         if (idx >= 0) gridRef.current.setFiring(idx, 500);
       }
+      // Phase 5.39.2: enter phase で q_ref が来たら相対ビュアに渡す (実 q_ref で軌跡固定)
+      //   両ビュアの trail を clear (新しいジェスチャ開始の合図)
+      // デバッグログ (Phase 5.39.2.3、一時的)
+      console.log('[onTriggerHit]', { phase: d.phase, q_ref: d.q_ref, id: d.id, rule_name: d.rule_name });
+      // Phase 5.39.2.4: Web UI に表示するために state に保存 (F12 console 不要のデバッグ)
+      setLastTriggerHit({
+        phase: d.phase,
+        q_ref: d.q_ref,
+        id: d.id,
+        rule_name: d.rule_name,
+        t: Date.now(),
+      });
+      if (d.phase === 'enter') {
+        viewerRef.current?.clearTrail?.();
+        relativeViewerRef.current?.clearTrail?.();
+        if (Array.isArray(d.q_ref) && d.q_ref.length === 4) {
+          relativeViewerRef.current?.setQRef?.(d.q_ref, true);
+        } else {
+          console.warn('[onTriggerHit] enter phase だが q_ref フィールドなし。FW が posture_basis=relative + q_ref_valid 条件をパスしていない可能性。');
+        }
+      } else if (d.phase === 'release' || d.phase === 'timeout' || d.phase === 'fail_back_to_start') {
+        // state リセット → プレビュー軌跡に戻す
+        relativeViewerRef.current?.setQRef?.(null, false);
+      }
     };
     const onAck = (ev) => {
       const d = ev.detail;
@@ -486,6 +793,10 @@ function App() {
       }
       if (d.cmd === 'engine.closest_only' && typeof d.enabled === 'boolean') {
         setClosestOnlyMode(d.enabled);
+      }
+      // Phase 5.32: mode.set の ack に device_mode が含まれる
+      if (d.cmd === 'mode.set' && typeof d.device_mode === 'string') {
+        setDeviceMode(d.device_mode);
       }
     };
 
@@ -681,27 +992,108 @@ function App() {
     if (hidTimerRef.current) clearInterval(hidTimerRef.current);
   }, []);
 
+  // Phase 5.39.2: 相対 quat 計算 (qRef は開始姿勢時の sensor.quat)
+  //   q_rel = quat_conj(qRef) * q_current
+  //   q_rel から ZYX Euler を抽出して相対 Euler を返す (deg)
+  function quatConj(q) { return [q[0], -q[1], -q[2], -q[3]]; }
+  function quatMul(a, b) {
+    return [
+      a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3],
+      a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2],
+      a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1],
+      a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0],
+    ];
+  }
+  function quatToEulerZYX(q) {
+    // ZYX intrinsic (Mahony 系と一致): roll = atan2(2(wx+yz), 1-2(x^2+y^2))
+    //                                  pitch = asin(2(wy-zx))
+    //                                  yaw = atan2(2(wz+xy), 1-2(y^2+z^2))
+    const [w, x, y, z] = q;
+    const sinp = 2 * (w*y - z*x);
+    const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * Math.PI / 2 : Math.asin(sinp);
+    const roll  = Math.atan2(2 * (w*x + y*z), 1 - 2 * (x*x + y*y));
+    const yaw   = Math.atan2(2 * (w*z + x*y), 1 - 2 * (y*y + z*z));
+    const R = 180 / Math.PI;
+    return [roll * R, pitch * R, yaw * R];
+  }
+  // 現在の sensor.quat と qRefCapture から相対 Euler を計算 (相対モード rule 用)
+  function computeRelativeEuler(curQuat) {
+    const qref = qRefCaptureRef.current;
+    if (!qref || !curQuat || curQuat.length !== 4) return null;
+    const qrel = quatMul(quatConj(qref), curQuat);
+    return quatToEulerZYX(qrel);
+  }
+
   // 姿勢キャプチャ (現在の sensor から、quat も保存)
+  // Phase 5.38: 判定軸チェックボックスを反映 — OFF の軸は euler_tol=180 で実質除外
+  const buildPostureTol = () => {
+    const tol = parseInt(postureTol) || 15;
+    return [
+      postureUseRoll  ? tol : 180,
+      postureUsePitch ? tol : 180,
+      postureUseYaw   ? tol : 180,
+    ];
+  };
   const captureStartPosture = () => {
     if (!sensor) { alert('センサーストリーム ON にしてから姿勢を取得してください'); return; }
-    const tol = parseInt(postureTol) || 15;
     setStartPosture({
       euler: [sensor.roll, sensor.pitch, sensor.yaw],
-      euler_tol: [tol, tol, tol * 6],
+      euler_tol: buildPostureTol(),
       quat: [sensor.qw, sensor.qx, sensor.qy, sensor.qz],
     });
+    // Phase 5.39.2: 相対モード rule 登録フロー
+    //   開始姿勢キャプチャ時に sensor.quat を qRefCaptureRef に記録 (中間/終了姿勢で相対化に使用)
+    //   posture_basis='relative' のときのみ意味を持つが、毎回保存しても害なし
+    qRefCaptureRef.current = [sensor.qw, sensor.qx, sensor.qy, sensor.qz];
   };
   const captureEndPosture = () => {
     if (!sensor) { alert('センサーストリーム ON にしてから姿勢を取得してください'); return; }
-    const tol = parseInt(postureTol) || 15;
+    const curQuat = [sensor.qw, sensor.qx, sensor.qy, sensor.qz];
+    // Phase 5.39.2: 相対モード rule (hold_with_waypoints + posture_basis='relative') では
+    //   絶対 Euler ではなく q_rel (=quat_conj(qRefCapture) * sensor.quat) から ZYX Euler を抽出して
+    //   「q_ref からのオフセット」として保存する
+    let eulerVal = [sensor.roll, sensor.pitch, sensor.yaw];
+    if (ruleMode === 'hold_with_waypoints' && postureBasis === 'relative') {
+      const rel = computeRelativeEuler(curQuat);
+      if (rel) eulerVal = rel;
+    }
     setEndPosture({
-      euler: [sensor.roll, sensor.pitch, sensor.yaw],
-      euler_tol: [tol, tol, tol * 6],
-      quat: [sensor.qw, sensor.qx, sensor.qy, sensor.qz],
+      euler: eulerVal,
+      euler_tol: buildPostureTol(),
+      quat: curQuat,
     });
   };
   const clearStartPosture = () => setStartPosture(null);
   const clearEndPosture   = () => setEndPosture(null);
+
+  // Phase 5.39: 中間姿勢 (waypoints) キャプチャ (0..2 個)
+  // Phase 5.39.2: 相対モード時は qRefCapture からの相対 Euler に変換して保存
+  const captureMidPosture = (index) => {
+    if (!sensor) { alert('センサーストリーム ON にしてから姿勢を取得してください'); return; }
+    const curQuat = [sensor.qw, sensor.qx, sensor.qy, sensor.qz];
+    let eulerVal = [sensor.roll, sensor.pitch, sensor.yaw];
+    if (ruleMode === 'hold_with_waypoints' && postureBasis === 'relative') {
+      const rel = computeRelativeEuler(curQuat);
+      if (rel) eulerVal = rel;
+    }
+    const newMid = {
+      euler: eulerVal,
+      euler_tol: buildPostureTol(),
+      quat: curQuat,
+    };
+    setMidPostures(prev => {
+      const copy = [...prev];
+      copy[index] = newMid;
+      return copy;
+    });
+  };
+  const clearMidPosture = (index) => {
+    setMidPostures(prev => prev.filter((_, i) => i !== index));
+  };
+  const addMidPostureSlot = () => {
+    if (midPostures.length >= 2) return;
+    setMidPostures(prev => [...prev, null]);   // null スロット = 未キャプチャ
+  };
 
   // 修飾キービット (BleCombo の HID キーコード規約に近い形)
   // bit0=Ctrl, bit1=Shift, bit2=Alt, bit3=GUI(Win)
@@ -727,15 +1119,20 @@ function App() {
       if (!ok) return;
     }
     // ジンバルロック領域 (|Pitch| > 65°) チェック — Euler 判定が不安定になる
-    if (startPosture && Math.abs(startPosture.euler[1]) > 65) {
+    // Phase 5.38: Pitch=asin 出力なので Pitch 自体は安定 (ただし ±90° で頭打ち)。
+    // 縮退するのは Roll/Yaw 側。Roll/Yaw OFF (Pitch のみ判定) or Quat 判定なら警告不要。
+    if (startPosture && Math.abs(startPosture.euler[1]) > 65 &&
+        (postureUseRoll || postureUseYaw) && postureJudgeBy === 'euler') {
       const ok = confirm(
         '⚠ ジンバルロック領域です\n\n' +
         `Pitch = ${startPosture.euler[1].toFixed(1)}° は |Pitch| > 65° のジンバルロック領域に該当します。\n` +
-        'Mahony フィルタの Euler 出力は Pitch = asin で ±90° で縮退するため、\n' +
-        'Roll/Yaw が安定して取れず、ルール判定が不安定になります。\n\n' +
+        'Mahony フィルタの ZYX Euler 出力では Pitch=asin が ±90° で縮退し、\n' +
+        '同時に Roll / Yaw が一つの自由度に潰れて値が不安定になります。\n' +
+        '(Pitch そのものは asin の出力なので頭打ちはするが安定して取得できます)\n\n' +
         '推奨対応:\n' +
-        ' ・姿勢を Pitch < ±65° の範囲で取り直す\n' +
-        ` ・判定方法を「Quaternion 内積」に切替 (現在の判定: ${postureJudgeBy})\n\n` +
+        ' ・判定軸の <b>Roll / Yaw のチェックを外し、Pitch のみで判定</b>\n' +
+        ' ・判定方法を「Quaternion 内積」に切替\n' +
+        ' ・姿勢を |Pitch| < 65° の範囲で取り直す\n\n' +
         'このまま登録しますか?'
       );
       if (!ok) return;
@@ -772,6 +1169,33 @@ function App() {
     if (ruleButtonEnabled) {
       r.button_idx = parseInt(ruleButtonIdx, 10);
       r.button_state = parseInt(ruleButtonState, 10);
+    }
+    // Phase 5.39: hold_with_waypoints (Hold Start End + 中間姿勢 0..2 個 + 判定基準)
+    if (ruleMode === 'hold_with_waypoints') {
+      r.ui_mode = 'hold_with_waypoints';
+      r.posture_basis = postureBasis;   // 'absolute' | 'relative'
+      // 開始姿勢: r.posture に既に設定済 (共通ブロック) — ここで明示的に start_posture にも複製
+      if (startPosture) {
+        r.start_posture = {
+          euler: startPosture.euler,
+          euler_tol: startPosture.euler_tol,
+        };
+        if (startPosture.quat) r.start_posture.quat = startPosture.quat;
+      }
+      // 中間姿勢配列 (null スロット除外)
+      r.mid_postures = midPostures.filter(p => p != null).map(p => ({
+        euler: p.euler,
+        euler_tol: p.euler_tol,
+        quat: p.quat,
+      }));
+      // 終了姿勢
+      if (endPosture) {
+        r.end_posture = {
+          euler: endPosture.euler,
+          euler_tol: endPosture.euler_tol,
+        };
+        if (endPosture.quat) r.end_posture.quat = endPosture.quat;
+      }
     }
     if (ruleMode === 'hold_start_end' && endPosture) {
       r.end_posture = { euler: endPosture.euler, euler_tol: endPosture.euler_tol };
@@ -887,12 +1311,11 @@ function App() {
   // 現在 Hardware の buttons 配列 (空配列なら定義未取得 or 該当機種なし)
   const currentButtons = hardwareDefs[selectedHardware]?.buttons || [];
 
-  // Hardware 切替時、ボタン条件のデフォルト idx を最後 (= 通常使用される独立ボタン) に追従
-  // M5StickC なら 3 (Btn3=G26)、M5Atom S3 なら 1 (Btn=G41)
+  // Hardware 切替時、ボタン条件のデフォルト idx を「最後のボタン (= 一番手前)」に追従
+  // M5StickC なら 3 (Btn3=G26、一番手前)、M5Atom S3 なら 1 (Btn=G41 唯一) — 機種ごとに最終 idx
   useEffect(() => {
     if (currentButtons.length > 0) {
       const lastIdx = currentButtons[currentButtons.length - 1].idx;
-      // 現在 idx が選択肢にない場合のみ追従 (ユーザー手動選択を尊重)
       const exists = currentButtons.some((b) => b.idx === ruleButtonIdx);
       if (!exists) setRuleButtonIdx(lastIdx);
     }
@@ -1146,6 +1569,25 @@ function App() {
       const hasComboMacro = data.rules.some((r) =>
         Array.isArray(r.keys) && r.keys.some((s) => typeof s === 'string' && s.includes('+'))
       );
+      // Phase 5.33 チェック: directions[] ショートハンド (ハリポタワンド) は Phase 5.33+ 必須
+      const hasDirections = data.rules.some((r) => Array.isArray(r.directions));
+      if (hasDirections && fwPhaseNum < 5.33) {
+        const ok = confirm(
+          `⚠ FW Phase ${fwPhase || '不明'} は directions[] ショートハンド未対応\n\n` +
+          `このサンプルは Harry Potter Wand (Phase 5.33+) で導入された\n` +
+          `8 方向シーケンス機能を使っています。\n` +
+          `旧 FW では directions が無視され、すべてのルールが空 condition の\n` +
+          `ONESHOT として登録されてしまいます。\n\n` +
+          `FW を Phase 5.33+ にフラッシュしてから再度適用してください。\n\n` +
+          `そのまま適用しますか? (動作しません)`
+        );
+        if (!ok) {
+          setSampleLoading(null);
+          setSampleStatus('❌ キャンセル: FW Phase 不足 (5.33+ 必須)');
+          setTimeout(() => setSampleStatus(''), 5000);
+          return;
+        }
+      }
       if (hasComboMacro && fwPhaseNum < 5.14) {
         const ok = confirm(
           `⚠ FW Phase ${fwPhase || '不明'} は同時押し macro 未対応です\n\n` +
@@ -1310,6 +1752,17 @@ function App() {
               ` : null}
             ` : html`<span class="chip bg-amber-100 text-amber-700">FW 取得中…</span>`}
           </div>
+          <!-- Phase 5.32: 動作モード切替 (Engine / Mouse) -->
+          <div class="flex gap-1 bg-slate-100 rounded-lg p-1" title="動作モード: Engine=ルール評価、Mouse=エアマウス (Btn3=左、Btn2=右、両押し=ホイール)">
+            <button onClick=${() => sendCmd({ cmd: 'mode.set', mode: 'engine' })}
+              class="px-3 py-1 text-sm rounded ${deviceMode === 'engine' ? 'bg-white shadow font-semibold' : 'text-slate-500'}">
+              🎯 Engine
+            </button>
+            <button onClick=${() => sendCmd({ cmd: 'mode.set', mode: 'mouse' })}
+              class="px-3 py-1 text-sm rounded ${deviceMode === 'mouse' ? 'bg-white shadow font-semibold' : 'text-slate-500'}">
+              🖱 Mouse
+            </button>
+          </div>
           <button onClick=${handleDisconnect} class="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg">切断</button>
         ` : html`
           <button onClick=${handleConnect}
@@ -1320,6 +1773,25 @@ function App() {
         `}
       </div>
     </header>
+
+    <!-- Phase 5.32: Mouse モード中の説明バナー -->
+    ${connected && deviceMode === 'mouse' ? html`
+      <div class="mb-3 p-3 bg-sky-50 border-l-4 border-sky-400 text-sm">
+        <div class="font-semibold text-sky-800 mb-1">🖱 Mouse モード動作中</div>
+        <ul class="text-xs text-sky-700 list-disc ml-5 space-y-0.5">
+          <li>IMU ジャイロでカーソル移動 (Yaw=横、Pitch=縦、deadzone 3°/s、感度 8 px/deg)</li>
+          <li>${(deviceInfo?.board || selectedHardware) === 'm5stickc' ? html`<b>Btn3</b> (G26、一番手前) = 左クリック / <b>Btn2</b> (G36) = 右クリック / <b>同時押し</b> = ホイール (Pitch で上下スクロール、30°/ノッチ)` : html`Btn 配列に依存。M5StickC 以外は未検証`}</li>
+          <li>ルール (TriggerEngine) は無効化中。Engine モードに戻すと現在の active profile が再評価されます</li>
+        </ul>
+      </div>
+    ` : null}
+
+    <!-- Phase 5.39: hold_with_waypoints 用 FW バージョン警告 -->
+    ${connected && ruleMode === 'hold_with_waypoints' && deviceInfo?.fw_phase && parseFloat(deviceInfo.fw_phase) < 5.39 ? html`
+      <div class="mb-3 p-2 bg-red-50 border-l-4 border-red-400 text-sm text-red-700">
+        ⚠ FW Phase ${deviceInfo.fw_phase} < 5.39 のため <b>hold_with_waypoints</b> モードは使用不可。FW を 5.39+ にアップデートしてください。
+      </div>
+    ` : null}
 
     <!-- FW Phase 古い警告 (Closest-only ON で Phase < 5.15 = tol 重み付け未対応) -->
     ${connected && closestOnlyMode && deviceInfo?.fw_phase && parseFloat(deviceInfo.fw_phase) < 5.15 ? html`
@@ -1374,7 +1846,15 @@ function App() {
         <h2 class="font-semibold mb-3">🔧 デバイス</h2>
         ${deviceInfo ? html`
           <dl class="grid grid-cols-2 gap-x-2 gap-y-1 text-sm">
-            <dt class="text-slate-500">FW:</dt><dd>${deviceInfo.fw || '—'}</dd>
+            <dt class="text-slate-500">FW:</dt>
+            <dd>
+              ${deviceInfo.fw || '—'}
+              ${deviceInfo.fw_phase ? html` <span class="px-1.5 py-0.5 ml-1 bg-emerald-100 text-emerald-700 text-[11px] font-mono font-semibold rounded">Phase ${deviceInfo.fw_phase}</span>` : null}
+            </dd>
+            ${deviceInfo.fw_build ? html`
+              <dt class="text-slate-500">Build:</dt>
+              <dd class="font-mono text-[11px]">${deviceInfo.fw_build}</dd>
+            ` : null}
             <dt class="text-slate-500">Board:</dt><dd>${deviceInfo.board || '—'}</dd>
             <dt class="text-slate-500">IMU:</dt><dd>${deviceInfo.imu || '—'} ${deviceInfo.imu_ok === false ? '❌' : ''}</dd>
             <dt class="text-slate-500">Uptime:</dt><dd>${deviceInfo.uptime ? (deviceInfo.uptime / 1000).toFixed(1) + 's' : '—'}</dd>
@@ -1387,6 +1867,12 @@ function App() {
           <button onClick=${handleDeviceInfo} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">Info</button>
           <button onClick=${handleBleStart} disabled=${!connected} class="px-3 py-1 text-sm bg-purple-200 hover:bg-purple-300 rounded disabled:opacity-40">BLE Start</button>
           <button onClick=${handleBleStop} disabled=${!connected} class="px-3 py-1 text-sm bg-rose-200 hover:bg-rose-300 rounded disabled:opacity-40">BLE Stop</button>
+          <button onClick=${() => sendCmd({ cmd: 'test.hid', action: 'release_all' })}
+            disabled=${!connected}
+            title="HOLD ルール暴走時の緊急停止: 全キー解放 + ルール状態 reset"
+            class="px-3 py-1 text-sm bg-red-500 hover:bg-red-600 text-white rounded disabled:opacity-40 font-bold">
+            🛑 全リリース
+          </button>
           <button onClick=${handleCalibrate} disabled=${!connected} class="px-3 py-1 text-sm bg-orange-200 hover:bg-orange-300 rounded disabled:opacity-40">Calibrate</button>
           <button onClick=${handleStreamToggle} disabled=${!connected} class="px-3 py-1 text-sm bg-emerald-200 hover:bg-emerald-300 rounded disabled:opacity-40">
             ${streamRate === 0 ? 'Stream ON' : 'Stream OFF'}
@@ -1416,8 +1902,134 @@ function App() {
             <input type="checkbox" checked=${showGravity} onChange=${(e) => setShowGravity(e.target.checked)} />
             <span>重力ベクトル (水色)</span>
           </label>
+          <label class="flex items-center gap-1 cursor-pointer ml-3 border-l pl-3">
+            <input type="checkbox" checked=${showCharts} onChange=${(e) => setShowCharts(e.target.checked)} />
+            <span>📈 加速度/ジャイロ時間波形</span>
+          </label>
         </div>
-        <canvas ref=${canvasRef} style="width:100%; height:240px; display:block; border-radius:6px; background:#000;"></canvas>
+        <!-- Phase 5.39.2: タブ式 UI (絶対 3D / 2D Roll-Pitch / 相対 3D)、デフォルト 絶対 3D -->
+        <div class="flex items-center gap-1 mb-1 border-b border-slate-200" role="tablist">
+          ${[
+            { id: 'absolute', label: '🌐 絶対 3D', recommend: (() => {
+                const r = ruleList.find((x) => x.id === selectedRuleId);
+                return r && r.posture_basis !== 'relative';
+              })() },
+            { id: '2d',       label: '📐 2D Roll-Pitch', recommend: (() => {
+                const r = ruleList.find((x) => x.id === selectedRuleId);
+                return r && r.posture_basis !== 'relative';
+              })() },
+            { id: 'relative', label: '👁 相対 3D', recommend: (() => {
+                const r = ruleList.find((x) => x.id === selectedRuleId);
+                return r && r.posture_basis === 'relative';
+              })() },
+          ].map((tab) => html`
+            <button onClick=${() => setViewerTab(tab.id)}
+              role="tab"
+              aria-selected=${viewerTab === tab.id}
+              class="px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px transition-colors
+                ${viewerTab === tab.id
+                  ? 'border-blue-500 text-blue-700 bg-blue-50'
+                  : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'}">
+              ${tab.label}${tab.recommend ? html` <span class="inline-block w-1.5 h-1.5 bg-emerald-500 rounded-full ml-0.5" title="この rule に推奨のビュア"></span>` : null}
+            </button>
+          `)}
+          ${selectedRuleId >= 0 ? html`
+            <span class="ml-auto text-[10px] text-slate-500 font-mono">
+              選択: ${ruleList.find((x) => x.id === selectedRuleId)?.name || `#${selectedRuleId}`}
+              <button onClick=${() => setSelectedRuleId(-1)}
+                class="ml-1 text-red-500 hover:underline">解除</button>
+            </span>
+          ` : html`
+            <span class="ml-auto text-[10px] text-slate-400">rule 一覧から選択で軌跡可視化</span>
+          `}
+        </div>
+        <!-- 絶対 3D タブ canvas (デフォルト) -->
+        <canvas ref=${canvasRef}
+          style=${`width:100%; height:240px; display:${viewerTab === 'absolute' ? 'block' : 'none'}; border-radius:6px; background:#000;`}></canvas>
+        <!-- 相対 3D タブ canvas (Phase 5.39.2) -->
+        <canvas ref=${relativeCanvasRef}
+          style=${`width:100%; height:240px; display:${viewerTab === 'relative' ? 'block' : 'none'}; border-radius:6px; background:#000010;`}></canvas>
+        <!-- 2D Roll-Pitch タブ (既存 PitchRollGrid を移設、Phase 5.39.2 では下の 2D マップに任せて 'プレースホルダ' 表示) -->
+        ${viewerTab === '2d' ? html`
+          <div class="p-3 text-xs text-slate-500 bg-slate-50 rounded h-[240px] flex items-center justify-center text-center">
+            📐 2D Roll-Pitch ビュー: 下の「Roll / Pitch 2D マップ」パネルに描画中。<br/>
+            選択 rule (${selectedRuleId >= 0 ? `id=${selectedRuleId}` : '未選択'}) はそちらで濃色強調されます。
+          </div>
+        ` : null}
+        ${viewerTab === 'relative' ? html`
+          <div class="text-[11px] text-slate-500 mt-1 flex items-center gap-2 flex-wrap">
+            <span>👁 q_ref 基準ビュー: M5C モデルが q_ref 基準で回転 (Btn3 押下時 q_ref 確定後)。</span>
+            <label class="flex items-center gap-1 cursor-pointer">
+              <input type="checkbox"
+                onChange=${(e) => relativeViewerRef.current?.setM5CMode?.(e.target.checked ? 'qref_anchor' : 'fixed')} />
+              <span>M5C を q_ref に定着</span>
+            </label>
+            ${selectedRuleId >= 0 ? html`
+              <span class="ml-auto text-emerald-700">
+                選択 rule の rel_quat waypoint を球面に紫表示
+              </span>
+            ` : html`
+              <span class="ml-auto text-amber-700">
+                rule 一覧から相対モード rule をクリックして選択してください
+              </span>
+            `}
+          </div>
+          <!-- Phase 5.39.2.8: btn.sim 送信ボタン (FW へ Btn 押下シミュレーション、自動テスト用) -->
+          <div class="text-[11px] mt-1 px-2 py-1 rounded font-mono bg-amber-50 border border-amber-300 flex items-center gap-2 flex-wrap">
+            <span class="font-semibold text-amber-900">🤖 btn.sim:</span>
+            <span class="text-slate-500">擬似ボタン押下 (自動テスト用)</span>
+            <button onClick=${() => sendCmd({ cmd: 'btn.sim', idx: 3, state: 1 })}
+              class="px-2 py-0.5 rounded bg-violet-300 hover:bg-violet-400 font-semibold"
+              title="Btn3 押下シミュレーション送信 → state[0] enter 発火 + q_ref snapshot を期待">
+              Btn3 ↓ 押下
+            </button>
+            <button onClick=${() => sendCmd({ cmd: 'btn.sim', idx: 3, state: 0 })}
+              class="px-2 py-0.5 rounded bg-slate-300 hover:bg-slate-400"
+              title="Btn3 release シミュレーション">
+              Btn3 ↑ 離す
+            </button>
+            <button onClick=${() => sendCmd({ cmd: 'btn.sim', clear: true })}
+              class="px-2 py-0.5 rounded bg-red-200 hover:bg-red-300 text-red-900"
+              title="btn.sim override クリア (物理 GPIO 値に戻す)">
+              ✗ clear
+            </button>
+          </div>
+          <!-- Phase 5.39.2.4: 最終 trigger.hit event の状態 debug 表示 (F12 不要) -->
+          <div class="text-[11px] mt-1 px-2 py-1 rounded font-mono bg-slate-100 border border-slate-300 flex items-center gap-2 flex-wrap">
+            ${lastTriggerHit ? html`
+              <span class="font-semibold">最終 trigger.hit:</span>
+              <span class="${lastTriggerHit.phase === 'enter' ? 'text-emerald-700 font-bold' : 'text-slate-700'}">
+                phase=<b>${lastTriggerHit.phase}</b>
+              </span>
+              <span>id=${lastTriggerHit.id}</span>
+              <span>${lastTriggerHit.rule_name}</span>
+              <span class="${Array.isArray(lastTriggerHit.q_ref) ? 'text-emerald-700' : 'text-red-600 font-semibold'}">
+                q_ref=${Array.isArray(lastTriggerHit.q_ref)
+                  ? `[${lastTriggerHit.q_ref.map((v) => v.toFixed(3)).join(',')}] ✓`
+                  : `${lastTriggerHit.q_ref === undefined ? '未送信(undef)' : JSON.stringify(lastTriggerHit.q_ref)} ✗`}
+              </span>
+              <span class="text-slate-400">
+                ${((Date.now() - lastTriggerHit.t) / 1000).toFixed(1)}s 前
+              </span>
+            ` : html`
+              <span class="text-slate-400">trigger.hit イベント未受信 (Btn3 押下で発火)</span>
+            `}
+            <span class="ml-auto flex items-center gap-2">
+              <span class="text-slate-500">watch:</span>
+              <span class="${watchEnabled ? 'text-emerald-700 font-bold' : 'text-red-600 font-bold'}">
+                ${watchEnabled ? 'ON ✓' : 'OFF ✗'}
+              </span>
+              <button onClick=${() => {
+                  sendCmd({ cmd: 'watch.set', enabled: true });
+                  setWatchEnabled(true);
+                }}
+                class="px-2 py-0.5 rounded bg-emerald-200 hover:bg-emerald-300 text-emerald-900 text-[10px]"
+                title="watch.set enabled=true を強制再送 (trigger.hit を受信するため)">
+                🔁 watch ON 再送
+              </button>
+            </span>
+          </div>
+        ` : null}
         ${sensor ? html`
           <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-mono mt-2">
             <div class="bg-sky-50 rounded p-2">
@@ -1459,8 +2071,8 @@ function App() {
           </div>
         ` : html`<p class="text-xs text-slate-400 mt-2 text-center">${streamRate === 0 ? 'Stream OFF (3D は QW/Q* 受信で動作)' : '待機中…'}</p>`}
 
-        <!-- 時系列波形チャート (Accel & Gyro 各 XYZ + RMS) -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-3">
+        <!-- 時系列波形チャート (Accel & Gyro 各 XYZ + RMS、Phase 5.19 で ON/OFF 可) -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-3" style=${showCharts ? '' : 'display:none'}>
           <div>
             <div class="text-[10px] text-slate-500 mb-0.5 flex items-center gap-2 font-mono">
               <span>Accel [g] 時系列</span>
@@ -1483,6 +2095,33 @@ function App() {
           </div>
         </div>
       </div>
+
+      <!-- 移動 HOLD 状態インジケータ (button_state=1 のルール用、2D マップ外で表示) -->
+      ${ruleList.some((r) => r.button && r.button.state === 1) ? html`
+        <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-3 lg:col-span-2">
+          <div class="flex items-center gap-3 flex-wrap">
+            <span class="text-xs font-semibold text-slate-600">🕹 移動 HOLD (Btn 解放中):</span>
+            ${ruleList.filter((r) => r.button && r.button.state === 1).map((r) => {
+              const active = r.current_state >= 0;
+              const keyName = r.action && r.action.keys && r.action.keys.length > 0
+                ? hidCodeToName(r.action.keys[0])
+                : '?';
+              return html`
+                <div class="flex items-center gap-1 px-2 py-1 rounded
+                  ${active ? 'bg-emerald-200 text-emerald-900 ring-2 ring-emerald-500 animate-pulse'
+                           : 'bg-slate-100 text-slate-500'}">
+                  <span class="font-semibold text-xs">${r.name}</span>
+                  <span class="font-mono text-sm">${keyName}</span>
+                  ${active ? html`<span class="text-xs">●HOLD</span>` : null}
+                </div>
+              `;
+            })}
+          </div>
+          <div class="text-[10px] text-slate-500 mt-1">
+            姿勢条件を満たし、Btn3 を <b>離している</b> 間 HOLD 入力。Btn3 押下で自動解除→技モードへ移行。
+          </div>
+        </div>
+      ` : null}
 
       <!-- Roll/Pitch 2D グリッド -->
       <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 lg:col-span-2">
@@ -1584,6 +2223,17 @@ function App() {
           </button>
         </div>
         <div class="flex gap-2 flex-wrap items-center">
+          <span class="text-xs text-slate-500 mr-1">矢印キー (即発火):</span>
+          <button onClick=${() => hidTest('fire', { key: 'ARROW_LEFT'  })} disabled=${!connected} class="px-3 py-1 text-sm bg-indigo-200 hover:bg-indigo-300 rounded disabled:opacity-40 font-mono">←</button>
+          <button onClick=${() => hidTest('fire', { key: 'ARROW_DOWN'  })} disabled=${!connected} class="px-3 py-1 text-sm bg-indigo-200 hover:bg-indigo-300 rounded disabled:opacity-40 font-mono">↓</button>
+          <button onClick=${() => hidTest('fire', { key: 'ARROW_UP'    })} disabled=${!connected} class="px-3 py-1 text-sm bg-indigo-200 hover:bg-indigo-300 rounded disabled:opacity-40 font-mono">↑</button>
+          <button onClick=${() => hidTest('fire', { key: 'ARROW_RIGHT' })} disabled=${!connected} class="px-3 py-1 text-sm bg-indigo-200 hover:bg-indigo-300 rounded disabled:opacity-40 font-mono">→</button>
+          <span class="text-xs text-slate-500 mr-1 ml-3">特殊:</span>
+          <button onClick=${() => hidTest('fire', { key: 'ENTER' })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">Enter</button>
+          <button onClick=${() => hidTest('fire', { key: 'SPACE' })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">Space</button>
+          <button onClick=${() => hidTest('fire', { key: 'ESC' })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">Esc</button>
+        </div>
+        <div class="flex gap-2 flex-wrap items-center mt-2">
           <span class="text-xs text-slate-500 mr-1">マウス (即実行):</span>
           <button onClick=${() => hidTest('mouse_move', { dx: 50, dy: 0 })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">→ 50,0</button>
           <button onClick=${() => hidTest('mouse_move', { dx: -50, dy: 0 })} disabled=${!connected} class="px-3 py-1 text-sm bg-slate-200 hover:bg-slate-300 rounded disabled:opacity-40">← -50,0</button>
@@ -1716,7 +2366,9 @@ function App() {
                     btnEval = `idx${idx}${r.button.state===0?'押':r.button.state===1?'離':'?'}${isPressed===null?'':ok?'✓':'✗'}`;
                   }
                   return html`
-                    <tr class="${triggerFlash && triggerFlash.id === r.id ? 'bg-yellow-100' : ''} border-t">
+                    <tr class="${triggerFlash && triggerFlash.id === r.id ? 'bg-yellow-100' : (selectedRuleId === r.id ? 'bg-blue-100 ring-2 ring-blue-400' : '')} border-t cursor-pointer hover:bg-slate-50"
+                        onClick=${() => setSelectedRuleId(selectedRuleId === r.id ? -1 : r.id)}
+                        title="${selectedRuleId === r.id ? 'クリックで選択解除' : 'クリックでこの rule の軌跡を 3D / 2D で可視化'}">
                       <td class="px-2 py-1 font-mono">${r.id}</td>
                       <td class="px-2 py-1">${r.name}</td>
                       <td class="px-2 py-1 text-center">${r.states_count}${r.current_state >= 0 ? `🟢${r.current_state}` : ''}</td>
@@ -1725,7 +2377,22 @@ function App() {
                         ${btnEval || '-'}
                       </td>
                       <td class="px-2 py-1 font-mono ${r.posture ? '' : 'text-slate-300'}">
-                        ${r.posture ? `R${r.posture.euler[0]?.toFixed(0)}P${r.posture.euler[1]?.toFixed(0)}±${r.posture.euler_tol[0]?.toFixed(0)}` : '-'}
+                        ${r.states && r.states.length > 1 ? html`
+                          <span class="inline-flex items-center gap-0.5 text-xs">
+                            ${r.states.map((s, i) => {
+                              if (!s.posture || !Array.isArray(s.posture.euler)) return null;
+                              const dirName = postureToDirection(s.posture.euler);
+                              const active = r.current_state === i;
+                              return html`
+                                <span class="px-1 rounded ${active ? 'bg-emerald-200 text-emerald-900 font-bold' : 'bg-violet-100 text-violet-800'}"
+                                      title="state[${i}] R${s.posture.euler[0]?.toFixed(0)} P${s.posture.euler[1]?.toFixed(0)} ±R${s.posture.euler_tol?.[0]?.toFixed(0)}/P${s.posture.euler_tol?.[1]?.toFixed(0)}">
+                                  ${dirName}
+                                </span>
+                                ${i < r.states.length - 1 ? html`<span class="text-violet-400">→</span>` : null}
+                              `;
+                            })}
+                          </span>
+                        ` : (r.posture ? html`R${r.posture.euler[0]?.toFixed(0)}P${r.posture.euler[1]?.toFixed(0)}±${r.posture.euler_tol[0]?.toFixed(0)}` : '-')}
                       </td>
                       <td class="px-2 py-1 font-mono ${r.accel ? '' : 'text-slate-300'}">
                         ${r.accel ? `≥${r.accel.abs_threshold?.toFixed(1)}g` : '-'}
@@ -1743,7 +2410,7 @@ function App() {
                         ` : '-'}
                       </td>
                       <td class="px-1 py-1 text-center">
-                        <button onClick=${() => handleRemoveRule(r.id, r.name)}
+                        <button onClick=${(e) => { e.stopPropagation(); handleRemoveRule(r.id, r.name); }}
                           disabled=${!connected}
                           class="px-1.5 py-0.5 text-xs bg-red-200 hover:bg-red-400 hover:text-white rounded disabled:opacity-30"
                           title="ルール ${r.name} (id=${r.id}) を削除">🗑</button>
@@ -1771,6 +2438,7 @@ function App() {
               <option value="oneshot">ONESHOT (1発)</option>
               <option value="hold_start_only">HOLD_START_ONLY (押下保持)</option>
               <option value="hold_start_end">HOLD_START_END (開始/終了 別姿勢)</option>
+              <option value="hold_with_waypoints">HOLD with Waypoints (開始→中間→終了)</option>
             </select>
           </div>
 
@@ -1801,35 +2469,115 @@ function App() {
                 <option value="quat">Quaternion 内積</option>
               </select>
             </div>
+            <!-- Phase 5.38: 判定軸 個別 ON/OFF (OFF=tol 180 で実質除外、ジンバルロック回避用) -->
+            <div class="flex items-center gap-2 mb-1 flex-wrap text-[11px] bg-slate-100 px-2 py-1 rounded border border-slate-200">
+              <span class="text-slate-500">判定軸:</span>
+              <label class="flex items-center gap-0.5 cursor-pointer"
+                     title="Roll を判定に使う (OFF にすると euler_tol[Roll]=180 で除外)">
+                <input type="checkbox" checked=${postureUseRoll}
+                  onChange=${(e) => setPostureUseRoll(e.target.checked)} />
+                <b>Roll</b>
+              </label>
+              <label class="flex items-center gap-0.5 cursor-pointer"
+                     title="Pitch を判定に使う (OFF にすると euler_tol[Pitch]=180 で除外、ジンバルロック領域回避に有効)">
+                <input type="checkbox" checked=${postureUsePitch}
+                  onChange=${(e) => setPostureUsePitch(e.target.checked)} />
+                <b>Pitch</b>
+              </label>
+              <label class="flex items-center gap-0.5 cursor-pointer"
+                     title="Yaw を判定に使う (Mahony Yaw はドリフトしやすいため既定 OFF)">
+                <input type="checkbox" checked=${postureUseYaw}
+                  onChange=${(e) => setPostureUseYaw(e.target.checked)} />
+                <b>Yaw</b>
+              </label>
+              ${!postureUseRoll || !postureUsePitch || !postureUseYaw ? html`
+                <span class="text-slate-400 ml-1">
+                  → OFF 軸の tol=180 (除外)
+                </span>
+              ` : null}
+            </div>
             <div class="flex items-center gap-2 mb-1 flex-wrap text-xs">
               <button onClick=${captureStartPosture} disabled=${!connected || !sensor}
                 class="px-2 py-0.5 bg-cyan-200 hover:bg-cyan-300 rounded disabled:opacity-40">📷 開始姿勢</button>
               ${startPosture ? html`
-                <span class="font-mono text-cyan-700">R:${startPosture.euler[0].toFixed(0)} P:${startPosture.euler[1].toFixed(0)} Y:${startPosture.euler[2].toFixed(0)}</span>
+                <span class="font-mono ${postureUseRoll ? 'text-cyan-700' : 'text-slate-400 line-through'}">R:${startPosture.euler[0].toFixed(0)}</span>
+                <span class="font-mono ${postureUsePitch ? 'text-cyan-700' : 'text-slate-400 line-through'}">P:${startPosture.euler[1].toFixed(0)}</span>
+                <span class="font-mono ${postureUseYaw ? 'text-cyan-700' : 'text-slate-400 line-through'}">Y:${startPosture.euler[2].toFixed(0)}</span>
                 <button onClick=${clearStartPosture} class="text-xs text-red-600 hover:underline">×</button>
-                ${Math.abs(startPosture.euler[1]) > 65 ? html`
+                ${Math.abs(startPosture.euler[1]) > 65 && (postureUseRoll || postureUseYaw) && postureJudgeBy === 'euler' ? html`
                   <span class="text-[11px] text-red-700 font-semibold bg-red-100 px-2 py-0.5 rounded border border-red-300"
-                        title="Pitch が ±65° を超えるとジンバルロック領域に入り、Mahony Euler 出力が不安定になります。Roll/Yaw が縮退してルール判定が機能しません。">
-                    ⚠ Pitch ${startPosture.euler[1].toFixed(0)}° はジンバルロック (>±65°) — Euler 判定不可
+                        title="Pitch=asin が ±90° で縮退し、Roll/Yaw の値が一つの自由度に潰れて不安定になります。Pitch のみで判定すれば回避可能。">
+                    ⚠ Pitch ${startPosture.euler[1].toFixed(0)}° はジンバルロック (>±65°) — Roll/Yaw 判定 OFF (Pitch のみ) を推奨
                   </span>
                 ` : null}
               ` : html`<span class="text-slate-400">未取得 (Stream ON で取得可)</span>`}
             </div>
-            ${ruleMode === 'hold_start_end' ? html`
+            ${ruleMode === 'hold_with_waypoints' ? html`
+              <!-- Phase 5.39: 中間姿勢キャプチャ (0-2 個、+ ボタンで動的追加) -->
+              ${midPostures.map((mid, i) => html`
+                <div class="flex items-center gap-2 mb-1 flex-wrap text-xs">
+                  <button onClick=${() => captureMidPosture(i)} disabled=${!connected || !sensor}
+                    class="px-2 py-0.5 bg-purple-200 hover:bg-purple-300 rounded disabled:opacity-40">
+                    📷 中間姿勢 ${i + 1}
+                  </button>
+                  ${mid ? html`
+                    <span class="font-mono ${postureUseRoll ? 'text-purple-700' : 'text-slate-400 line-through'}">R:${mid.euler[0].toFixed(0)}</span>
+                    <span class="font-mono ${postureUsePitch ? 'text-purple-700' : 'text-slate-400 line-through'}">P:${mid.euler[1].toFixed(0)}</span>
+                    <span class="font-mono ${postureUseYaw ? 'text-purple-700' : 'text-slate-400 line-through'}">Y:${mid.euler[2].toFixed(0)}</span>
+                    <button onClick=${() => clearMidPosture(i)} class="text-xs text-red-600 hover:underline">×</button>
+                  ` : html`<span class="text-slate-400">未取得</span>`}
+                </div>
+              `)}
+              ${midPostures.length < 2 ? html`
+                <button onClick=${addMidPostureSlot}
+                  class="text-xs text-purple-600 hover:underline mb-1">
+                  + 中間姿勢を追加 (${midPostures.length}/2)
+                </button>
+              ` : null}
+            ` : null}
+            ${(ruleMode === 'hold_start_end' || ruleMode === 'hold_with_waypoints') ? html`
               <div class="flex items-center gap-2 flex-wrap text-xs">
                 <button onClick=${captureEndPosture} disabled=${!connected || !sensor}
                   class="px-2 py-0.5 bg-orange-200 hover:bg-orange-300 rounded disabled:opacity-40">📷 終了姿勢</button>
                 ${endPosture ? html`
-                  <span class="font-mono text-orange-700">R:${endPosture.euler[0].toFixed(0)} P:${endPosture.euler[1].toFixed(0)} Y:${endPosture.euler[2].toFixed(0)}</span>
+                  <span class="font-mono ${postureUseRoll ? 'text-orange-700' : 'text-slate-400 line-through'}">R:${endPosture.euler[0].toFixed(0)}</span>
+                  <span class="font-mono ${postureUsePitch ? 'text-orange-700' : 'text-slate-400 line-through'}">P:${endPosture.euler[1].toFixed(0)}</span>
+                  <span class="font-mono ${postureUseYaw ? 'text-orange-700' : 'text-slate-400 line-through'}">Y:${endPosture.euler[2].toFixed(0)}</span>
                   <button onClick=${clearEndPosture} class="text-xs text-red-600 hover:underline">×</button>
-                  ${Math.abs(endPosture.euler[1]) > 65 ? html`
+                  ${Math.abs(endPosture.euler[1]) > 65 && (postureUseRoll || postureUseYaw) && postureJudgeBy === 'euler' ? html`
                     <span class="text-[11px] text-red-700 font-semibold bg-red-100 px-2 py-0.5 rounded border border-red-300"
-                          title="Pitch が ±65° を超えるとジンバルロック領域に入り、Euler 判定が不安定になります。">
-                      ⚠ Pitch ${endPosture.euler[1].toFixed(0)}° はジンバルロック (>±65°) — Euler 判定不可
+                          title="Pitch=asin が ±90° で縮退し、Roll/Yaw の値が一つの自由度に潰れて不安定になります。Pitch のみで判定すれば回避可能。">
+                      ⚠ Pitch ${endPosture.euler[1].toFixed(0)}° はジンバルロック (>±65°) — Roll/Yaw 判定 OFF (Pitch のみ) を推奨
                     </span>
                   ` : null}
                 ` : html`<span class="text-slate-400">未取得</span>`}
               </div>
+            ` : null}
+            ${ruleMode === 'hold_with_waypoints' ? html`
+              <!-- 判定基準セレクタ (折り畳み、UI 複雑度抑制ガイドラインに従い default は absolute) -->
+              <details class="mt-2 text-xs">
+                <summary class="cursor-pointer text-slate-600">▼ 詳細設定 (判定基準)</summary>
+                <div class="mt-1 pl-3 flex items-center gap-3 flex-wrap">
+                  <span>判定基準:</span>
+                  <label class="flex items-center gap-1">
+                    <input type="radio" name="posture_basis" value="absolute"
+                      checked=${postureBasis === 'absolute'}
+                      onChange=${() => setPostureBasis('absolute')} />
+                    絶対 Euler (Mahony 起動基準)
+                  </label>
+                  <label class="flex items-center gap-1">
+                    <input type="radio" name="posture_basis" value="relative"
+                      checked=${postureBasis === 'relative'}
+                      onChange=${() => setPostureBasis('relative')} />
+                    相対 Quaternion (ボタン押下時を基準)
+                  </label>
+                </div>
+                ${postureBasis === 'relative' ? html`
+                  <div class="mt-1 ml-3 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                    💡 state[0] (開始条件) 成立時に q_ref を自動取得、以降は相対 quat で判定。Yaw ドリフト無関係、持ち方自由。
+                  </div>
+                ` : null}
+              </details>
             ` : null}
           </div>
 
@@ -1879,7 +2627,7 @@ function App() {
           <!-- 出力アクション -->
           <div class="border rounded p-2 bg-emerald-50">
             <div class="text-xs font-semibold text-slate-600 mb-1">
-              出力 HID キー${ruleMode === 'hold_start_end' ? ' (開始姿勢で press → 終了姿勢で release)' : ''}
+              出力 HID キー${ruleMode === 'hold_start_end' ? ' (開始姿勢で press → 終了姿勢で release)' : ruleMode === 'hold_with_waypoints' ? ' (開始姿勢で press → 中間 → 終了姿勢で release)' : ''}
             </div>
             <div class="flex items-center gap-1 mb-1 flex-wrap text-xs">
               <span>修飾:</span>
@@ -1927,7 +2675,7 @@ function App() {
             `}
           </div>
 
-          ${ruleMode === 'hold_start_end' ? html`
+          ${(ruleMode === 'hold_start_end' || ruleMode === 'hold_with_waypoints') ? html`
             <!-- 終了側 別キー (オプション) -->
             <div class="border rounded p-2 bg-orange-50">
               <div class="text-xs font-semibold text-slate-600 mb-1">
@@ -2189,6 +2937,20 @@ function App() {
         `)}
       </div>
     </div>
+
+    <!-- Phase 5.35: Performance Overlay (固定位置、画面右下) -->
+    ${connected && streamRate > 0 ? html`
+      <div class="fixed bottom-2 right-2 z-50 bg-slate-900/90 text-white text-[10px] font-mono px-2 py-1.5 rounded shadow-lg pointer-events-none">
+        <div class="text-amber-300 font-semibold mb-0.5">📊 Perf (1s avg)</div>
+        <div>📨 sensor: <b class="${perfStats.sensorRate >= streamRate * 0.85 ? 'text-emerald-300' : 'text-red-400'}">${perfStats.sensorRate.toFixed(1)}</b>/${streamRate} Hz</div>
+        <div>📥 bytes:  <b>${(perfStats.bytesPerSec/1024).toFixed(1)}</b> KB/s
+          <span class="${perfStats.bytesPerSec > 10000 ? 'text-red-400' : 'text-slate-400'}">/${(115200/10/1024).toFixed(1)} max</span>
+        </div>
+        <div>🔄 render: <b class="${perfStats.renderRate > 30 ? 'text-red-400' : ''}">${perfStats.renderRate.toFixed(1)}</b> Hz</div>
+        <div>🗺 grid: <b>${perfStats.gridDrawRate.toFixed(1)}</b> Hz</div>
+        <div>🎮 RAF: <b class="${perfStats.rafRate < 30 ? 'text-red-400' : 'text-emerald-300'}">${perfStats.rafRate.toFixed(1)}</b> fps</div>
+      </div>
+    ` : null}
 
     <footer class="mt-4 text-center text-xs text-slate-400 space-x-2">
       <span>Burst Motion | USB:115200 / BLE NUS | JSON Lines</span>

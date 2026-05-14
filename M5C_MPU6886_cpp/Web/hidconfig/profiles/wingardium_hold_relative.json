@@ -1,0 +1,24 @@
+{
+  "schema": "burst_motion_sample_v1",
+  "id": "wingardium_hold_relative",
+  "title": "🪄 Wingardium (Hold + 中間 2 姿勢、相対 Quat + Btn3)",
+  "description": "Hold Start End モード + 中間 2 姿勢 + 相対 Quaternion 判定 + Btn3 ゲート。Btn3 押下時の姿勢を q_ref として、そこからの相対回転で軌跡を捉える。持ち方自由、Yaw ドリフト無関係。",
+  "hardware_required": ["m5stickc"],
+  "rules": [
+    {
+      "name": "wingardium_hold_relative",
+      "ui_mode": "hold_with_waypoints",
+      "posture_basis": "relative",
+      "start_posture":  { "euler": [  0,   0, 0], "euler_tol": [180, 180, 180] },
+      "mid_postures": [
+        { "euler": [ 30,   0, 0], "euler_tol": [25, 25, 180] },
+        { "euler": [ 60, -30, 0], "euler_tol": [25, 25, 180] }
+      ],
+      "end_posture":    { "euler": [  0, -30, 0], "euler_tol": [25, 25, 180] },
+      "button_idx": 3,
+      "button_state": 0,
+      "key": "w",
+      "cooldown_ms": 2000
+    }
+  ]
+}

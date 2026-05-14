@@ -1,0 +1,20 @@
+{
+  "schema": "burst_motion_sample_v1",
+  "id": "harry_potter_wingardium_no_btn",
+  "title": "🪄 Wingardium Leviosa (ボタンなし純ジェスチャ)",
+  "description": "Wingardium Leviosa の 4-waypoint シーケンス (DR→R→UR→D) を**ボタン押下なし**で発動するピュアジェスチャ版。単独呪文なので部分シーケンス衝突がなく、ボタン無しでも誤発動しない。Kano-canonical UX に最も近い。基本姿勢 R+90 (縦持ち、LCD 左)、USB-C 側 = 杖の先端。Phase 5.33+ 必須。",
+  "hardware_required": ["m5stickc", "m5stickc_plus", "m5stickc_2"],
+  "engine": {
+    "closest_only": false,
+    "cooldown_ms": 2000
+  },
+  "rules": [
+    {
+      "name": "wingardium_leviosa",
+      "directions": ["DR", "R", "UR", "D"],
+      "type_text": "wingardium leviosa\n",
+      "cooldown_ms": 2000,
+      "_comment": "swish & flick: 右下→右→右上→下 を 3.2 秒以内に通過 (Kano/Hogwarts-Legacy-Wand 互換)、ボタン不要"
+    }
+  ]
+}

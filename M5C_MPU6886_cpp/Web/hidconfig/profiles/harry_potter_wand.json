@@ -1,0 +1,58 @@
+{
+  "schema": "burst_motion_sample_v1",
+  "id": "harry_potter_wand",
+  "title": "🪄 Harry Potter Wand (5 呪文、要 Btn3 押下)",
+  "description": "M5StickC を魔法の杖として振り、5 つの呪文を発動。Btn3 (G26、一番手前) を**押下している間だけ**判定 (Kano ワンドと同じ UX)。最後の waypoint で呪文名が BLE HID キーボードで自動入力される。基本姿勢 R+90 (縦持ち、LCD 左)、USB-C 側 = 杖の先端。Phase 5.33+ 必須。ボタンなしの「純ジェスチャ」モードは部分シーケンスの衝突で誤発動するため Btn3 ゲートを掛けている (技術詳細は plan ファイル参照)。",
+  "hardware_required": ["m5stickc", "m5stickc_plus", "m5stickc_2"],
+  "engine": {
+    "closest_only": false,
+    "cooldown_ms": 1500
+  },
+  "rules": [
+    {
+      "name": "lumos",
+      "directions": ["U", "U"],
+      "button_idx": 3,
+      "button_state": 0,
+      "type_text": "lumos\n",
+      "cooldown_ms": 1500,
+      "_comment": "Btn3 押下中に杖先を 2 回上げる → \"lumos\" 入力"
+    },
+    {
+      "name": "wingardium_leviosa",
+      "directions": ["DR", "R", "UR", "D"],
+      "button_idx": 3,
+      "button_state": 0,
+      "type_text": "wingardium leviosa\n",
+      "cooldown_ms": 2000,
+      "_comment": "Btn3 押下中に swish & flick: 右下→右→右上→下 (Kano/Hogwarts-Legacy-Wand 互換)"
+    },
+    {
+      "name": "expelliarmus",
+      "directions": ["R", "UR"],
+      "button_idx": 3,
+      "button_state": 0,
+      "type_text": "expelliarmus\n",
+      "cooldown_ms": 1500,
+      "_comment": "Btn3 押下中に右→右上、武装解除のように振り上げる"
+    },
+    {
+      "name": "protego",
+      "directions": ["DR", "UR"],
+      "button_idx": 3,
+      "button_state": 0,
+      "type_text": "protego\n",
+      "cooldown_ms": 1500,
+      "_comment": "Btn3 押下中に右下→右上、盾を立てるような斜め振り上げ"
+    },
+    {
+      "name": "stupefy",
+      "directions": ["DL", "R", "DL"],
+      "button_idx": 3,
+      "button_state": 0,
+      "type_text": "stupefy\n",
+      "cooldown_ms": 1500,
+      "_comment": "Btn3 押下中に左下→右→左下、ジグザグの失神術"
+    }
+  ]
+}

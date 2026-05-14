@@ -9,8 +9,43 @@ namespace BurstMotion {
 // Forward declarations for helpers (defined later in this file)
 static int evalButton(const ButtonCond& c, const SensorState& s);
 static int evalPosture(const PostureCond& c, const SensorState& s);
+static int evalPostureRelative(const PostureCond& c, const SensorState& s, const float q_ref[4]);
 static int evalAccel(const AccelCond& c, const SensorState& s);
 static int evalGyro(const GyroCond& c, const SensorState& s);
+static int evalStillness(const Condition& c, const SensorState& s, ActionRule* rule);
+
+// Phase 5.39: Quaternion 演算ヘルパー (相対 quat 判定用)
+//   - quatMultiply  : out = a ⊗ b  (Hamilton 積、w,x,y,z 順)
+//   - quatConjugate : out = q* (w, -x, -y, -z)
+//   - quatToZYXEuler: q → (roll, pitch, yaw) [rad]、Mahony と同じ ZYX 順序
+static void quatMultiply(const float* a, const float* b, float* out) {
+    // (w1, x1, y1, z1) ⊗ (w2, x2, y2, z2)
+    out[0] = a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3];
+    out[1] = a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2];
+    out[2] = a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1];
+    out[3] = a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0];
+}
+
+static void quatConjugate(const float* q, float* out) {
+    out[0] =  q[0];
+    out[1] = -q[1];
+    out[2] = -q[2];
+    out[3] = -q[3];
+}
+
+// ZYX (roll-pitch-yaw) Euler 抽出 — Mahony / IMU 系で標準的な定義
+//   roll  = atan2(2(wx + yz), 1 - 2(x^2 + y^2))
+//   pitch = asin(2(wy - zx))    [-π/2, +π/2]、ジンバルロックは ±π/2
+//   yaw   = atan2(2(wz + xy), 1 - 2(y^2 + z^2))
+static void quatToZYXEuler(const float* q, float* roll, float* pitch, float* yaw) {
+    const float w = q[0], x = q[1], y = q[2], z = q[3];
+    *roll  = atan2f(2.0f * (w*x + y*z), 1.0f - 2.0f * (x*x + y*y));
+    float sp = 2.0f * (w*y - z*x);
+    if (sp >  1.0f) sp =  1.0f;
+    if (sp < -1.0f) sp = -1.0f;
+    *pitch = asinf(sp);
+    *yaw   = atan2f(2.0f * (w*z + x*y), 1.0f - 2.0f * (y*y + z*z));
+}
 
 TriggerEngine::TriggerEngine()
     : hid_sink_(nullptr), watch_enabled_(false), closest_only_mode_(false) {}
@@ -20,6 +55,10 @@ void TriggerEngine::addRule(const ActionRule& rule) {
     r.current_state = -1;
     r.state_enter_ms = 0;
     r.last_fire_ms = 0;
+    // Phase 5.39 runtime 初期化
+    r.q_ref[0] = 1.0f; r.q_ref[1] = 0.0f; r.q_ref[2] = 0.0f; r.q_ref[3] = 0.0f;
+    r.q_ref_valid = false;
+    r.stillness_since_ms = 0;
     rules_.push_back(r);
 }
 
@@ -197,12 +236,9 @@ void TriggerEngine::tick(const SensorState& s) {
     // === lock 対象外のルールを通常評価 ===
     //   - 既に state にいるルール (release/transition のため必須)
     //   - 姿勢 disabled なルール (button/accel のみ)
+    //   - HOLD_START_ONLY (loop=true, 1 state) は姿勢ありでも通常評価 (Phase 5.27)
+    //     → 移動系 HOLD ルールが Closest-only モードで永遠に発火しない問題対策
     //   - lock 中のルール本体は上で処理済みなので skip
-    //
-    // 重要: 同 tick で lock-fire されて cooldown が設定された場合、
-    //       hard_attack 等の姿勢なしルールが同 tick で発火すると 'p' + 'h' のような
-    //       同時入力になってしまう (ユーザー指摘の連続入力問題)。
-    //       → cooldown 期間中は新規発火を阻止 (HOLD release のみ許可)
     bool in_cooldown = (now < lock_cooldown_until_ms_);
     for (size_t i = 0; i < rules_.size(); i++) {
         if ((int)i == lock_rule_idx_) continue;
@@ -211,22 +247,38 @@ void TriggerEngine::tick(const SensorState& s) {
             evaluateRule(r, s);
             continue;
         }
-        if (in_cooldown) continue;  // 同 tick lock-fire 後 / 直前 cooldown は新規発火停止
+        if (in_cooldown) continue;
         if (r.states_count == 0) continue;
         const auto& cond = r.states[0].match_condition;
         if (!cond.posture.enabled) {
-            // 姿勢なしルールは通常評価 (例: SF の hard_attack = button + accel のみ)
+            // 姿勢なしルールは通常評価
             evaluateRule(r, s);
+            continue;
         }
-        // 姿勢ありで lock 対象外のルールは何もしない (誤発火抑止)
+        // HOLD_START_ONLY (loop=true, states_count=1) も姿勢ありで通常評価
+        // (Btn release で発火する移動系ルール用、lock 経路を経由しない)
+        if (r.loop && r.states_count == 1) {
+            evaluateRule(r, s);
+            continue;
+        }
+        // それ以外の姿勢ありルール (ONESHOT / HOLD_START_END) は lock 経由のみ
     }
 }
 
 // lock 状態変化の watch event 出力
 void TriggerEngine::fireLockEvent(const char* phase, uint16_t rule_id, uint32_t now_ms) {
     if (!watch_enabled_) return;
-    Serial.printf("{\"type\":\"lock\",\"t\":%u,\"id\":%u,\"phase\":\"%s\"}\n",
-                  now_ms, rule_id, phase);
+    JsonDocument doc;
+    doc["type"] = "lock";
+    doc["t"] = now_ms;
+    doc["id"] = rule_id;
+    doc["phase"] = phase;
+    if (event_output_fn_) {
+        event_output_fn_(doc);
+    } else {
+        serializeJson(doc, Serial);
+        Serial.print("\n");
+    }
 }
 
 // Closest-only モード用: 姿勢は最近傍判定で選ばれた前提で、
@@ -271,9 +323,17 @@ void TriggerEngine::evaluateRule(ActionRule& rule, const SensorState& s) {
             return;
         }
         if (rule.states_count > 0 &&
-            matchCondition(rule.states[0].match_condition, s)) {
+            matchCondition(rule.states[0].match_condition, s, &rule)) {
             rule.current_state = 0;
             rule.state_enter_ms = now;
+            // Phase 5.39: 相対モードなら state[0] enter 瞬間に q_ref をスナップショット
+            if (rule.posture_basis == PB_RELATIVE_QUAT) {
+                rule.q_ref[0] = s.quat[0];
+                rule.q_ref[1] = s.quat[1];
+                rule.q_ref[2] = s.quat[2];
+                rule.q_ref[3] = s.quat[3];
+                rule.q_ref_valid = true;
+            }
             executeAction(rule.states[0].on_enter);
             fireWatchEvent(rule, "enter", &rule.states[0].on_enter);
 
@@ -282,6 +342,8 @@ void TriggerEngine::evaluateRule(ActionRule& rule, const SensorState& s) {
                 executeAction(rule.states[0].on_exit);
                 rule.last_fire_ms = now;
                 rule.current_state = -1;
+                rule.q_ref_valid = false;
+                rule.stillness_since_ms = 0;
             }
         }
         return;
@@ -296,6 +358,8 @@ void TriggerEngine::evaluateRule(ActionRule& rule, const SensorState& s) {
         executeAction(cur.on_exit);
         fireWatchEvent(rule, "timeout");
         rule.current_state = -1;
+        rule.q_ref_valid = false;
+        rule.stillness_since_ms = 0;
         return;
     }
 
@@ -314,25 +378,31 @@ void TriggerEngine::evaluateRule(ActionRule& rule, const SensorState& s) {
         executeAction(cur.on_exit);
         rule.last_fire_ms = now;
         rule.current_state = -1;
+        rule.q_ref_valid = false;
+        rule.stillness_since_ms = 0;
         return;
     }
 
     // HOLD_START_ONLY: 次状態 = 現状態 (ループ, 1 state)。
     // 判定は「現状態の条件が False になった」= 離脱
     if (rule.states_count == 1 && rule.loop) {
-        if (!matchCondition(cur.match_condition, s)) {
+        if (!matchCondition(cur.match_condition, s, &rule)) {
             executeAction(cur.on_exit);
             fireWatchEvent(rule, "release");
             rule.current_state = -1;
+            rule.q_ref_valid = false;
+            rule.stillness_since_ms = 0;
         }
         return;
     }
 
     // 次状態の条件一致で遷移
-    if (matchCondition(rule.states[next].match_condition, s)) {
+    if (matchCondition(rule.states[next].match_condition, s, &rule)) {
         executeAction(cur.on_exit);
         rule.current_state = next;
         rule.state_enter_ms = now;
+        // stillness は state ごとに測り直す (next state が stillness 要求でも別途累積開始)
+        rule.stillness_since_ms = 0;
         executeAction(rule.states[next].on_enter);
         fireWatchEvent(rule, "transition", &rule.states[next].on_enter);
 
@@ -341,6 +411,8 @@ void TriggerEngine::evaluateRule(ActionRule& rule, const SensorState& s) {
             executeAction(rule.states[next].on_exit);
             rule.last_fire_ms = now;
             rule.current_state = -1;
+            rule.q_ref_valid = false;
+            rule.stillness_since_ms = 0;
         }
     }
 }
@@ -374,6 +446,78 @@ static int evalPosture(const PostureCond& c, const SensorState& s) {
         if (fabsf(diff) > c.euler_tol[i]) return 0;
     }
     return 1;
+}
+
+// Phase 5.39: 相対 Quaternion ベースの姿勢判定
+//   q_rel = quat_conj(q_ref) ⊗ q_current
+//   q_rel から ZYX Euler を抽出 (deg) → posture.euler との差を tol 比較
+//   posture.euler は「ref からの相対 Euler オフセット」として解釈される。
+static int evalPostureRelative(const PostureCond& c, const SensorState& s, const float q_ref[4]) {
+    if (!c.enabled) return -1;
+    float q_conj[4];
+    quatConjugate(q_ref, q_conj);
+    float q_rel[4];
+    quatMultiply(q_conj, s.quat, q_rel);
+
+    if (c.judge_by == PostureJudge::BY_QUAT) {
+        // 相対 quat と target quat (posture.quat) の内積で判定 (target も ref 基準)
+        float dot = q_rel[0]*c.quat[0] + q_rel[1]*c.quat[1] +
+                    q_rel[2]*c.quat[2] + q_rel[3]*c.quat[3];
+        if (dot < 0) dot = -dot;
+        return (dot >= c.quat_dot_min) ? 1 : 0;
+    }
+
+    float rel_roll_rad, rel_pitch_rad, rel_yaw_rad;
+    quatToZYXEuler(q_rel, &rel_roll_rad, &rel_pitch_rad, &rel_yaw_rad);
+    const float RAD2DEG_F = 57.29577951f;
+    float rel_euler[3];
+    rel_euler[0] = rel_roll_rad  * RAD2DEG_F;
+    rel_euler[1] = rel_pitch_rad * RAD2DEG_F;
+    rel_euler[2] = rel_yaw_rad   * RAD2DEG_F;
+    for (int i = 0; i < 3; i++) {
+        float diff = rel_euler[i] - c.euler[i];
+        if (i == 0 || i == 2) {
+            while (diff > 180.0f) diff -= 360.0f;
+            while (diff < -180.0f) diff += 360.0f;
+        }
+        if (fabsf(diff) > c.euler_tol[i]) return 0;
+    }
+    return 1;
+}
+
+// Phase 5.39: 静止検出 (WB Magic Caster Wand 方式)
+//   |sqrt(ax^2+ay^2+az^2) - 9.81| < accel_th_mg * 0.00981 m/s^2  (mg → m/s^2)
+//   sqrt(gx^2+gy^2+gz^2) < gyro_th_dps
+//   両者を window_ms 連続で満たす場合に 1 を返す。動きが入った瞬間に rule->stillness_since_ms をリセット。
+//   rule == nullptr の場合は持続時刻を持てないので、瞬間値の判定のみ (連続条件はパスとみなす最低限実装)。
+static int evalStillness(const Condition& c, const SensorState& s, ActionRule* rule) {
+    if (!c.stillness_required) return -1;
+    float a_mag = sqrtf(s.accel[0]*s.accel[0] + s.accel[1]*s.accel[1] + s.accel[2]*s.accel[2]);
+    float a_dev = fabsf(a_mag - 9.81f);
+    float g_mag = sqrtf(s.gyro[0]*s.gyro[0] + s.gyro[1]*s.gyro[1] + s.gyro[2]*s.gyro[2]);
+    float a_th = c.stillness_accel_th_mg * 0.00981f;  // mg → m/s^2
+    float g_th = (float)c.stillness_gyro_th_dps;
+    bool still_now = (a_dev < a_th) && (g_mag < g_th);
+
+    if (rule == nullptr) {
+        // 連続時刻を保持できないので瞬間値のみ
+        return still_now ? 1 : 0;
+    }
+
+    uint32_t now = s.timestamp_ms;
+    uint16_t window = c.stillness_window_ms > 0 ? c.stillness_window_ms : 200;
+    if (still_now) {
+        if (rule->stillness_since_ms == 0) {
+            rule->stillness_since_ms = now;
+        }
+        if ((now - rule->stillness_since_ms) >= window) {
+            return 1;
+        }
+        return 0;
+    } else {
+        rule->stillness_since_ms = 0;
+        return 0;
+    }
 }
 
 static int evalAccel(const AccelCond& c, const SensorState& s) {
@@ -412,15 +556,27 @@ static int evalGyro(const GyroCond& c, const SensorState& s) {
     return ok ? 1 : 0;
 }
 
-bool TriggerEngine::matchCondition(const Condition& cond, const SensorState& s) const {
-    int results[4];
+bool TriggerEngine::matchCondition(const Condition& cond, const SensorState& s,
+                                   ActionRule* rule) const {
+    // Phase 5.39: 5 つのサブ条件 (button / posture / accel / gyro / stillness) を logic_op で結合
+    int results[5];
     int count = 0;
 
     int r;
     r = evalButton(cond.button, s);   if (r >= 0) results[count++] = r;
-    r = evalPosture(cond.posture, s); if (r >= 0) results[count++] = r;
+    // Phase 5.39: rule の posture_basis を見て absolute / relative を切替
+    //   relative モードかつ q_ref_valid のときだけ相対判定、それ以外は絶対判定
+    //   (q_ref_valid=false で relative の場合、state[0] 入場前なので絶対扱いで暫定判定)
+    if (rule != nullptr && rule->posture_basis == PB_RELATIVE_QUAT && rule->q_ref_valid) {
+        r = evalPostureRelative(cond.posture, s, rule->q_ref);
+    } else {
+        r = evalPosture(cond.posture, s);
+    }
+    if (r >= 0) results[count++] = r;
     r = evalAccel(cond.accel, s);     if (r >= 0) results[count++] = r;
     r = evalGyro(cond.gyro, s);       if (r >= 0) results[count++] = r;
+    // Phase 5.39: 静止検出 (Condition の AND/OR ロジックに参加)
+    r = evalStillness(cond, s, rule); if (r >= 0) results[count++] = r;
 
     if (count == 0) return true;  // 全部 disabled = 常に true
     if (cond.logic_op == LogicOp::OP_AND) {
@@ -498,20 +654,38 @@ void TriggerEngine::executeAction(const Action& action) {
 
 void TriggerEngine::fireWatchEvent(const ActionRule& rule, const char* phase, const Action* action) {
     if (!watch_enabled_) return;
-    Serial.printf("{\"type\":\"trigger.hit\",\"t\":%u,\"id\":%u,\"rule_name\":\"%s\",\"phase\":\"%s\"",
-                  rule.state_enter_ms, rule.id, rule.name, phase);
+    // Phase 5.39.2.7: JsonDocument に組立て、callback 経由で USB + BLE NUS 両方に出力
+    JsonDocument doc;
+    doc["type"] = "trigger.hit";
+    doc["t"] = rule.state_enter_ms;
+    doc["id"] = rule.id;
+    doc["rule_name"] = rule.name;
+    doc["phase"] = phase;
     if (action && action->keys_len > 0) {
-        Serial.printf(",\"action_type\":%u,\"keys\":[", (unsigned)action->type);
+        doc["action_type"] = (unsigned)action->type;
+        JsonArray keys = doc["keys"].to<JsonArray>();
         for (uint8_t i = 0; i < action->keys_len; i++) {
-            if (i > 0) Serial.print(',');
-            Serial.print(action->keys[i]);
+            keys.add(action->keys[i]);
         }
-        Serial.print(']');
-        if (action->modifiers) Serial.printf(",\"modifiers\":%u", action->modifiers);
-        if (action->duration_ms) Serial.printf(",\"duration_ms\":%u", action->duration_ms);
-        if (action->interval_ms) Serial.printf(",\"interval_ms\":%u", action->interval_ms);
+        if (action->modifiers) doc["modifiers"] = action->modifiers;
+        if (action->duration_ms) doc["duration_ms"] = action->duration_ms;
+        if (action->interval_ms) doc["interval_ms"] = action->interval_ms;
     }
-    Serial.print("}\n");
+    // Phase 5.39.2: enter phase + 相対モード時に q_ref を出力 (Web 側で軌跡固定描画用)
+    if (phase && strcmp(phase, "enter") == 0 && rule.posture_basis == PB_RELATIVE_QUAT && rule.q_ref_valid) {
+        JsonArray qref = doc["q_ref"].to<JsonArray>();
+        qref.add(rule.q_ref[0]);
+        qref.add(rule.q_ref[1]);
+        qref.add(rule.q_ref[2]);
+        qref.add(rule.q_ref[3]);
+    }
+    // callback 経由で routing (両方経由)、未設定時は Serial 直接出力 (後方互換)
+    if (event_output_fn_) {
+        event_output_fn_(doc);
+    } else {
+        serializeJson(doc, Serial);
+        Serial.print("\n");
+    }
 }
 
 }  // namespace BurstMotion

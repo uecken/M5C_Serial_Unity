@@ -8,11 +8,106 @@ export class PitchRollGrid {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.references = [];   // [{roll, pitch, name?}, ...]
+    this.references = [];   // [{roll, pitch, name?, rollTol, pitchTol, id}, ...]
     this.current = null;    // {roll, pitch}
     this.closest = null;    // 最近傍登録 index
-    this.firingIdx = -1;    // 発火フラッシュ中のルール index
+    this.firingIdx = -1;
     this._firingTimer = null;
+    // Phase 5.28: ドラッグ編集
+    this.onRuleEdit = null; // (id, {roll?, pitch?, rollTol?, pitchTol?}) => void
+    this._drag = null;      // {idx, mode: 'center'|'edge-l'|'edge-r'|'edge-t'|'edge-b', startX, startY}
+    canvas.addEventListener('mousedown', this._onMouseDown.bind(this));
+    canvas.addEventListener('mousemove', this._onMouseMove.bind(this));
+    canvas.addEventListener('mouseup',   this._onMouseUp.bind(this));
+    canvas.addEventListener('mouseleave', this._onMouseUp.bind(this));
+    canvas.style.cursor = 'crosshair';
+  }
+
+  setEditCallback(cb) { this.onRuleEdit = cb; }
+
+  // hit-test: 中央点 (12px 半径以内) or 矩形境界 (10px 以内) を判定
+  _hitTest(mx, my) {
+    for (let i = this.references.length - 1; i >= 0; i--) {
+      const r = this.references[i];
+      const cx = this._rollToX(r.roll);
+      const cy = this._pitchToY(r.pitch);
+      const dCenter = Math.hypot(mx - cx, my - cy);
+      if (dCenter <= 12) return { idx: i, mode: 'center' };
+      if (typeof r.rollTol === 'number' && typeof r.pitchTol === 'number'
+          && r.rollTol < 170 && r.pitchTol < 85) {
+        const xL = this._rollToX(r.roll - r.rollTol);
+        const xR = this._rollToX(r.roll + r.rollTol);
+        const yT = this._pitchToY(r.pitch + r.pitchTol);
+        const yB = this._pitchToY(r.pitch - r.pitchTol);
+        if (Math.abs(my - yT) < 6 && mx >= xL - 6 && mx <= xR + 6) return { idx: i, mode: 'edge-t' };
+        if (Math.abs(my - yB) < 6 && mx >= xL - 6 && mx <= xR + 6) return { idx: i, mode: 'edge-b' };
+        if (Math.abs(mx - xL) < 6 && my >= yT - 6 && my <= yB + 6) return { idx: i, mode: 'edge-l' };
+        if (Math.abs(mx - xR) < 6 && my >= yT - 6 && my <= yB + 6) return { idx: i, mode: 'edge-r' };
+      }
+    }
+    return null;
+  }
+
+  _eventToCanvas(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    const sx = this.canvas.width / rect.width;
+    const sy = this.canvas.height / rect.height;
+    return { x: (e.clientX - rect.left) * sx, y: (e.clientY - rect.top) * sy };
+  }
+
+  _onMouseDown(e) {
+    const { x, y } = this._eventToCanvas(e);
+    const hit = this._hitTest(x, y);
+    if (hit) {
+      this._drag = hit;
+      e.preventDefault();
+    }
+  }
+
+  _onMouseMove(e) {
+    const { x, y } = this._eventToCanvas(e);
+    if (!this._drag) {
+      const hit = this._hitTest(x, y);
+      this.canvas.style.cursor = hit
+        ? (hit.mode === 'center' ? 'move'
+          : (hit.mode.startsWith('edge-l') || hit.mode.startsWith('edge-r')) ? 'ew-resize'
+          : 'ns-resize')
+        : 'crosshair';
+      return;
+    }
+    const r = this.references[this._drag.idx];
+    if (!r) return;
+    // canvas 座標 → Roll/Pitch 角度に逆変換
+    const margin = 30;
+    const W = this.canvas.width;
+    const newRoll  = ((x - margin) / (W - 2 * margin)) * 360 - 180;
+    const margin2 = 20;
+    const H = this.canvas.height;
+    const newPitch = -(((y - (H - margin2)) / (H - 2 * margin2)) * 180) - 90;
+    if (this._drag.mode === 'center') {
+      r.roll = Math.max(-180, Math.min(180, Math.round(newRoll)));
+      r.pitch = Math.max(-90, Math.min(90, Math.round(newPitch)));
+    } else if (this._drag.mode === 'edge-l' || this._drag.mode === 'edge-r') {
+      const newTol = Math.max(5, Math.min(180, Math.round(Math.abs(newRoll - r.roll))));
+      r.rollTol = newTol;
+    } else if (this._drag.mode === 'edge-t' || this._drag.mode === 'edge-b') {
+      const newTol = Math.max(5, Math.min(90, Math.round(Math.abs(newPitch - r.pitch))));
+      r.pitchTol = newTol;
+    }
+    this.draw();
+  }
+
+  _onMouseUp(e) {
+    if (this._drag && this.onRuleEdit) {
+      const r = this.references[this._drag.idx];
+      if (r && r.id !== undefined) {
+        this.onRuleEdit(r.id, {
+          roll: r.roll, pitch: r.pitch, rollTol: r.rollTol, pitchTol: r.pitchTol,
+        });
+      }
+    }
+    this._drag = null;
+    this.canvas.style.cursor = 'crosshair';
   }
 
   // 発火したルールを緑フラッシュ表示。durationMs 経過後に元に戻る
@@ -29,11 +124,34 @@ export class PitchRollGrid {
 
   setCurrent(roll, pitch) {
     this.current = { roll, pitch };
-    this.draw();
+    // Phase 5.36: 高頻度呼出 (sensor stream 50Hz 等) に対し draw を 30Hz cap
+    //   sensor は毎回 current 更新するが、canvas redraw コストが大きいので throttle。
+    //   setReferences / setSequences / setFiring 等の event-driven 呼出は cap 対象外で即時 draw。
+    const now = performance.now();
+    if (!this._lastCurrentDrawMs || (now - this._lastCurrentDrawMs) >= 33) {
+      this._lastCurrentDrawMs = now;
+      this.draw();
+    }
   }
 
   setReferences(refs) {
     this.references = refs || [];
+    this.draw();
+  }
+
+  /** Phase 5.39.2: 選択 rule の強調表示
+   *  selectedRuleId === -1: 全 references を通常色で表示
+   *  selectedRuleId >= 0:    その rule だけ濃色、他は globalAlpha=0.18 で淡色
+   */
+  setSelectedRuleId(id) {
+    this.selectedRuleId = (typeof id === 'number') ? id : -1;
+    this.draw();
+  }
+
+  // Phase 5.34: 複数 waypoint の SEQUENCE rule を別レイヤで描画
+  // seqs = [{id, name, currentState, waypoints: [{roll, pitch, rollTol, pitchTol}, ...]}, ...]
+  setSequences(seqs) {
+    this.sequences = seqs || [];
     this.draw();
   }
 
@@ -52,7 +170,11 @@ export class PitchRollGrid {
     this.draw();
   }
 
+  // Phase 5.35: draw() 呼出回数をカウント (perf overlay 用)
+  getDrawCount() { const n = this._drawCount || 0; this._drawCount = 0; return n; }
+
   draw() {
+    this._drawCount = (this._drawCount || 0) + 1;
     const { ctx, canvas } = this;
     const W = canvas.width;
     const H = canvas.height;
@@ -88,9 +210,15 @@ export class PitchRollGrid {
 
     // 登録参照点 (橙)、発火中=緑フラッシュ、最近傍=緑
     // Phase 5.16: tol で囲まれた矩形を半透明で描画 (発火範囲の可視化)
+    // Phase 5.39.2: selectedRuleId !== -1 のとき、選択以外を globalAlpha=0.18 で淡色化
+    const sel = (typeof this.selectedRuleId === 'number') ? this.selectedRuleId : -1;
     this.references.forEach((r, idx) => {
       const isFiring = (this.firingIdx === idx);
       const isClosest = (this.closest === idx);
+      // Phase 5.39.2: 選択フォーカス (sel >= 0 のとき非選択を薄く描画)
+      const isSelected = (sel === -1) || (r.id === sel);
+      ctx.save();
+      ctx.globalAlpha = isSelected ? 1.0 : 0.18;
       let color, radius;
       if (isFiring) {
         color = '#22c55e';
@@ -151,12 +279,107 @@ export class PitchRollGrid {
         ctx.font = isFiring ? 'bold 11px sans-serif' : '10px sans-serif';
         ctx.fillText(r.name, px + 8, py - 4);
       }
+      ctx.restore();   // Phase 5.39.2: selection focus alpha 解除
     });
+
+    // Phase 5.34: SEQUENCE 描画 (waypoint 連結 + 番号 + 矢印)
+    //   既存 references の上に描画。色: 紫系 (橙単点と区別)。
+    //   currentState 強調: 滞在中 = 緑塗り、未到達 = 紫薄塗り
+    if (this.sequences && this.sequences.length > 0) {
+      this._drawSequences();
+    }
 
     // 現在姿勢 (赤、上から描く)
     if (this.current) {
       this._plotPoint(this.current.roll, this.current.pitch, '#ef4444', 6);
     }
+  }
+
+  _drawSequences() {
+    const { ctx } = this;
+    this.sequences.forEach((seq) => {
+      const wps = seq.waypoints || [];
+      if (wps.length < 1) return;
+      const cur = seq.currentState >= 0 ? seq.currentState : -1;
+      // 各 waypoint 矩形 (tol) を薄く描画
+      wps.forEach((wp, i) => {
+        const isActive = (i === cur);
+        const isPassed = (cur >= 0 && i < cur);
+        const fillStyle = isActive
+          ? 'rgba(34,197,94,0.32)'           // 緑 (state 滞在中)
+          : isPassed
+          ? 'rgba(139,92,246,0.10)'          // 紫薄 (通過済)
+          : 'rgba(139,92,246,0.22)';         // 紫 (未到達)
+        const strokeStyle = isActive
+          ? 'rgba(21,128,61,0.9)'
+          : 'rgba(109,40,217,0.55)';
+        if (typeof wp.rollTol === 'number' && typeof wp.pitchTol === 'number'
+            && wp.rollTol < 170 && wp.pitchTol < 85) {
+          const yTop = this._pitchToY(wp.pitch + wp.pitchTol);
+          const yBot = this._pitchToY(wp.pitch - wp.pitchTol);
+          this._fillRollRangeY(ctx, wp.roll, wp.rollTol, yTop, yBot, fillStyle, strokeStyle);
+        }
+      });
+      // waypoint 間の矢印
+      for (let i = 0; i < wps.length - 1; i++) {
+        const x1 = this._rollToX(wps[i].roll);
+        const y1 = this._pitchToY(wps[i].pitch);
+        const x2 = this._rollToX(wps[i + 1].roll);
+        const y2 = this._pitchToY(wps[i + 1].pitch);
+        ctx.strokeStyle = (cur >= 0 && i < cur) ? 'rgba(139,92,246,0.4)' : 'rgba(109,40,217,0.8)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash((cur >= 0 && i < cur) ? [3, 3] : []);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // 矢じり
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+        const headSize = 7;
+        ctx.beginPath();
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - headSize * Math.cos(angle - Math.PI / 6),
+                   y2 - headSize * Math.sin(angle - Math.PI / 6));
+        ctx.lineTo(x2 - headSize * Math.cos(angle + Math.PI / 6),
+                   y2 - headSize * Math.sin(angle + Math.PI / 6));
+        ctx.closePath();
+        ctx.fillStyle = (cur >= 0 && i < cur) ? 'rgba(139,92,246,0.4)' : 'rgba(109,40,217,0.85)';
+        ctx.fill();
+      }
+      // 各 waypoint に番号 + 中心点を描画
+      wps.forEach((wp, i) => {
+        const x = this._rollToX(wp.roll);
+        const y = this._pitchToY(wp.pitch);
+        const isActive = (i === cur);
+        const isPassed = (cur >= 0 && i < cur);
+        const radius = isActive ? 9 : 7;
+        const fill = isActive ? '#22c55e' : isPassed ? '#a78bfa' : '#8b5cf6';
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, 2 * Math.PI);
+        ctx.fillStyle = fill;
+        ctx.fill();
+        ctx.strokeStyle = '#1e293b';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        // 番号 (1-indexed で表示)
+        ctx.fillStyle = '#ffffff';
+        ctx.font = `bold ${isActive ? 11 : 9}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${i + 1}`, x, y);
+        ctx.textAlign = 'start';
+        ctx.textBaseline = 'alphabetic';
+      });
+      // 名前ラベルを waypoint[0] 近くに
+      if (seq.name && wps[0]) {
+        const x = this._rollToX(wps[0].roll);
+        const y = this._pitchToY(wps[0].pitch);
+        ctx.fillStyle = '#581c87';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.fillText(seq.name, x + 12, y + 4);
+      }
+    });
   }
 
   // Roll 範囲 [center - tol, center + tol] を ±180° wrap 考慮で 1〜2 矩形描画

@@ -35,7 +35,7 @@
 #define FW_VERSION "2.0.0-dev"
 #endif
 #ifndef FW_PHASE
-#define FW_PHASE "5.15"
+#define FW_PHASE "5.39"
 #endif
 // __DATE__ / __TIME__ はビルド時に自動埋め込まれる (例: "Apr 26 2026" "00:24:36")
 #define FW_BUILD __DATE__ " " __TIME__
@@ -70,9 +70,29 @@ static uint32_t g_last_imu_ms = 0;
 static uint32_t g_last_stream_ms = 0;
 static uint16_t g_stream_rate_hz = 0;  // 0 = OFF
 static uint32_t g_boot_ms = 0;
+
+// Phase 5.39.2.6: Button sim override (自動テスト用、btn.sim コマンドで制御)
+//   g_btn_sim_mask の bit が 1 の桁は g_btn_sim_value で上書き、0 の桁は物理 GPIO 値を維持
+//   起動時は全て 0 (= sim 無効、物理値そのまま)
+static uint16_t g_btn_sim_mask  = 0;
+static uint16_t g_btn_sim_value = 0;
 static HidOutputMode g_output_mode = HidOutputMode::OUT_BLE;
 static bool g_ble_hid_started = false;
 static bool g_imu_ok = false;
+
+// Phase 5.32: Built-in 動作モード切替
+// ENGINE = 既存 TriggerEngine (rule ベース、profile 適用)
+// MOUSE  = ハードコードのエアマウス (Btn3=左/Btn2=右/同時押し=ホイール、IMU→cursor)
+enum class DeviceMode : uint8_t { ENGINE = 0, MOUSE = 1 };
+static DeviceMode g_device_mode = DeviceMode::ENGINE;
+struct MouseModeRuntime {
+    bool left_held = false;
+    bool right_held = false;
+    bool wheel_active = false;
+    float wheel_accum = 0.0f;
+    uint32_t last_ms = 0;
+};
+static MouseModeRuntime g_mouse_rt;
 
 // Gyro bias (起動時自動キャリブレーション、deg/s 単位の rad/s 換算)
 static float g_gyro_bias_rad[3] = {0, 0, 0};
@@ -115,6 +135,126 @@ static void loadCalibFromNvs() {
 }
 
 // =========================================================
+// Phase 5.32: Device mode (engine / mouse) の NVS 永続化
+// =========================================================
+static void saveDeviceModeNvs() {
+    Preferences p;
+    if (p.begin("bm_mode", false)) {
+        p.putUChar("mode", (uint8_t)g_device_mode);
+        p.end();
+    }
+}
+static void loadDeviceModeNvs() {
+    Preferences p;
+    if (p.begin("bm_mode", true)) {
+        if (p.isKey("mode")) {
+            g_device_mode = (DeviceMode)p.getUChar("mode", 0);
+        }
+        p.end();
+    }
+}
+
+// =========================================================
+// Phase 5.32: ハードコード Mouse モード tick
+// 入力: SensorState (IMU + buttons_bitmap)
+// 出力: BLE HID Mouse (move, press/release, wheel)
+//
+// マッピング (M5StickC、Phase 5.30 の Btn 命名に従う):
+//   Btn3 (G26、一番手前) のみ → 左クリック HOLD
+//   Btn2 (G36) のみ          → 右クリック HOLD
+//   Btn3 + Btn2 同時押し     → ホイール (Pitch ジャイロ → 上下スクロール)
+// 連続カーソル: ジャイロ Yaw → dx、Pitch → dy (deadzone + sensitivity)
+//   ボタン無関係に常時動く (PC 一般のマウスのデフォルト動作)
+// =========================================================
+static void runMouseModeTick(const SensorState& s) {
+    if (!g_ble_hid.isConnected() || !g_ble_hid.isEnabled()) {
+        // 未接続/disabled 中は内部状態をリセットし何もしない
+        g_mouse_rt.left_held = false;
+        g_mouse_rt.right_held = false;
+        g_mouse_rt.wheel_active = false;
+        g_mouse_rt.wheel_accum = 0.0f;
+        return;
+    }
+    // ボタン状態 (M5StickC 想定: bitmap bit0=Btn1, bit1=Btn2, bit2=Btn3)
+    bool btn3 = (s.buttons_bitmap >> 2) & 1;
+    bool btn2 = (s.buttons_bitmap >> 1) & 1;
+    bool both = btn3 && btn2;
+
+    uint32_t now = s.timestamp_ms;
+    float dt = (g_mouse_rt.last_ms == 0) ? 0.01f : ((now - g_mouse_rt.last_ms) * 0.001f);
+    if (dt > 0.5f || dt < 0.0f) dt = 0.01f;
+    g_mouse_rt.last_ms = now;
+
+    if (both) {
+        // 両押し: 左右クリックを離してホイールモード
+        if (g_mouse_rt.left_held)  { g_ble_hid.releaseMouseButton(MOUSE_LEFT);  g_mouse_rt.left_held  = false; }
+        if (g_mouse_rt.right_held) { g_ble_hid.releaseMouseButton(MOUSE_RIGHT); g_mouse_rt.right_held = false; }
+        // Pitch ジャイロ (deg/s) を accumulate して 30 deg ごとにホイール ±1 ノッチ
+        constexpr float WHEEL_DEG_PER_NOTCH = 30.0f;
+        g_mouse_rt.wheel_accum += s.gyro[1] * dt / WHEEL_DEG_PER_NOTCH;
+        int8_t notches = 0;
+        while (g_mouse_rt.wheel_accum >= 1.0f) { notches++; g_mouse_rt.wheel_accum -= 1.0f; }
+        while (g_mouse_rt.wheel_accum <= -1.0f) { notches--; g_mouse_rt.wheel_accum += 1.0f; }
+        if (notches != 0) g_ble_hid.moveMouse(0, 0, notches);
+        g_mouse_rt.wheel_active = true;
+        return;
+    }
+    // wheel モードを抜けた瞬間 accumulator リセット
+    if (g_mouse_rt.wheel_active) {
+        g_mouse_rt.wheel_accum = 0.0f;
+        g_mouse_rt.wheel_active = false;
+    }
+    // Btn3 → 左クリック HOLD
+    if (btn3 && !g_mouse_rt.left_held) {
+        g_ble_hid.pressMouseButton(MOUSE_LEFT);
+        g_mouse_rt.left_held = true;
+    } else if (!btn3 && g_mouse_rt.left_held) {
+        g_ble_hid.releaseMouseButton(MOUSE_LEFT);
+        g_mouse_rt.left_held = false;
+    }
+    // Btn2 → 右クリック HOLD
+    if (btn2 && !g_mouse_rt.right_held) {
+        g_ble_hid.pressMouseButton(MOUSE_RIGHT);
+        g_mouse_rt.right_held = true;
+    } else if (!btn2 && g_mouse_rt.right_held) {
+        g_ble_hid.releaseMouseButton(MOUSE_RIGHT);
+        g_mouse_rt.right_held = false;
+    }
+    // 連続カーソル: Yaw ジャイロ → dx、Pitch ジャイロ → dy
+    constexpr float SENSITIVITY = 8.0f;   // px / deg
+    constexpr float DEADZONE = 3.0f;      // deg/s
+    float gx = s.gyro[2];  // yaw deg/s
+    float gy = s.gyro[1];  // pitch deg/s
+    if (fabsf(gx) < DEADZONE) gx = 0;
+    if (fabsf(gy) < DEADZONE) gy = 0;
+    int16_t dx = (int16_t)(gx * dt * SENSITIVITY);
+    int16_t dy = (int16_t)(gy * dt * SENSITIVITY);
+    if (dx != 0 || dy != 0) g_ble_hid.moveMouse(dx, dy, 0);
+}
+
+// =========================================================
+// BLE 接続安定性のチューニング (Phase 5.31)
+// - ATT MTU を 247 に拡張して大きい JSON のチャンク数を減らす
+// - 接続パラメータを Min 15ms / Max 30ms / Latency 0 / Timeout 4s に設定
+//   (NimBLE デフォルトは Timeout 720ms と短く、Windows BLE スタックで
+//    notify 集中時に切れやすかった)
+// =========================================================
+static void tuneBleConnection() {
+    NimBLEDevice::setMTU(247);
+    NimBLEServer* server = NimBLEDevice::getServer();
+    if (!server) return;
+    // min, max は 1.25ms 単位、latency は events、timeout は 10ms 単位
+    //   min=12 (15ms), max=24 (30ms), latency=0, timeout=400 (4000ms)
+    server->setDataLen(0xFFFF, 251);  // PDU 拡張 (LE Data Length Extension)
+    // 接続中の全ピアにパラメータ更新を要求
+    size_t cnt = server->getConnectedCount();
+    for (size_t i = 0; i < cnt; i++) {
+        NimBLEConnInfo info = server->getPeerInfo(i);
+        server->updateConnParams(info.getConnHandle(), 12, 24, 0, 400);
+    }
+}
+
+// =========================================================
 // rule.add / remove / clear 後に active_profile へ自動保存 (Phase 5.12)
 // active_profile が未設定なら "default" を使用
 // =========================================================
@@ -128,6 +268,49 @@ static void autoSaveActiveProfile() {
     for (const auto& r : g_engine.rules()) rules.push_back(r);
     JsonDocument errOut;
     Profile::save(active.c_str(), rules, errOut);
+}
+
+// =========================================================
+// Phase 5.33: 方向名 → posture Condition マッピング (ハリーポッターワンド用)
+//
+// 8 方向シーケンス (Kano 流) を内部の Pitch/Roll 領域に展開:
+//   M5StickC 基本姿勢 R+90, P0 (LCD 左向き縦持ち、Phase 5.30 規約) からの flick
+//   "U"  上振り = Pitch +30°, Roll +90° (base)
+//   "D"  下振り = Pitch -30°, Roll +90°
+//   "L"  左振り = Pitch  0°, Roll +60°  (LCD 上向きへ回転)
+//   "R"  右振り = Pitch  0°, Roll +120° (LCD 下向きへ回転)
+//   "UL" "UR" "DL" "DR" = 上記の組合せ
+// 各方向の許容: Pitch ±15°, Roll ±20°, Yaw 無視 (180)
+//
+// 戻り値: true = 方向名解析成功 / false = 不明な方向名
+// =========================================================
+static bool directionToCondition(const char* dir, Condition& out) {
+    if (!dir || !dir[0]) return false;
+    // 中央 (Pitch, Roll) を方向別に決定
+    float p = 0.0f, r = 90.0f;
+    if      (strcmp(dir, "U")  == 0) { p = +30; r =  90; }
+    else if (strcmp(dir, "D")  == 0) { p = -30; r =  90; }
+    else if (strcmp(dir, "L")  == 0) { p =   0; r =  60; }
+    else if (strcmp(dir, "R")  == 0) { p =   0; r = 120; }
+    else if (strcmp(dir, "UL") == 0) { p = +30; r =  60; }
+    else if (strcmp(dir, "UR") == 0) { p = +30; r = 120; }
+    else if (strcmp(dir, "DL") == 0) { p = -30; r =  60; }
+    else if (strcmp(dir, "DR") == 0) { p = -30; r = 120; }
+    else return false;
+    out.logic_op = LogicOp::OP_AND;
+    out.posture.enabled = true;
+    out.posture.judge_by = PostureJudge::BY_EULER;
+    out.posture.euler[0] = r;
+    out.posture.euler[1] = p;
+    out.posture.euler[2] = 0;
+    out.posture.euler_tol[0] = 20.0f;   // Roll ±20°
+    out.posture.euler_tol[1] = 15.0f;   // Pitch ±15°
+    out.posture.euler_tol[2] = 180.0f;  // Yaw 無視
+    // quat はダミー (BY_EULER 判定なので未使用、ただし closest 計算用に保持)
+    out.posture.quat[0] = 1.0f;
+    out.posture.quat[1] = out.posture.quat[2] = out.posture.quat[3] = 0.0f;
+    out.posture.quat_dot_min = 0.95f;
+    return true;
 }
 
 // =========================================================
@@ -253,12 +436,38 @@ static void handleCommand(JsonDocument& in, JsonDocument& out) {
         out["closest_only"] = g_engine.isClosestOnlyMode();
         out["lock_window_ms"] = g_engine.lockWindowMs();
         out["lock_cooldown_ms"] = g_engine.lockCooldownMs();
+        // Phase 5.32: 動作モード
+        out["device_mode"] = (g_device_mode == DeviceMode::MOUSE) ? "mouse" : "engine";
     }
     else if (strcmp(cmd, "sensor.stream") == 0) {
         g_stream_rate_hz = in["rate_hz"] | 0;
         out["type"] = "ack";
         out["cmd"] = "sensor.stream";
         out["ok"] = true;
+    }
+    else if (strcmp(cmd, "mode.set") == 0) {
+        // Phase 5.32: 動作モード切替 (engine / mouse)
+        const char* m = in["mode"] | "engine";
+        DeviceMode prev = g_device_mode;
+        if (strcmp(m, "mouse") == 0) g_device_mode = DeviceMode::MOUSE;
+        else                          g_device_mode = DeviceMode::ENGINE;
+        // mode を切替えた瞬間、HID 出力中のキー/ボタンをすべてリリース
+        if (prev != g_device_mode) {
+            g_ble_hid.releaseAll();
+            if (g_mouse_rt.left_held)  { g_ble_hid.releaseMouseButton(MOUSE_LEFT);  g_mouse_rt.left_held  = false; }
+            if (g_mouse_rt.right_held) { g_ble_hid.releaseMouseButton(MOUSE_RIGHT); g_mouse_rt.right_held = false; }
+            g_mouse_rt.wheel_accum = 0.0f;
+            g_mouse_rt.wheel_active = false;
+        }
+        saveDeviceModeNvs();
+        out["type"] = "ack";
+        out["cmd"] = "mode.set";
+        out["ok"] = true;
+        out["device_mode"] = (g_device_mode == DeviceMode::MOUSE) ? "mouse" : "engine";
+    }
+    else if (strcmp(cmd, "mode.get") == 0) {
+        out["type"] = "mode";
+        out["device_mode"] = (g_device_mode == DeviceMode::MOUSE) ? "mouse" : "engine";
     }
     else if (strcmp(cmd, "output.set") == 0) {
         const char* target = in["target"] | "none";
@@ -299,6 +508,7 @@ static void handleCommand(JsonDocument& in, JsonDocument& out) {
                     g_ble_nus_started = true;
                 }
             }
+            tuneBleConnection();  // Phase 5.31
         }
         out["type"] = "ack";
         out["cmd"] = "ble.start";
@@ -312,6 +522,49 @@ static void handleCommand(JsonDocument& in, JsonDocument& out) {
         out["cmd"] = "watch.set";
         out["ok"] = true;
     }
+    // ================ Phase 5.39.2.6: Button シミュレーション (自動テスト用) ================
+    // {"cmd":"btn.sim", "idx":3, "state":1}      → Btn3 を「押下中」として override
+    // {"cmd":"btn.sim", "idx":3, "state":0}      → Btn3 を「離している」として override
+    // {"cmd":"btn.sim", "clear":true}            → 全 sim 解除 (物理 GPIO 値に戻す)
+    // {"cmd":"btn.sim", "mask":0x07, "value":0x04}  → 直接 bitmap 指定 (上級)
+    // sim 中は g_buttons.update() 後に sim 値で上書き → TriggerEngine 評価で sim が反映される
+    else if (strcmp(cmd, "btn.sim") == 0) {
+        out["type"] = "ack";
+        out["cmd"] = "btn.sim";
+        if (in["clear"] | false) {
+            g_btn_sim_mask = 0;
+            g_btn_sim_value = 0;
+            out["ok"] = true;
+            out["mask"] = (uint32_t)g_btn_sim_mask;
+            out["value"] = (uint32_t)g_btn_sim_value;
+        } else if (in["mask"].is<unsigned int>() && in["value"].is<unsigned int>()) {
+            // 直接 bitmap 指定モード
+            g_btn_sim_mask = in["mask"];
+            g_btn_sim_value = in["value"];
+            out["ok"] = true;
+            out["mask"] = (uint32_t)g_btn_sim_mask;
+            out["value"] = (uint32_t)g_btn_sim_value;
+        } else {
+            int idx = in["idx"] | 0;
+            int state = in["state"] | -1;
+            if (idx < 1 || idx > 16 || state < 0 || state > 1) {
+                out["type"] = "err";
+                out["ok"] = false;
+                out["err"] = "invalid_idx_or_state (idx 1-16, state 0/1)";
+            } else {
+                uint16_t bit = 1u << (idx - 1);
+                g_btn_sim_mask |= bit;
+                if (state == 1) {
+                    g_btn_sim_value |= bit;
+                } else {
+                    g_btn_sim_value &= ~bit;
+                }
+                out["ok"] = true;
+                out["mask"] = (uint32_t)g_btn_sim_mask;
+                out["value"] = (uint32_t)g_btn_sim_value;
+            }
+        }
+    }
     // ================ HID 直接テスト ================
     else if (strcmp(cmd, "test.hid") == 0) {
         // {"cmd":"test.hid", "action":"press"|"release"|"fire"|"text"|"mouse_move"|"mouse_click",
@@ -324,19 +577,24 @@ static void handleCommand(JsonDocument& in, JsonDocument& out) {
         }
         if (strcmp(action, "press") == 0) {
             const char* k = in["key"] | "";
-            if (k[0]) g_ble_hid.pressKey((uint8_t)k[0]);
+            uint8_t code = parseKeyName(k);  // Phase 5.27: ARROW_LEFT 等の特殊キー対応
+            if (code) g_ble_hid.pressKey(code);
         }
         else if (strcmp(action, "release") == 0) {
             const char* k = in["key"] | "";
-            if (k[0]) g_ble_hid.releaseKey((uint8_t)k[0]);
+            uint8_t code = parseKeyName(k);
+            if (code) g_ble_hid.releaseKey(code);
             else g_ble_hid.releaseAll();
         }
         else if (strcmp(action, "fire") == 0) {
             const char* k = in["key"] | "a";
+            uint8_t code = parseKeyName(k);
             uint16_t dur = in["duration_ms"] | 30;
-            g_ble_hid.pressKey((uint8_t)k[0]);
-            delay(dur);
-            g_ble_hid.releaseKey((uint8_t)k[0]);
+            if (code) {
+                g_ble_hid.pressKey(code);
+                delay(dur);
+                g_ble_hid.releaseKey(code);
+            }
         }
         else if (strcmp(action, "text") == 0) {
             const char* text = in["text"] | "";
@@ -352,11 +610,35 @@ static void handleCommand(JsonDocument& in, JsonDocument& out) {
             int16_t dy = in["dy"] | 0;
             int8_t wheel = in["wheel"] | 0;
             g_ble_hid.moveMouse(dx, dy, wheel);
+            // デバッグ: Phase 5.21 - マウス動作不良切り分け用
+            out["dx"] = dx;
+            out["dy"] = dy;
+            out["enabled"] = g_ble_hid.isEnabled();
+            out["connected"] = g_ble_hid.isConnected();
         }
         else if (strcmp(action, "mouse_click") == 0) {
             const char* btn = in["button"] | "left";
             uint8_t b = strcmp(btn, "right") == 0 ? 2 : strcmp(btn, "middle") == 0 ? 4 : 1;
             g_ble_hid.clickMouse(b);
+            out["btn"] = b;
+            out["enabled"] = g_ble_hid.isEnabled();
+            out["connected"] = g_ble_hid.isConnected();
+        }
+        else if (strcmp(action, "release_all") == 0) {
+            // Phase 5.22: 緊急 全キー解放 (HOLD ルールが暴走したとき用)
+            g_ble_hid.releaseAll();
+            // ルールの状態もリセット (HOLD 中だったルールを idle に戻す)
+            g_engine.clearRules();
+            // active_profile から再ロード
+            String active = Profile::getActive();
+            if (active.length() > 0) {
+                std::vector<ActionRule> rules;
+                JsonDocument errOut;
+                if (Profile::load(active.c_str(), rules, errOut)) {
+                    for (auto& r : rules) g_engine.addRule(r);
+                }
+            }
+            out["released"] = true;
         }
         else {
             ok = false;
@@ -539,6 +821,8 @@ static void handleCommand(JsonDocument& in, JsonDocument& out) {
             o["states_count"] = r.states_count;
             o["loop"] = r.loop;
             o["current_state"] = r.current_state;  // -1=idle、>=0 = state 滞在中
+            // Phase 5.39: posture_basis (0=absolute, 1=relative) を文字列で返す
+            o["posture_basis"] = (r.posture_basis == PB_RELATIVE_QUAT) ? "relative" : "absolute";
             // states[0] の posture を返す (ある場合)
             if (r.states_count > 0 && r.states[0].match_condition.posture.enabled) {
                 JsonObject p = o["posture"].to<JsonObject>();
@@ -596,6 +880,47 @@ static void handleCommand(JsonDocument& in, JsonDocument& out) {
                 a["modifiers"] = r.states[0].on_enter.modifiers;
                 a["interval_ms"] = r.states[0].on_enter.interval_ms;
                 a["duration_ms"] = r.states[0].on_enter.duration_ms;
+            }
+            // Phase 5.34: SEQUENCE/ハリポタワンドの可視化のため全 states を配列で返す
+            //   各エントリは waypoint の posture (euler, tol) と on_enter サマリ
+            JsonArray statesArr = o["states"].to<JsonArray>();
+            for (uint8_t si = 0; si < r.states_count && si < 4; si++) {
+                JsonObject so = statesArr.add<JsonObject>();
+                const State& st = r.states[si];
+                if (st.match_condition.posture.enabled) {
+                    JsonObject sp = so["posture"].to<JsonObject>();
+                    JsonArray se = sp["euler"].to<JsonArray>();
+                    JsonArray set = sp["euler_tol"].to<JsonArray>();
+                    for (int i = 0; i < 3; i++) {
+                        se.add(st.match_condition.posture.euler[i]);
+                        set.add(st.match_condition.posture.euler_tol[i]);
+                    }
+                }
+                if (st.match_condition.button.enabled) {
+                    JsonObject sb = so["button"].to<JsonObject>();
+                    sb["idx"] = st.match_condition.button.idx;
+                    sb["state"] = st.match_condition.button.state;
+                }
+                // Phase 5.39: stillness 情報も返す (required=true の state のみ)
+                if (st.match_condition.stillness_required) {
+                    JsonObject sst = so["stillness"].to<JsonObject>();
+                    sst["required"] = true;
+                    sst["window_ms"] = st.match_condition.stillness_window_ms;
+                    sst["accel_th_mg"] = st.match_condition.stillness_accel_th_mg;
+                    sst["gyro_th_dps"] = st.match_condition.stillness_gyro_th_dps;
+                }
+                so["max_dwell_ms"] = st.max_dwell_ms;
+                // 発火する waypoint (最終状態) のキーストローク数だけ示す (text 復元用)
+                if (st.on_enter.keys_len > 0) {
+                    so["fire_keys_len"] = st.on_enter.keys_len;
+                    // 短い場合は中身も (text 復元用)
+                    if (st.on_enter.keys_len <= 24) {
+                        JsonArray fk = so["fire_keys"].to<JsonArray>();
+                        for (uint8_t i = 0; i < st.on_enter.keys_len; i++) {
+                            fk.add(st.on_enter.keys[i]);
+                        }
+                    }
+                }
             }
         }
         out["sensor_btn"] = g_sensor_state.buttons_bitmap;  // 即時参照用
@@ -748,6 +1073,254 @@ static void handleCommand(JsonDocument& in, JsonDocument& out) {
         rule.priority = r["priority"] | 0;
         rule.cooldown_ms = r["cooldown_ms"] | 500;
 
+        // =====================================================
+        // Phase 5.33: directions[] ショートハンド (ハリポタワンド)
+        // 例: {"directions":["DR","R","UR","D"], "type_text":"wingardium leviosa\n"}
+        //   → 4 状態の SEQUENCE rule に展開、最終状態の on_enter で type_text を打鍵
+        // 既存 posture/ui_mode は無視 (ショートハンドが優先)
+        // =====================================================
+        if (r["directions"].is<JsonArray>()) {
+            JsonArray dirs = r["directions"].as<JsonArray>();
+            uint8_t n = dirs.size();
+            if (n < 2) n = 2;
+            if (n > 4) n = 4;
+            rule.states_count = n;
+            rule.loop = false;  // SEQUENCE (一方通行、最後で発火→idle)
+            const char* type_text = r["type_text"] | "";
+            // 各状態の max_dwell_ms (デフォルト 800ms): 連続 waypoint 間の最大待ち時間
+            uint16_t max_dwell = r["direction_max_ms"] | 800;
+            // 各状態の min_dwell_ms (デフォルト 0): 短すぎる通過を弾く
+            uint16_t min_dwell = r["direction_min_ms"] | 0;
+            // Phase 5.33: オプションのボタンゲート
+            //   button_idx 指定時は「ボタン押下中だけシーケンス進行」(Kano ワンド方式)
+            //   無指定なら純ジェスチャ判定 (誤発動リスクと引き換えに魔法らしさ)
+            uint8_t gate_btn_idx = 0;
+            uint8_t gate_btn_state = 0;  // 0=pressed
+            if (r["button_idx"].is<int>() || r["button_idx"].is<uint8_t>()) {
+                uint8_t bidx = r["button_idx"];
+                if (bidx > 0 && bidx <= 15) {
+                    gate_btn_idx = bidx;
+                    gate_btn_state = r["button_state"] | 0;
+                }
+            }
+            bool ok = true;
+            for (uint8_t i = 0; i < n; i++) {
+                const char* d = dirs[i].as<const char*>();
+                if (!directionToCondition(d, rule.states[i].match_condition)) {
+                    ok = false;
+                    break;
+                }
+                // ボタンゲート: 全 waypoint に同じボタン条件を適用 (押している間だけ進行)
+                if (gate_btn_idx > 0) {
+                    rule.states[i].match_condition.button.enabled = true;
+                    rule.states[i].match_condition.button.idx = gate_btn_idx;
+                    rule.states[i].match_condition.button.state = gate_btn_state;
+                }
+                rule.states[i].max_dwell_ms = max_dwell;
+                rule.states[i].min_dwell_ms = min_dwell;
+            }
+            if (!ok) {
+                out["type"] = "err";
+                out["cmd"] = "rule.add";
+                out["err"] = "bad_direction";
+                return;
+            }
+            // 最終状態の on_enter で type_text を FIRE_MACRO (各文字を順次キー入力)
+            State& sf = rule.states[n - 1];
+            sf.on_enter.type = ActionType::AT_FIRE_MACRO;
+            sf.on_enter.interval_ms = r["interval_ms"] | 15;
+            uint8_t kn = 0;
+            for (size_t i = 0; type_text[i] && kn < 24; i++, kn++) {
+                sf.on_enter.keys[kn] = (uint8_t)type_text[i];
+                sf.on_enter.key_modes[kn] = KeyMacroMode::FIRE;
+            }
+            sf.on_enter.keys_len = kn;
+            g_engine.addRule(rule);
+            autoSaveActiveProfile();
+            out["type"] = "ack";
+            out["cmd"] = "rule.add";
+            out["ok"] = true;
+            out["id"] = rule.id;
+            out["mode"] = "sequence_directions";
+            out["states"] = (uint32_t)n;
+            out["rule_count"] = (uint32_t)g_engine.ruleCount();
+            return;
+        }
+
+        // =====================================================
+        // Phase 5.39: ui_mode == "hold_with_waypoints" ショートハンド
+        //   start_posture (1) + mid_postures[] (0-2) + end_posture (1) を states[] に展開
+        //   state[0]      : AT_PRESS、start_posture + button + stillness 任意
+        //   state[1..N-2] : AT_NONE、mid_postures[i]
+        //   state[N-1]    : AT_RELEASE、end_posture + stillness 任意 (end_stillness)
+        //   posture_basis: "absolute" (default) / "relative"
+        //   ボタン条件 / 加速度 / stillness は rule 全体で共通 (rule あたり 1 セット)
+        // =====================================================
+        {
+            const char* uim = r["ui_mode"] | "";
+            if (strcmp(uim, "hold_with_waypoints") == 0) {
+                // posture_basis 解釈
+                const char* pb = r["posture_basis"] | "absolute";
+                rule.posture_basis = (strcmp(pb, "relative") == 0)
+                                       ? PB_RELATIVE_QUAT : PB_ABSOLUTE_EULER;
+                rule.loop = false;  // SEQUENCE (一方通行)
+
+                // mid_postures 個数 (0-2)
+                int mid_count = 0;
+                if (r["mid_postures"].is<JsonArray>()) {
+                    mid_count = (int)r["mid_postures"].as<JsonArray>().size();
+                    if (mid_count > 2) mid_count = 2;
+                    if (mid_count < 0) mid_count = 0;
+                }
+                rule.states_count = (uint8_t)(2 + mid_count);  // 開始(1) + 中間(0-2) + 終了(1)
+
+                // ボタン条件 (rule 共通)
+                bool btn_enabled = false;
+                uint8_t btn_idx = 0;
+                uint8_t btn_state = 0;
+                if (r["button_idx"].is<int>() || r["button_idx"].is<uint8_t>()) {
+                    uint8_t bidx = r["button_idx"];
+                    if (bidx > 0 && bidx <= 15) {
+                        btn_enabled = true;
+                        btn_idx = bidx;
+                        btn_state = r["button_state"] | 0;
+                    }
+                }
+
+                // stillness 条件 (state[0] / state[N-1] のみ)
+                bool start_still = r["stillness_required"] | false;
+                bool end_still   = r["end_stillness_required"] | false;
+                uint16_t still_win   = r["stillness_window_ms"] | 200;
+                uint8_t  still_amg   = (uint8_t)(r["stillness_accel_th_mg"] | 100);
+                uint8_t  still_gdps  = (uint8_t)(r["stillness_gyro_th_dps"] | 5);
+
+                // 開始キー解決 (state[0] AT_PRESS、state[N-1] AT_RELEASE で同じ keys を使う)
+                const char* key = r["key"] | "";
+                uint8_t modifiers = r["modifiers"] | 0;
+                uint8_t shared_keys[8];
+                uint8_t shared_keys_len = 0;
+                if (key[0]) {
+                    uint8_t key_code = parseKeyName(key);
+                    if (key_code != 0) {
+                        if (modifiers & 0x01) shared_keys[shared_keys_len++] = 0x80;
+                        if (modifiers & 0x02) shared_keys[shared_keys_len++] = 0x81;
+                        if (modifiers & 0x04) shared_keys[shared_keys_len++] = 0x82;
+                        if (modifiers & 0x08) shared_keys[shared_keys_len++] = 0x83;
+                        shared_keys[shared_keys_len++] = key_code;
+                    }
+                }
+
+                // Helper: posture (euler + tol) を State.match_condition.posture に設定
+                auto applyPosture = [&](State& st, JsonObject po) {
+                    st.match_condition.logic_op = LogicOp::OP_AND;
+                    if (po.isNull()) return;
+                    st.match_condition.posture.enabled = true;
+                    st.match_condition.posture.judge_by = PostureJudge::BY_EULER;
+                    JsonArray e  = po["euler"];
+                    JsonArray et = po["euler_tol"];
+                    for (int i = 0; i < 3; i++) {
+                        st.match_condition.posture.euler[i]     = e  ? e[i].as<float>()  : 0.0f;
+                        st.match_condition.posture.euler_tol[i] = et ? et[i].as<float>() : 180.0f;
+                    }
+                    if (po["quat"].is<JsonArray>()) {
+                        JsonArray q = po["quat"];
+                        for (int i = 0; i < 4; i++) {
+                            st.match_condition.posture.quat[i] = q[i].as<float>();
+                        }
+                    } else {
+                        st.match_condition.posture.quat[0] = 1.0f;
+                        st.match_condition.posture.quat[1] = 0.0f;
+                        st.match_condition.posture.quat[2] = 0.0f;
+                        st.match_condition.posture.quat[3] = 0.0f;
+                    }
+                    st.match_condition.posture.quat_dot_min = po["quat_dot_min"] | 0.95f;
+                };
+
+                // state[0]: 開始
+                {
+                    State& st = rule.states[0];
+                    JsonObject po = r["start_posture"];
+                    applyPosture(st, po);
+                    if (btn_enabled) {
+                        st.match_condition.button.enabled = true;
+                        st.match_condition.button.idx = btn_idx;
+                        st.match_condition.button.state = btn_state;
+                    }
+                    if (start_still) {
+                        st.match_condition.stillness_required = true;
+                        st.match_condition.stillness_window_ms = still_win;
+                        st.match_condition.stillness_accel_th_mg = still_amg;
+                        st.match_condition.stillness_gyro_th_dps = still_gdps;
+                    }
+                    // on_enter = AT_PRESS (shared_keys)
+                    if (shared_keys_len > 0) {
+                        st.on_enter.type = ActionType::AT_PRESS;
+                        for (uint8_t i = 0; i < shared_keys_len; i++) {
+                            st.on_enter.keys[i] = shared_keys[i];
+                        }
+                        st.on_enter.keys_len = shared_keys_len;
+                        st.on_enter.modifiers = modifiers;
+                    }
+                    st.max_dwell_ms = r["start_max_dwell_ms"] | 0;
+                }
+
+                // state[1..mid_count]: 中間
+                JsonArray mids = r["mid_postures"].as<JsonArray>();
+                for (int i = 0; i < mid_count; i++) {
+                    State& st = rule.states[1 + i];
+                    JsonObject po = mids[i].as<JsonObject>();
+                    applyPosture(st, po);
+                    // 中間 state はボタン継続が常識的: btn が pressed なら継続要求、released なら無視
+                    if (btn_enabled) {
+                        st.match_condition.button.enabled = true;
+                        st.match_condition.button.idx = btn_idx;
+                        st.match_condition.button.state = btn_state;
+                    }
+                    st.on_enter.type = ActionType::AT_NONE;
+                    st.max_dwell_ms = r["mid_max_dwell_ms"] | 0;
+                }
+
+                // state[N-1]: 終了
+                {
+                    uint8_t last_idx = (uint8_t)(1 + mid_count);
+                    State& st = rule.states[last_idx];
+                    JsonObject po = r["end_posture"];
+                    applyPosture(st, po);
+                    // 終了側はボタン release を待つ運用が多いが、UI 仕様により button_idx を維持
+                    // (release-on-button-release 構成は hold_start_end と整合)
+                    // ここではボタン条件を付与せず、姿勢一致のみで遷移 (シンプル MVP)
+                    if (end_still) {
+                        st.match_condition.stillness_required = true;
+                        st.match_condition.stillness_window_ms = still_win;
+                        st.match_condition.stillness_accel_th_mg = still_amg;
+                        st.match_condition.stillness_gyro_th_dps = still_gdps;
+                    }
+                    // on_enter = AT_RELEASE (shared_keys)
+                    if (shared_keys_len > 0) {
+                        st.on_enter.type = ActionType::AT_RELEASE;
+                        for (uint8_t i = 0; i < shared_keys_len; i++) {
+                            st.on_enter.keys[i] = shared_keys[i];
+                        }
+                        st.on_enter.keys_len = shared_keys_len;
+                        st.on_enter.modifiers = modifiers;
+                    }
+                    st.max_dwell_ms = r["end_max_dwell_ms"] | 0;
+                }
+
+                g_engine.addRule(rule);
+                autoSaveActiveProfile();
+                out["type"] = "ack";
+                out["cmd"] = "rule.add";
+                out["ok"] = true;
+                out["id"] = rule.id;
+                out["mode"] = "hold_with_waypoints";
+                out["states"] = (uint32_t)rule.states_count;
+                out["posture_basis"] = (rule.posture_basis == PB_RELATIVE_QUAT) ? "relative" : "absolute";
+                out["rule_count"] = (uint32_t)g_engine.ruleCount();
+                return;
+            }
+        }
+
         const char* mode = r["ui_mode"] | "oneshot";
         bool is_hold_only = strcmp(mode, "hold_start_only") == 0;
         bool is_hold_end  = strcmp(mode, "hold_start_end") == 0;
@@ -826,7 +1399,7 @@ static void handleCommand(JsonDocument& in, JsonDocument& out) {
             JsonArray ks = r["keys"];
             uint8_t n = 0;
             for (JsonVariant v : ks) {
-                if (n >= 8) break;
+                if (n >= 24) break;
                 const char* kn = v.as<const char*>();
                 if (!kn || !kn[0]) continue;
                 uint8_t mode = KeyMacroMode::FIRE;
@@ -856,7 +1429,7 @@ static void handleCommand(JsonDocument& in, JsonDocument& out) {
             // FIRE_MACRO で text の各文字を順次送信
             s0.on_enter.type = ActionType::AT_FIRE_MACRO;
             uint8_t n = 0;
-            for (size_t i = 0; text[i] && n < 8; i++, n++) {
+            for (size_t i = 0; text[i] && n < 24; i++, n++) {
                 s0.on_enter.keys[n] = (uint8_t)text[i];
             }
             s0.on_enter.keys_len = n;
@@ -1069,8 +1642,18 @@ static void updateSensor() {
     g_sensor_state.buttons_bitmap = g_buttons.update(now);
 #endif
 
-    // TriggerEngine tick
-    g_engine.tick(g_sensor_state);
+    // Phase 5.39.2.6: Button sim override (btn.sim コマンドで設定された bit を上書き)
+    if (g_btn_sim_mask != 0) {
+        g_sensor_state.buttons_bitmap =
+            (g_sensor_state.buttons_bitmap & ~g_btn_sim_mask) | (g_btn_sim_value & g_btn_sim_mask);
+    }
+
+    // Phase 5.32: Mode 別に tick を切替
+    if (g_device_mode == DeviceMode::MOUSE) {
+        runMouseModeTick(g_sensor_state);
+    } else {
+        g_engine.tick(g_sensor_state);
+    }
 }
 
 // =========================================================
@@ -1172,6 +1755,8 @@ void setup() {
 
     // 6 点キャリブ結果を NVS から復元 (Phase 5.9)
     loadCalibFromNvs();
+    // Device mode を NVS から復元 (Phase 5.32)
+    loadDeviceModeNvs();
 
     // IMU 初期化 (失敗しても FW は動作継続)
     g_imu_ok = g_imu.begin();
@@ -1219,6 +1804,14 @@ void setup() {
 
     g_engine.setHidSink(&g_ble_hid);
 
+    // Phase 5.39.2.7: watch event (trigger.hit / lock) を USB Serial + BLE NUS 両方に routing
+    g_engine.setEventOutputFn([](JsonDocument& doc) {
+        g_serial.sendJson(doc);
+        if (g_ble_nus_started && g_ble_nus.isConnected()) {
+            g_ble_nus.sendJson(doc);
+        }
+    });
+
     // Active profile があれば自動ロード
     String active = Profile::getActive();
     if (active.length() > 0) {
@@ -1243,6 +1836,8 @@ void setup() {
         g_ble_nus.setHandler(handleCommand);
         g_ble_nus_started = true;
     }
+    // Phase 5.31: 接続安定化 (MTU 247 + ConnParams 15-30ms / 4s timeout)
+    tuneBleConnection();
     {
         JsonDocument d;
         d["type"] = "boot";
@@ -1404,6 +1999,7 @@ static void handlePowerButton(uint32_t now) {
                 g_ble_nus.setHandler(handleCommand);
                 g_ble_nus_started = true;
             }
+            tuneBleConnection();  // Phase 5.31
             doc["action"] = "ble_start";
         } else {
             doc["action"] = "ble_already_on";

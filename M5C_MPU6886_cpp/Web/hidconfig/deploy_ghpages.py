@@ -83,6 +83,33 @@ def main():
         print('  cd ../M5C_Serial_Unity-gh-pages && git checkout gh-pages')
         sys.exit(1)
 
+    # PIO ビルド成果物を firmware/ ディレクトリにコピー (esp-web-tools 用)
+    # Phase 5.20.1: ブラウザから直接 FW 書込み可能なように最新 FW を同梱
+    pio_build = SRC_DIR.parents[1] / '.pio' / 'build' / 'm5stick-c-v2'
+    fw_target = SRC_DIR / 'firmware' / 'm5stickc-v2'
+    if pio_build.is_dir() and fw_target.is_dir():
+        copied = []
+        for fname in ['firmware.bin', 'bootloader.bin', 'partitions.bin']:
+            src = pio_build / fname
+            if src.is_file():
+                shutil.copy2(src, fw_target / fname)
+                copied.append(fname)
+        if copied:
+            print(f'[FW] copied to firmware/m5stickc-v2/: {", ".join(copied)}')
+        # manifest.json の version を build 時刻で更新
+        manifest_path = fw_target / 'manifest.json'
+        if manifest_path.is_file():
+            try:
+                m = json.loads(manifest_path.read_text(encoding='utf-8'))
+                fw_path = fw_target / 'firmware.bin'
+                if fw_path.is_file():
+                    mtime = datetime.datetime.fromtimestamp(fw_path.stat().st_mtime)
+                    m['version'] = f'2.0.0-dev (' + mtime.strftime('%Y-%m-%d %H:%M') + ')'
+                    manifest_path.write_text(json.dumps(m, indent=4, ensure_ascii=False), encoding='utf-8')
+                    print(f'[FW] manifest version: {m["version"]}')
+            except Exception as e:
+                print(f'[FW] manifest update warning: {e}')
+
     print(f'[1/3] Syncing {SRC_DIR} -> {GH_DIR}')
 
     # gh-pages 側にあって、source 側に無いファイルを削除 (但し EXCLUDE と GHPAGES_README.md は維持)

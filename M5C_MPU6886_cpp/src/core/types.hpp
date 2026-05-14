@@ -39,10 +39,13 @@ enum class ActionType : uint8_t {
 //   1 = PRESS  (press のみ、release しない = 追加押下、波動拳の ↓+→ 同時押し用)
 //   2 = RELEASE (release のみ)
 //   3 = RELEASE_ALL (keys[i] 無視、すべての押下キーを離す = 掃除)
+//
+// Phase 5.33: 呪文名テキスト (Wingardium Leviosa = 18 文字) 対応のため keys[] を 24 に拡張
+//   "wingardium leviosa\n" = 19 chars が最長想定。24 で余裕
 struct Action {
     ActionType type;
-    uint8_t keys[8];           // キーコード (HID usage or 内部 enum)
-    uint8_t key_modes[8];      // 各 keys[i] のモード (FIRE_MACRO 用、上記 enum)
+    uint8_t keys[24];          // キーコード (HID usage or 内部 enum、Phase 5.33: 8→24)
+    uint8_t key_modes[24];     // 各 keys[i] のモード (FIRE_MACRO 用、上記 enum)
     uint8_t keys_len;
     uint8_t modifiers;         // Ctrl/Shift/Alt ビットマップ
     uint16_t duration_ms;      // FIRE_ONCE 用
@@ -66,6 +69,16 @@ enum class LogicOp : uint8_t { OP_AND = 0, OP_OR = 1 };
 
 // 姿勢判定方法 (BY_ プレフィックスは Arduino.h EULER マクロ衝突回避)
 enum class PostureJudge : uint8_t { BY_EULER = 0, BY_QUAT = 1 };
+
+// Phase 5.39: 姿勢判定の基準
+//   PB_ABSOLUTE_EULER : Mahony 起動基準の絶対 Euler 判定 (既存挙動、後方互換)
+//   PB_RELATIVE_QUAT  : state[0] enter 時に q_ref を取得し、以降は q_rel = q_ref* ⊗ q_current
+//                       から ZYX Euler を抽出して posture.euler との差を tol 比較
+//   注: enum class ではなく uint8_t enum (シリアライズ簡略化、PostureBasis = 0/1)
+enum PostureBasis : uint8_t {
+    PB_ABSOLUTE_EULER = 0,
+    PB_RELATIVE_QUAT  = 1,
+};
 
 // 比較演算
 enum class Comparison : uint8_t { CMP_GTE = 0, CMP_LTE = 1 };
@@ -109,6 +122,14 @@ struct Condition {
     PostureCond posture;
     AccelCond accel;
     GyroCond gyro;
+    // Phase 5.39: 静止検出 (stillness) — WB Magic Caster Wand 方式
+    // stillness_required=true なら、|accel - 1g| が accel_th_mg 以下 AND
+    // |gyro| が gyro_th_dps 以下を window_ms 連続で満たすまで条件不成立。
+    // 連続時刻は Condition 側に持てない (static 不可) ので Rule::stillness_since_ms を使用。
+    bool     stillness_required;
+    uint16_t stillness_window_ms;     // default 200
+    uint8_t  stillness_accel_th_mg;   // default 100 (= 0.1g)
+    uint8_t  stillness_gyro_th_dps;   // default 5
 };
 
 // 状態機械の 1 状態
@@ -134,11 +155,23 @@ struct ActionRule {
     bool loop;
     int8_t priority;
     uint16_t cooldown_ms;
+    // Phase 5.39: 姿勢判定基準 (0=ABS_EULER default、1=REL_QUAT)
+    // PostureBasis enum を uint8_t で格納 (serialize 簡略化)
+    uint8_t posture_basis;
 
     // Runtime state (RAM only、JSON serialize 対象外)
     int8_t current_state;      // -1=idle
     uint32_t state_enter_ms;
     uint32_t last_fire_ms;
+
+    // Phase 5.39 runtime (RAM only):
+    //   q_ref          : posture_basis=PB_RELATIVE_QUAT 時の参照クォータニオン (w,x,y,z)
+    //                    state[0] enter 瞬間の sensor.quat をスナップショット
+    //   q_ref_valid    : q_ref が確定済か (idle 復帰時 false)
+    //   stillness_since_ms : 静止判定で「いつから静止していたか」(0 = 未開始)
+    float    q_ref[4];
+    bool     q_ref_valid;
+    uint32_t stillness_since_ms;
 };
 
 // HID 出力先 (OUT_ プレフィックスは NONE マクロ衝突回避)

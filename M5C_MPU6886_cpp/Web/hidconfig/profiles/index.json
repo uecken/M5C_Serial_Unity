@@ -35,11 +35,51 @@
     },
     {
       "id": "street_fighter",
-      "title": "🥊 ストリートファイター Zero (miniplay.com)",
-      "description": "基本姿勢 R+90 (縦持ち、LCD 左) + Btn3 → punch(s)。左振り → kick(a)、裏返し+振り → hadoken(↓→+a)、上向け → shoryuken(→↓↘+a)、下向け P-60↓ → tatsumaki(↓←+z)。",
+      "title": "🥊 ストリートファイター Zero (要 Btn3 / G26)",
+      "description": "Btn3 (G26、一番手前) OFF=移動 (右傾→/左傾←/手前倒し↑/奥倒し↓)、Btn3 ON=技 (punch=s/波動拳/昇竜拳/竜巻旋風脚)。基本姿勢 R+90 (縦持ち、LCD 左)、Pitch +40 以上→↑、-40 以下→↓。hadoken は LCD 上向け水平 (R0/P0) で振り。8 ルール。",
       "tags": ["game", "fighting", "button", "macro", "sf-zero"],
-      "rule_count": 5,
+      "rule_count": 8,
       "file": "street_fighter.json"
+    },
+    {
+      "id": "harry_potter_wand",
+      "title": "🪄 Harry Potter Wand (5 呪文、要 Btn3)",
+      "description": "M5C を杖として振り、5 呪文 (Lumos / Wingardium Leviosa / Expelliarmus / Protego / Stupefy) を発動。Btn3 (一番手前) 押下中だけ判定 (Kano ワンド方式)、Btn3 で部分シーケンス衝突を回避。Phase 5.33+ 必須。",
+      "tags": ["magic", "wand", "harry-potter", "demo", "sequence", "text-input", "button"],
+      "rule_count": 5,
+      "file": "harry_potter_wand.json"
+    },
+    {
+      "id": "harry_potter_wingardium",
+      "title": "🪄 Wingardium Leviosa のみ (要 Btn3)",
+      "description": "代表呪文 Wingardium Leviosa の 4-waypoint シーケンス (swish & flick: DR→R→UR→D) のみを発動する単独プロファイル。Btn3 (一番手前) 押下中だけ判定。誤発動なし、デモに最適。",
+      "tags": ["magic", "wand", "harry-potter", "demo", "sequence", "text-input", "button", "single"],
+      "rule_count": 1,
+      "file": "harry_potter_wingardium.json"
+    },
+    {
+      "id": "harry_potter_wingardium_no_btn",
+      "title": "🪄 Wingardium Leviosa (ボタン無)",
+      "description": "Wingardium Leviosa を**ボタン押下なし**で発動するピュアジェスチャ版。単独呪文ゆえ部分シーケンス衝突なし、Kano-canonical UX に近い。",
+      "tags": ["magic", "wand", "harry-potter", "demo", "sequence", "text-input", "gesture-only", "single"],
+      "rule_count": 1,
+      "file": "harry_potter_wingardium_no_btn.json"
+    },
+    {
+      "id": "wingardium_hold_euler",
+      "title": "🪄 Wingardium Hold + Euler (要 Phase 5.39+)",
+      "description": "Hold + 中間 2 姿勢 + 絶対 Euler、Btn3 ゲート",
+      "tags": ["magic", "wand", "harry-potter", "hold", "euler", "phase-5.39"],
+      "rule_count": 1,
+      "file": "wingardium_hold_euler.json"
+    },
+    {
+      "id": "wingardium_hold_relative",
+      "title": "🪄 Wingardium Hold + 相対 Quat (要 Phase 5.39+)",
+      "description": "Hold + 中間 2 姿勢 + 相対 Quat + Btn3、Yaw drift 無関係",
+      "tags": ["magic", "wand", "harry-potter", "hold", "relative-quat", "phase-5.39"],
+      "rule_count": 1,
+      "file": "wingardium_hold_relative.json"
     }
   ]
 }

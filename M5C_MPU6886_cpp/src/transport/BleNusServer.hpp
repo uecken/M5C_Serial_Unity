@@ -56,23 +56,35 @@ public:
 
     void setHandler(CommandHandler h) { handler_ = h; }
 
-    // FW → Web に JSON 1 行送信
+    // FW → Web に JSON 1 行送信 (Phase 5.31: MTU 連動 + back-pressure)
     void sendJson(const JsonDocument& doc) {
         if (!tx_) return;
-        // ATT MTU 制限を考慮 (default 23B、ESP32 拡張で 244B、安全に 200B 区切り)
-        char out[512];
+        char out[1024];
         size_t n = serializeJson(doc, out, sizeof(out) - 2);
         if (n + 1 >= sizeof(out)) n = sizeof(out) - 2;
         out[n++] = '\n';
         out[n] = '\0';
 
-        const size_t MTU_CHUNK = 200;
-        for (size_t off = 0; off < n; off += MTU_CHUNK) {
-            size_t len = (n - off) > MTU_CHUNK ? MTU_CHUNK : (n - off);
+        // ピア毎の ATT MTU を取得 (NimBLE getServer()->getPeerMTU)
+        // 接続中なら最初のピアの MTU を採用、未接続/取得失敗なら 23 (default)
+        size_t chunk = 20;  // ATT_MTU 23 - 3 (ATT header)
+        NimBLEServer* server = NimBLEDevice::getServer();
+        if (server && server->getConnectedCount() > 0) {
+            NimBLEConnInfo info = server->getPeerInfo(0);
+            uint16_t mtu = server->getPeerMTU(info.getConnHandle());
+            if (mtu > 23) chunk = mtu - 3;
+            if (chunk > 244) chunk = 244;  // NimBLE 上限
+        }
+
+        for (size_t off = 0; off < n; off += chunk) {
+            size_t len = (n - off) > chunk ? chunk : (n - off);
             tx_->setValue((uint8_t*)(out + off), len);
+            // notify() の戻り値は使わない (NimBLE 1.4 は void)
             tx_->notify();
-            // 過渡期に詰まらないよう小さく待機
-            delay(5);
+            // back-pressure: GAP/GATT スタックが溢れないよう短時間譲る
+            // NimBLE は notify を内部 mbuf に積むので、過剰な poll は無駄。
+            // 1 tick (1ms) 譲るだけで FreeRTOS が tx を処理する余地を作る。
+            taskYIELD();
         }
     }
 

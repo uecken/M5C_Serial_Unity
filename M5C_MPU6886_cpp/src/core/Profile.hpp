@@ -81,6 +81,8 @@ public:
             ro["loop"] = r.loop;
             ro["priority"] = r.priority;
             ro["cooldown_ms"] = r.cooldown_ms;
+            // Phase 5.39: posture_basis 保存 (default 0 = absolute、後方互換)
+            ro["posture_basis"] = r.posture_basis;
         }
 
         File f = LittleFS.open(path, "w");
@@ -128,6 +130,8 @@ public:
             r.loop = ro["loop"] | false;
             r.priority = ro["priority"] | 0;
             r.cooldown_ms = ro["cooldown_ms"] | 500;
+            // Phase 5.39: posture_basis 読込 (省略時 0 = absolute、後方互換)
+            r.posture_basis = (uint8_t)(ro["posture_basis"] | 0);
             JsonArray states = ro["states"];
             uint8_t i = 0;
             for (JsonObject so : states) {
@@ -139,6 +143,10 @@ public:
             r.current_state = -1;
             r.state_enter_ms = 0;
             r.last_fire_ms = 0;
+            // Phase 5.39 runtime 初期化
+            r.q_ref[0] = 1.0f; r.q_ref[1] = 0.0f; r.q_ref[2] = 0.0f; r.q_ref[3] = 0.0f;
+            r.q_ref_valid = false;
+            r.stillness_since_ms = 0;
             outRules.push_back(r);
         }
         return true;
@@ -187,7 +195,7 @@ private:
             a["use_per_axis"] = s.match_condition.accel.use_per_axis;
             a["comparison"] = (uint8_t)s.match_condition.accel.comparison;
         }
-        // posture
+        // posture (Phase 5.21: quat / quat_dot_min 追加で 3D 表示・closest 計算が NVS 復元後も正確)
         if (s.match_condition.posture.enabled) {
             JsonObject p = c["posture"].to<JsonObject>();
             p["judge_by"] = (uint8_t)s.match_condition.posture.judge_by;
@@ -195,6 +203,9 @@ private:
             for (int i = 0; i < 3; i++) e.add(s.match_condition.posture.euler[i]);
             JsonArray et = p["euler_tol"].to<JsonArray>();
             for (int i = 0; i < 3; i++) et.add(s.match_condition.posture.euler_tol[i]);
+            JsonArray q = p["quat"].to<JsonArray>();
+            for (int i = 0; i < 4; i++) q.add(s.match_condition.posture.quat[i]);
+            p["quat_dot_min"] = s.match_condition.posture.quat_dot_min;
         }
         // button
         if (s.match_condition.button.enabled) {
@@ -203,15 +214,24 @@ private:
             b["state"] = s.match_condition.button.state;
         }
 
+        // Phase 5.39: stillness (静止検出) — required=false の場合は serialize 省略 (省サイズ)
+        if (s.match_condition.stillness_required) {
+            JsonObject st = c["stillness"].to<JsonObject>();
+            st["required"] = true;
+            st["window_ms"] = s.match_condition.stillness_window_ms;
+            st["accel_th_mg"] = s.match_condition.stillness_accel_th_mg;
+            st["gyro_th_dps"] = s.match_condition.stillness_gyro_th_dps;
+        }
+
         // on_enter
         JsonObject oe = out["on_enter"].to<JsonObject>();
         oe["type"] = (uint8_t)s.on_enter.type;
         oe["keys_len"] = s.on_enter.keys_len;
         JsonArray k = oe["keys"].to<JsonArray>();
-        for (uint8_t i = 0; i < s.on_enter.keys_len && i < 8; i++) k.add(s.on_enter.keys[i]);
+        for (uint8_t i = 0; i < s.on_enter.keys_len && i < 24; i++) k.add(s.on_enter.keys[i]);
         // Phase 5.14: key_modes (FIRE_MACRO 同時押し対応用)
         JsonArray km = oe["key_modes"].to<JsonArray>();
-        for (uint8_t i = 0; i < s.on_enter.keys_len && i < 8; i++) km.add(s.on_enter.key_modes[i]);
+        for (uint8_t i = 0; i < s.on_enter.keys_len && i < 24; i++) km.add(s.on_enter.key_modes[i]);
         oe["modifiers"] = s.on_enter.modifiers;
         oe["duration_ms"] = s.on_enter.duration_ms;
         oe["interval_ms"] = s.on_enter.interval_ms;
@@ -221,7 +241,7 @@ private:
         ox["type"] = (uint8_t)s.on_exit.type;
         ox["keys_len"] = s.on_exit.keys_len;
         JsonArray kx = ox["keys"].to<JsonArray>();
-        for (uint8_t i = 0; i < s.on_exit.keys_len && i < 8; i++) kx.add(s.on_exit.keys[i]);
+        for (uint8_t i = 0; i < s.on_exit.keys_len && i < 24; i++) kx.add(s.on_exit.keys[i]);
 
         out["min_dwell_ms"] = s.min_dwell_ms;
         out["max_dwell_ms"] = s.max_dwell_ms;
@@ -245,9 +265,15 @@ private:
             JsonArray e = p["euler"];
             JsonArray et = p["euler_tol"];
             for (int i = 0; i < 3; i++) {
-                s.match_condition.posture.euler[i] = e ? (float)(e[i] | 0) : 0;
-                s.match_condition.posture.euler_tol[i] = et ? (float)(et[i] | 180) : 180;
+                s.match_condition.posture.euler[i] = e ? e[i].as<float>() : 0.0f;
+                s.match_condition.posture.euler_tol[i] = et ? et[i].as<float>() : 180.0f;
             }
+            // Phase 5.21: quat / quat_dot_min も復元 (Web 3D 表示と Closest BY_QUAT モードのため)
+            JsonArray q = p["quat"];
+            for (int i = 0; i < 4; i++) {
+                s.match_condition.posture.quat[i] = q ? q[i].as<float>() : (i == 0 ? 1.0f : 0.0f);
+            }
+            s.match_condition.posture.quat_dot_min = p["quat_dot_min"] | 0.95f;
         }
         if (c["button"].is<JsonObject>()) {
             JsonObject b = c["button"];
@@ -256,16 +282,25 @@ private:
             s.match_condition.button.state = b["state"] | 0;
         }
 
+        // Phase 5.39: stillness 読込 (省略時 required=false で後方互換)
+        if (c["stillness"].is<JsonObject>()) {
+            JsonObject st = c["stillness"];
+            s.match_condition.stillness_required = st["required"] | false;
+            s.match_condition.stillness_window_ms = st["window_ms"] | 200;
+            s.match_condition.stillness_accel_th_mg = (uint8_t)(st["accel_th_mg"] | 100);
+            s.match_condition.stillness_gyro_th_dps = (uint8_t)(st["gyro_th_dps"] | 5);
+        }
+
         JsonObject oe = in["on_enter"];
         s.on_enter.type = (ActionType)(uint8_t)(oe["type"] | 0);
         s.on_enter.keys_len = oe["keys_len"] | 0;
         JsonArray k = oe["keys"];
-        for (uint8_t i = 0; i < s.on_enter.keys_len && i < 8 && k; i++) {
+        for (uint8_t i = 0; i < s.on_enter.keys_len && i < 24 && k; i++) {
             s.on_enter.keys[i] = (uint8_t)(k[i] | 0);
         }
         // Phase 5.14: key_modes (旧プロファイルでは存在しない場合があるので fallback)
         JsonArray km = oe["key_modes"];
-        for (uint8_t i = 0; i < s.on_enter.keys_len && i < 8; i++) {
+        for (uint8_t i = 0; i < s.on_enter.keys_len && i < 24; i++) {
             s.on_enter.key_modes[i] = km ? (uint8_t)(km[i] | 0) : 0;
         }
         s.on_enter.modifiers = oe["modifiers"] | 0;
@@ -276,7 +311,7 @@ private:
         s.on_exit.type = (ActionType)(uint8_t)(ox["type"] | 0);
         s.on_exit.keys_len = ox["keys_len"] | 0;
         JsonArray kx = ox["keys"];
-        for (uint8_t i = 0; i < s.on_exit.keys_len && i < 8 && kx; i++) {
+        for (uint8_t i = 0; i < s.on_exit.keys_len && i < 24 && kx; i++) {
             s.on_exit.keys[i] = (uint8_t)(kx[i] | 0);
         }
 

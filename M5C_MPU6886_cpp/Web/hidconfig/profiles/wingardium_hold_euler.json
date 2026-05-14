@@ -1,0 +1,24 @@
+{
+  "schema": "burst_motion_sample_v1",
+  "id": "wingardium_hold_euler",
+  "title": "🪄 Wingardium (Hold + 中間 2 姿勢、絶対 Euler 判定)",
+  "description": "Hold Start End モード + 中間 2 姿勢 + 絶対 Euler 判定。Btn3 押下で 'wingardium leviosa' 入力開始、終了姿勢で停止。Yaw ドリフトに弱いので起動後 5 分以内推奨。判定軸 Roll/Pitch のみ、Yaw 無視。",
+  "hardware_required": ["m5stickc"],
+  "rules": [
+    {
+      "name": "wingardium_hold_euler",
+      "ui_mode": "hold_with_waypoints",
+      "posture_basis": "absolute",
+      "start_posture":  { "euler": [120,   0, 0], "euler_tol": [25, 20, 180] },
+      "mid_postures": [
+        { "euler": [120,  30, 0], "euler_tol": [25, 20, 180] },
+        { "euler": [120, -30, 0], "euler_tol": [25, 20, 180] }
+      ],
+      "end_posture":    { "euler": [ 90,   0, 0], "euler_tol": [25, 20, 180] },
+      "button_idx": 3,
+      "button_state": 0,
+      "key": "w",
+      "cooldown_ms": 2000
+    }
+  ]
+}
