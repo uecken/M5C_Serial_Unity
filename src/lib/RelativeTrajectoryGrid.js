@@ -476,23 +476,25 @@ export class RelativeTrajectoryGrid {
     const ctx = this.ctx;
     const now = performance.now();
     ctx.lineWidth = 2;
-    ctx.beginPath();
-    let lastVisible = false;
+    // 古い→新しいで赤系グラデーション (age=1: 透明、age=0: 濃赤)
+    // セグメント単位で stroke (Canvas 2D は線分単位の gradient API がないため個別 stroke)
+    let prevP = null;
     for (let i = 0; i < this._trail.length; i++) {
       const e = this._trail[i];
       const fwd = this._projectAbsQuat(e.q);
       const p = this._forwardToCanvas(fwd);
-      if (!p.visible) { lastVisible = false; continue; }
-      if (!lastVisible) {
-        ctx.moveTo(p.x, p.y);
-        lastVisible = true;
-      } else {
+      if (!p.visible) { prevP = null; continue; }
+      if (prevP) {
+        const age = Math.min(1, (now - e.t) / this._trailDurationMs);
+        const alpha = Math.max(0.05, 1 - age);
+        ctx.strokeStyle = `rgba(239, 68, 68, ${alpha.toFixed(3)})`;
+        ctx.beginPath();
+        ctx.moveTo(prevP.x, prevP.y);
         ctx.lineTo(p.x, p.y);
+        ctx.stroke();
       }
+      prevP = p;
     }
-    // グラデーション赤 (全体一律 0.7、視覚的に重い色)
-    ctx.strokeStyle = 'rgba(239, 68, 68, 0.7)';
-    ctx.stroke();
   }
 
   _drawCurrent(cx, cy, R) {
