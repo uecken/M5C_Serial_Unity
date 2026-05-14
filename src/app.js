@@ -4,12 +4,12 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260514-140102';
-import { BleClient }    from './lib/BleClient.js?v=20260514-140102';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-140102';
-import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260514-140102';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-140102';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-140102';
+import { SerialClient } from './lib/SerialClient.js?v=20260514-140715';
+import { BleClient }    from './lib/BleClient.js?v=20260514-140715';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-140715';
+import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260514-140715';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-140715';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-140715';
 
 const html = htm.bind(h);
 
@@ -105,6 +105,8 @@ function App() {
   const [ruleList, setRuleList] = useState([]);   // FW から取得した rule 一覧
   const [triggerFlash, setTriggerFlash] = useState(null);  // {id, phase, name, t}
   const [watchEnabled, setWatchEnabled] = useState(false);
+  // Phase 5.39.2.4: 相対 3D デバッグ用 — 最後の trigger.hit event の内容
+  const [lastTriggerHit, setLastTriggerHit] = useState(null);  // {phase, q_ref, id, name, t}
 
   // 姿勢キャプチャ (Euler [r,p,y]、tol [r,p,y])
   const [startPosture, setStartPosture] = useState(null);   // {euler:[r,p,y], tol:[r,p,y]} | null
@@ -760,6 +762,14 @@ function App() {
       //   両ビュアの trail を clear (新しいジェスチャ開始の合図)
       // デバッグログ (Phase 5.39.2.3、一時的)
       console.log('[onTriggerHit]', { phase: d.phase, q_ref: d.q_ref, id: d.id, rule_name: d.rule_name });
+      // Phase 5.39.2.4: Web UI に表示するために state に保存 (F12 console 不要のデバッグ)
+      setLastTriggerHit({
+        phase: d.phase,
+        q_ref: d.q_ref,
+        id: d.id,
+        rule_name: d.rule_name,
+        t: Date.now(),
+      });
       if (d.phase === 'enter') {
         viewerRef.current?.clearTrail?.();
         relativeViewerRef.current?.clearTrail?.();
@@ -1948,7 +1958,7 @@ function App() {
         ` : null}
         ${viewerTab === 'relative' ? html`
           <div class="text-[11px] text-slate-500 mt-1 flex items-center gap-2 flex-wrap">
-            <span>👁 一人称視点: M5C 中央固定、ワールド (waypoint + 軸 + trail) が逆回転。</span>
+            <span>👁 q_ref 基準ビュー: M5C モデルが q_ref 基準で回転 (Btn3 押下時 q_ref 確定後)。</span>
             <label class="flex items-center gap-1 cursor-pointer">
               <input type="checkbox"
                 onChange=${(e) => relativeViewerRef.current?.setM5CMode?.(e.target.checked ? 'qref_anchor' : 'fixed')} />
@@ -1962,6 +1972,27 @@ function App() {
               <span class="ml-auto text-amber-700">
                 rule 一覧から相対モード rule をクリックして選択してください
               </span>
+            `}
+          </div>
+          <!-- Phase 5.39.2.4: 最終 trigger.hit event の状態 debug 表示 (F12 不要) -->
+          <div class="text-[11px] mt-1 px-2 py-1 rounded font-mono bg-slate-100 border border-slate-300">
+            ${lastTriggerHit ? html`
+              <span class="font-semibold">最終 trigger.hit:</span>
+              <span class="ml-1 ${lastTriggerHit.phase === 'enter' ? 'text-emerald-700 font-bold' : 'text-slate-700'}">
+                phase=<b>${lastTriggerHit.phase}</b>
+              </span>
+              <span class="ml-2">id=${lastTriggerHit.id}</span>
+              <span class="ml-2">${lastTriggerHit.rule_name}</span>
+              <span class="ml-2 ${Array.isArray(lastTriggerHit.q_ref) ? 'text-emerald-700' : 'text-red-600 font-semibold'}">
+                q_ref=${Array.isArray(lastTriggerHit.q_ref)
+                  ? `[${lastTriggerHit.q_ref.map((v) => v.toFixed(3)).join(',')}] ✓`
+                  : `${lastTriggerHit.q_ref === undefined ? '未送信(undef)' : JSON.stringify(lastTriggerHit.q_ref)} ✗`}
+              </span>
+              <span class="ml-2 text-slate-400">
+                ${((Date.now() - lastTriggerHit.t) / 1000).toFixed(1)}s 前
+              </span>
+            ` : html`
+              <span class="text-slate-400">trigger.hit イベント未受信 (Btn3 押下で発火)</span>
             `}
           </div>
         ` : null}
