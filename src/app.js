@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260514-104250';
-import { BleClient }    from './lib/BleClient.js?v=20260514-104250';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-104250';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-104250';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-104250';
+import { SerialClient } from './lib/SerialClient.js?v=20260514-105832';
+import { BleClient }    from './lib/BleClient.js?v=20260514-105832';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-105832';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-105832';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-105832';
 
 const html = htm.bind(h);
 
@@ -112,6 +112,11 @@ function App() {
   // 軸別 tol オーバーライド (Phase 5.15、空 or 0 なら postureTol 使用、180 で軸を実質除外)
   const [postureTolRoll, setPostureTolRoll] = useState('');
   const [postureTolPitch, setPostureTolPitch] = useState('');
+  // Phase 5.38: 判定軸の個別 ON/OFF (OFF の軸は euler_tol=180 で実質除外)
+  // Default: Roll/Pitch=true (通常のジェスチャ判定)、Yaw=false (Mahony Yaw はドリフトしやすいため既定 OFF)
+  const [postureUseRoll, setPostureUseRoll] = useState(true);
+  const [postureUsePitch, setPostureUsePitch] = useState(true);
+  const [postureUseYaw, setPostureUseYaw] = useState(false);
   // 姿勢判定方法: "euler" (default、Roll/Pitch tol)、"quat" (Quaternion 内積)
   const [postureJudgeBy, setPostureJudgeBy] = useState('euler');
 
@@ -859,21 +864,28 @@ function App() {
   }, []);
 
   // 姿勢キャプチャ (現在の sensor から、quat も保存)
+  // Phase 5.38: 判定軸チェックボックスを反映 — OFF の軸は euler_tol=180 で実質除外
+  const buildPostureTol = () => {
+    const tol = parseInt(postureTol) || 15;
+    return [
+      postureUseRoll  ? tol : 180,
+      postureUsePitch ? tol : 180,
+      postureUseYaw   ? tol : 180,
+    ];
+  };
   const captureStartPosture = () => {
     if (!sensor) { alert('センサーストリーム ON にしてから姿勢を取得してください'); return; }
-    const tol = parseInt(postureTol) || 15;
     setStartPosture({
       euler: [sensor.roll, sensor.pitch, sensor.yaw],
-      euler_tol: [tol, tol, tol * 6],
+      euler_tol: buildPostureTol(),
       quat: [sensor.qw, sensor.qx, sensor.qy, sensor.qz],
     });
   };
   const captureEndPosture = () => {
     if (!sensor) { alert('センサーストリーム ON にしてから姿勢を取得してください'); return; }
-    const tol = parseInt(postureTol) || 15;
     setEndPosture({
       euler: [sensor.roll, sensor.pitch, sensor.yaw],
-      euler_tol: [tol, tol, tol * 6],
+      euler_tol: buildPostureTol(),
       quat: [sensor.qw, sensor.qx, sensor.qy, sensor.qz],
     });
   };
@@ -904,7 +916,9 @@ function App() {
       if (!ok) return;
     }
     // ジンバルロック領域 (|Pitch| > 65°) チェック — Euler 判定が不安定になる
-    if (startPosture && Math.abs(startPosture.euler[1]) > 65) {
+    // Phase 5.38: 「判定軸 Pitch OFF」or「Quat 判定」なら警告不要 (Pitch を判定に使わないため)
+    if (startPosture && Math.abs(startPosture.euler[1]) > 65 &&
+        postureUsePitch && postureJudgeBy === 'euler') {
       const ok = confirm(
         '⚠ ジンバルロック領域です\n\n' +
         `Pitch = ${startPosture.euler[1].toFixed(1)}° は |Pitch| > 65° のジンバルロック領域に該当します。\n` +
@@ -912,7 +926,8 @@ function App() {
         'Roll/Yaw が安定して取れず、ルール判定が不安定になります。\n\n' +
         '推奨対応:\n' +
         ' ・姿勢を Pitch < ±65° の範囲で取り直す\n' +
-        ` ・判定方法を「Quaternion 内積」に切替 (現在の判定: ${postureJudgeBy})\n\n` +
+        ' ・判定方法を「Quaternion 内積」に切替\n' +
+        ' ・判定軸 Pitch のチェックを外す (Roll のみで判定)\n\n' +
         'このまま登録しますか?'
       );
       if (!ok) return;
@@ -2090,16 +2105,45 @@ function App() {
                 <option value="quat">Quaternion 内積</option>
               </select>
             </div>
+            <!-- Phase 5.38: 判定軸 個別 ON/OFF (OFF=tol 180 で実質除外、ジンバルロック回避用) -->
+            <div class="flex items-center gap-2 mb-1 flex-wrap text-[11px] bg-slate-100 px-2 py-1 rounded border border-slate-200">
+              <span class="text-slate-500">判定軸:</span>
+              <label class="flex items-center gap-0.5 cursor-pointer"
+                     title="Roll を判定に使う (OFF にすると euler_tol[Roll]=180 で除外)">
+                <input type="checkbox" checked=${postureUseRoll}
+                  onChange=${(e) => setPostureUseRoll(e.target.checked)} />
+                <b>Roll</b>
+              </label>
+              <label class="flex items-center gap-0.5 cursor-pointer"
+                     title="Pitch を判定に使う (OFF にすると euler_tol[Pitch]=180 で除外、ジンバルロック領域回避に有効)">
+                <input type="checkbox" checked=${postureUsePitch}
+                  onChange=${(e) => setPostureUsePitch(e.target.checked)} />
+                <b>Pitch</b>
+              </label>
+              <label class="flex items-center gap-0.5 cursor-pointer"
+                     title="Yaw を判定に使う (Mahony Yaw はドリフトしやすいため既定 OFF)">
+                <input type="checkbox" checked=${postureUseYaw}
+                  onChange=${(e) => setPostureUseYaw(e.target.checked)} />
+                <b>Yaw</b>
+              </label>
+              ${!postureUseRoll || !postureUsePitch || !postureUseYaw ? html`
+                <span class="text-slate-400 ml-1">
+                  → OFF 軸の tol=180 (除外)
+                </span>
+              ` : null}
+            </div>
             <div class="flex items-center gap-2 mb-1 flex-wrap text-xs">
               <button onClick=${captureStartPosture} disabled=${!connected || !sensor}
                 class="px-2 py-0.5 bg-cyan-200 hover:bg-cyan-300 rounded disabled:opacity-40">📷 開始姿勢</button>
               ${startPosture ? html`
-                <span class="font-mono text-cyan-700">R:${startPosture.euler[0].toFixed(0)} P:${startPosture.euler[1].toFixed(0)} Y:${startPosture.euler[2].toFixed(0)}</span>
+                <span class="font-mono ${postureUseRoll ? 'text-cyan-700' : 'text-slate-400 line-through'}">R:${startPosture.euler[0].toFixed(0)}</span>
+                <span class="font-mono ${postureUsePitch ? 'text-cyan-700' : 'text-slate-400 line-through'}">P:${startPosture.euler[1].toFixed(0)}</span>
+                <span class="font-mono ${postureUseYaw ? 'text-cyan-700' : 'text-slate-400 line-through'}">Y:${startPosture.euler[2].toFixed(0)}</span>
                 <button onClick=${clearStartPosture} class="text-xs text-red-600 hover:underline">×</button>
-                ${Math.abs(startPosture.euler[1]) > 65 ? html`
+                ${Math.abs(startPosture.euler[1]) > 65 && postureUsePitch && postureJudgeBy === 'euler' ? html`
                   <span class="text-[11px] text-red-700 font-semibold bg-red-100 px-2 py-0.5 rounded border border-red-300"
-                        title="Pitch が ±65° を超えるとジンバルロック領域に入り、Mahony Euler 出力が不安定になります。Roll/Yaw が縮退してルール判定が機能しません。">
-                    ⚠ Pitch ${startPosture.euler[1].toFixed(0)}° はジンバルロック (>±65°) — Euler 判定不可
+                        title="Pitch が ±65° を超えるとジンバルロック領域に入り、Mahony Euler 出力が不安定になります。Pitch 判定を外せば回避可能。">
+                    ⚠ Pitch ${startPosture.euler[1].toFixed(0)}° はジンバルロック (>±65°) — Pitch 判定 OFF を推奨
                   </span>
                 ` : null}
               ` : html`<span class="text-slate-400">未取得 (Stream ON で取得可)</span>`}
@@ -2109,12 +2153,14 @@ function App() {
                 <button onClick=${captureEndPosture} disabled=${!connected || !sensor}
                   class="px-2 py-0.5 bg-orange-200 hover:bg-orange-300 rounded disabled:opacity-40">📷 終了姿勢</button>
                 ${endPosture ? html`
-                  <span class="font-mono text-orange-700">R:${endPosture.euler[0].toFixed(0)} P:${endPosture.euler[1].toFixed(0)} Y:${endPosture.euler[2].toFixed(0)}</span>
+                  <span class="font-mono ${postureUseRoll ? 'text-orange-700' : 'text-slate-400 line-through'}">R:${endPosture.euler[0].toFixed(0)}</span>
+                  <span class="font-mono ${postureUsePitch ? 'text-orange-700' : 'text-slate-400 line-through'}">P:${endPosture.euler[1].toFixed(0)}</span>
+                  <span class="font-mono ${postureUseYaw ? 'text-orange-700' : 'text-slate-400 line-through'}">Y:${endPosture.euler[2].toFixed(0)}</span>
                   <button onClick=${clearEndPosture} class="text-xs text-red-600 hover:underline">×</button>
-                  ${Math.abs(endPosture.euler[1]) > 65 ? html`
+                  ${Math.abs(endPosture.euler[1]) > 65 && postureUsePitch && postureJudgeBy === 'euler' ? html`
                     <span class="text-[11px] text-red-700 font-semibold bg-red-100 px-2 py-0.5 rounded border border-red-300"
-                          title="Pitch が ±65° を超えるとジンバルロック領域に入り、Euler 判定が不安定になります。">
-                      ⚠ Pitch ${endPosture.euler[1].toFixed(0)}° はジンバルロック (>±65°) — Euler 判定不可
+                          title="Pitch が ±65° を超えるとジンバルロック領域に入り、Euler 判定が不安定になります。Pitch 判定を外せば回避可能。">
+                      ⚠ Pitch ${endPosture.euler[1].toFixed(0)}° はジンバルロック (>±65°) — Pitch 判定 OFF を推奨
                     </span>
                   ` : null}
                 ` : html`<span class="text-slate-400">未取得</span>`}
