@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260514-105832';
-import { BleClient }    from './lib/BleClient.js?v=20260514-105832';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-105832';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-105832';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-105832';
+import { SerialClient } from './lib/SerialClient.js?v=20260514-110301';
+import { BleClient }    from './lib/BleClient.js?v=20260514-110301';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-110301';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-110301';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-110301';
 
 const html = htm.bind(h);
 
@@ -916,18 +916,20 @@ function App() {
       if (!ok) return;
     }
     // ジンバルロック領域 (|Pitch| > 65°) チェック — Euler 判定が不安定になる
-    // Phase 5.38: 「判定軸 Pitch OFF」or「Quat 判定」なら警告不要 (Pitch を判定に使わないため)
+    // Phase 5.38: Pitch=asin 出力なので Pitch 自体は安定 (ただし ±90° で頭打ち)。
+    // 縮退するのは Roll/Yaw 側。Roll/Yaw OFF (Pitch のみ判定) or Quat 判定なら警告不要。
     if (startPosture && Math.abs(startPosture.euler[1]) > 65 &&
-        postureUsePitch && postureJudgeBy === 'euler') {
+        (postureUseRoll || postureUseYaw) && postureJudgeBy === 'euler') {
       const ok = confirm(
         '⚠ ジンバルロック領域です\n\n' +
         `Pitch = ${startPosture.euler[1].toFixed(1)}° は |Pitch| > 65° のジンバルロック領域に該当します。\n` +
-        'Mahony フィルタの Euler 出力は Pitch = asin で ±90° で縮退するため、\n' +
-        'Roll/Yaw が安定して取れず、ルール判定が不安定になります。\n\n' +
+        'Mahony フィルタの ZYX Euler 出力では Pitch=asin が ±90° で縮退し、\n' +
+        '同時に Roll / Yaw が一つの自由度に潰れて値が不安定になります。\n' +
+        '(Pitch そのものは asin の出力なので頭打ちはするが安定して取得できます)\n\n' +
         '推奨対応:\n' +
-        ' ・姿勢を Pitch < ±65° の範囲で取り直す\n' +
+        ' ・判定軸の <b>Roll / Yaw のチェックを外し、Pitch のみで判定</b>\n' +
         ' ・判定方法を「Quaternion 内積」に切替\n' +
-        ' ・判定軸 Pitch のチェックを外す (Roll のみで判定)\n\n' +
+        ' ・姿勢を |Pitch| < 65° の範囲で取り直す\n\n' +
         'このまま登録しますか?'
       );
       if (!ok) return;
@@ -2140,10 +2142,10 @@ function App() {
                 <span class="font-mono ${postureUsePitch ? 'text-cyan-700' : 'text-slate-400 line-through'}">P:${startPosture.euler[1].toFixed(0)}</span>
                 <span class="font-mono ${postureUseYaw ? 'text-cyan-700' : 'text-slate-400 line-through'}">Y:${startPosture.euler[2].toFixed(0)}</span>
                 <button onClick=${clearStartPosture} class="text-xs text-red-600 hover:underline">×</button>
-                ${Math.abs(startPosture.euler[1]) > 65 && postureUsePitch && postureJudgeBy === 'euler' ? html`
+                ${Math.abs(startPosture.euler[1]) > 65 && (postureUseRoll || postureUseYaw) && postureJudgeBy === 'euler' ? html`
                   <span class="text-[11px] text-red-700 font-semibold bg-red-100 px-2 py-0.5 rounded border border-red-300"
-                        title="Pitch が ±65° を超えるとジンバルロック領域に入り、Mahony Euler 出力が不安定になります。Pitch 判定を外せば回避可能。">
-                    ⚠ Pitch ${startPosture.euler[1].toFixed(0)}° はジンバルロック (>±65°) — Pitch 判定 OFF を推奨
+                        title="Pitch=asin が ±90° で縮退し、Roll/Yaw の値が一つの自由度に潰れて不安定になります。Pitch のみで判定すれば回避可能。">
+                    ⚠ Pitch ${startPosture.euler[1].toFixed(0)}° はジンバルロック (>±65°) — Roll/Yaw 判定 OFF (Pitch のみ) を推奨
                   </span>
                 ` : null}
               ` : html`<span class="text-slate-400">未取得 (Stream ON で取得可)</span>`}
@@ -2157,10 +2159,10 @@ function App() {
                   <span class="font-mono ${postureUsePitch ? 'text-orange-700' : 'text-slate-400 line-through'}">P:${endPosture.euler[1].toFixed(0)}</span>
                   <span class="font-mono ${postureUseYaw ? 'text-orange-700' : 'text-slate-400 line-through'}">Y:${endPosture.euler[2].toFixed(0)}</span>
                   <button onClick=${clearEndPosture} class="text-xs text-red-600 hover:underline">×</button>
-                  ${Math.abs(endPosture.euler[1]) > 65 && postureUsePitch && postureJudgeBy === 'euler' ? html`
+                  ${Math.abs(endPosture.euler[1]) > 65 && (postureUseRoll || postureUseYaw) && postureJudgeBy === 'euler' ? html`
                     <span class="text-[11px] text-red-700 font-semibold bg-red-100 px-2 py-0.5 rounded border border-red-300"
-                          title="Pitch が ±65° を超えるとジンバルロック領域に入り、Euler 判定が不安定になります。Pitch 判定を外せば回避可能。">
-                      ⚠ Pitch ${endPosture.euler[1].toFixed(0)}° はジンバルロック (>±65°) — Pitch 判定 OFF を推奨
+                          title="Pitch=asin が ±90° で縮退し、Roll/Yaw の値が一つの自由度に潰れて不安定になります。Pitch のみで判定すれば回避可能。">
+                      ⚠ Pitch ${endPosture.euler[1].toFixed(0)}° はジンバルロック (>±65°) — Roll/Yaw 判定 OFF (Pitch のみ) を推奨
                     </span>
                   ` : null}
                 ` : html`<span class="text-slate-400">未取得</span>`}
