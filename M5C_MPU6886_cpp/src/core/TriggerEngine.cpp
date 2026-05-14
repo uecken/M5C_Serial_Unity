@@ -396,6 +396,23 @@ void TriggerEngine::evaluateRule(ActionRule& rule, const SensorState& s) {
         return;
     }
 
+    // Phase 5.39.2.10: hold_with_waypoints (loop=false, states_count>=2) で、
+    // rule 代表 button (state[0].button) が成立しなくなったら release event 発火 + state リセット。
+    // 「Btn3 押下中だけジェスチャ評価、離したら中断」UX を実現。
+    // 現在 state がどこ (state[N-1] = end_posture で button=None でも) にいても
+    // rule の代表 button condition を見るので確実に release 発火。
+    if (!rule.loop && rule.states_count >= 2) {
+        const auto& btn0 = rule.states[0].match_condition.button;
+        if (btn0.enabled && evalButton(btn0, s) == 0) {
+            executeAction(cur.on_exit);
+            fireWatchEvent(rule, "release");
+            rule.current_state = -1;
+            rule.q_ref_valid = false;
+            rule.stillness_since_ms = 0;
+            return;
+        }
+    }
+
     // 次状態の条件一致で遷移
     if (matchCondition(rule.states[next].match_condition, s, &rule)) {
         executeAction(cur.on_exit);
