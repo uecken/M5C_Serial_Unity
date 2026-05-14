@@ -193,26 +193,27 @@ export class RelativeIMUViewer {
    *     - ボタン離す → q_initial 解除 → M5C モデル中央に戻る
    */
   setQRef(qrefArr, valid) {
-    // デバッグログ (Phase 5.39.2.3: 一時的、ユーザー検証完了後に削除)
     console.log('[RelativeIMUViewer.setQRef]', { qrefArr, valid });
     if (valid && Array.isArray(qrefArr) && qrefArr.length === 4) {
       const [qw, qx, qy, qz] = qrefArr;
       this._qRef.set(-qx, qz, qy, qw);
       this._qRefValid = true;
-      // q_ref を初期姿勢として設定 → M5C モデルが q_ref からの相対回転を表示開始
       this._qInitial.copy(this._qRef);
       this._qInitialValid = true;
       this.setTrajectoryMode('fixed');
-      console.log('[RelativeIMUViewer] q_initial 設定完了、M5C 回転開始すべき');
+      // ★ Phase 5.39.2.9: ボタン押下直後は M5C モデル位置を強制 identity に snap
+      // (slerp の前回値残響で「中央にならない」問題対策)
+      // 以降の _tick で q_initial⁻¹ * q_current の値で滑らかに動く
+      this.m5StickC.quaternion.identity();
+      console.log('[RelativeIMUViewer] q_initial 設定 + M5C モデル中央スナップ完了');
     } else {
       this._qRef.identity();
       this._qRefValid = false;
-      // q_initial も解除 → M5C モデル中央固定に戻る
       this._qInitial.identity();
       this._qInitialValid = false;
       this.setTrajectoryMode('preview');
+      // ボタン離す時は slerp で滑らかに中央に戻る (_tick で識別目標になる)
     }
-    // q_ref 変化時は waypoint も描き直し
     this._rebuildWaypoints();
   }
 
