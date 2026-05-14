@@ -380,9 +380,10 @@ export class RelativeIMUViewer {
   }
 
   _quatToSpherePoint(q) {
-    const dir = new THREE.Vector3(0, 0, 1);
-    dir.applyQuaternion(q).normalize();
-    return dir;
+    // Phase 5.39.3a.7: 共有 temp Vector3 を再利用 (hot loop で大量呼出)
+    //   呼出側は即 copy/setXYZ で値を取り出すこと。並列呼出不可。
+    if (!this._tmpVec) this._tmpVec = new THREE.Vector3();
+    return this._tmpVec.set(0, 0, 1).applyQuaternion(q).normalize();
   }
 
   getFrameCount() { const n = this._frameCount || 0; this._frameCount = 0; return n; }

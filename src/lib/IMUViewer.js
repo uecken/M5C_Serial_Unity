@@ -105,6 +105,14 @@ export class IMUViewer {
     this.targetQuat = new THREE.Quaternion();
     this.smoothing = opts.smoothing ?? 0.3;
     this.qRef = new THREE.Quaternion();   // base 姿勢 (Init Yaw 用)
+    // Phase 5.39.3a.7: hot loop で再利用する temp object (clone()/new を排除)
+    this._tmpQuat1 = new THREE.Quaternion();
+    this._tmpQuat2 = new THREE.Quaternion();
+    this._tmpVec1 = new THREE.Vector3();
+    this._tmpVec2 = new THREE.Vector3();
+    this._upVec = new THREE.Vector3(0, 1, 0);   // 不変
+    this._zVec = new THREE.Vector3(0, 0, 1);    // 不変
+    this._trailDirty = true;
 
     // resize
     this._resizeObserver = new ResizeObserver(() => this._onResize());
@@ -201,13 +209,14 @@ export class IMUViewer {
     if (this.selectedRuleId === -1) this.targetTrajectoryLine.visible = false;
   }
 
-  /** Phase 5.39.2: 過去軌跡 trail に新点を追加 (M5C 軸 quat) */
+  /** Phase 5.39.2: 過去軌跡 trail に新点を追加 (M5C 軸 quat)
+   *  Phase 5.39.3a.7: _updateTrailGeometry を _tick 側に集約 (50Hz → 60Hz 上限) */
   addTrailPoint(qw, qx, qy, qz, timestamp) {
     const t = (typeof timestamp === 'number') ? timestamp : performance.now();
     const q = new THREE.Quaternion(-qx, qz, qy, qw);
     this._trail.push({ q, t });
     this._pruneTrail(t);
-    this._updateTrailGeometry(t);
+    this._trailDirty = true;
   }
 
   /** 3 秒経過点を削除 */
@@ -230,7 +239,9 @@ export class IMUViewer {
     const n = this._trail.length;
     for (let i = 0; i < n; i++) {
       const e = this._trail[i];
-      const p = this._quatToSpherePoint(e.q).clone().multiplyScalar(1.005);
+      // Phase 5.39.3a.7: _quatToSpherePoint の戻り Vector3 を直接 multiplyScalar (clone 削除)
+      const p = this._quatToSpherePoint(e.q);
+      p.multiplyScalar(1.005);
       posAttr.setXYZ(i, p.x, p.y, p.z);
       const age = (now - e.t) / this._trailDurationMs;        // 0 (新) → 1 (古)
       const alpha = Math.max(0, 1 - age);                     // 古いほど薄い → 色を白に fade
@@ -243,6 +254,7 @@ export class IMUViewer {
     posAttr.needsUpdate = true;
     colAttr.needsUpdate = true;
     geo.setDrawRange(0, n);
+    this._trailDirty = false;
   }
 
   /** trail 全消去 (例えば state[0] enter 時 = ボタン押下時) */
@@ -285,18 +297,14 @@ export class IMUViewer {
    */
   setGravityVector(ax, ay, az) {
     if (!this.gravityArrow.visible) return;
-    // 1. M5C body 軸 → Three body 軸 remap
-    const bodyAccel = new THREE.Vector3(-ax, az, ay);
+    // Phase 5.39.3a.7: _tmpVec1 / _tmpQuat1 / _upVec を再利用 (new を排除)
+    const bodyAccel = this._tmpVec1.set(-ax, az, ay);
     const mag = bodyAccel.length();
     if (mag < 1e-6) return;
     bodyAccel.divideScalar(mag);
-    // 2. body → world: m5StickC の現在クォータニオンを適用
-    const worldAccel = bodyAccel.applyQuaternion(this.m5StickC.quaternion);
-    // 3. accel (反作用、UP) を negate → 重力方向 (DOWN)
-    const gravityDir = worldAccel.negate();
-    // 4. arrow +Y を gravityDir に向ける
-    const up = new THREE.Vector3(0, 1, 0);
-    const q = new THREE.Quaternion().setFromUnitVectors(up, gravityDir);
+    bodyAccel.applyQuaternion(this.m5StickC.quaternion);
+    bodyAccel.negate();   // 重力方向
+    const q = this._tmpQuat1.setFromUnitVectors(this._upVec, bodyAccel);
     this.gravityArrow.quaternion.copy(q);
   }
 
@@ -345,7 +353,7 @@ export class IMUViewer {
   /** 現在姿勢のドット位置 (赤) */
   setCurrentDot(qw, qx, qy, qz) {
     this.dots.current.visible = true;
-    const q = new THREE.Quaternion(-qx, qz, qy, qw);
+    const q = this._tmpQuat2.set(-qx, qz, qy, qw);   // Phase 5.39.3a.7 temp reuse
     this.dots.current.position.copy(this._quatToSpherePoint(q));
   }
 
@@ -356,15 +364,17 @@ export class IMUViewer {
       return;
     }
     this.dots.closest.visible = true;
-    const q = new THREE.Quaternion(-qx, qz, qy, qw);
+    const q = this._tmpQuat2.set(-qx, qz, qy, qw);
     this.dots.closest.position.copy(this._quatToSpherePoint(q));
   }
 
-  /** quaternion から球面上の点を計算 (z=1 単位ベクトルを quat で回転) */
+  /** quaternion から球面上の点を計算 (z=1 単位ベクトルを quat で回転)
+   *  Phase 5.39.3a.7: hot loop で大量呼出 (trail × 90 × 60Hz) されるため
+   *  共有 temp Vector3 を使い、毎回 new せず再利用する。
+   *  注意: 戻り値は temp なので呼出側は即 .copy() / setXYZ 等で値を取り出すこと。
+   *  並列に複数呼出は不可 (同じ temp が上書きされる)。trail loop は逐次なので問題なし。 */
   _quatToSpherePoint(q) {
-    const dir = new THREE.Vector3(0, 0, 1);
-    dir.applyQuaternion(q).normalize();
-    return dir;
+    return this._tmpVec2.set(0, 0, 1).applyQuaternion(q).normalize();
   }
 
   /** Init Yaw: 現在の姿勢を base にする */
@@ -394,9 +404,13 @@ export class IMUViewer {
     if (!this._running) return;
     if (this._renderEnabled === false) return;   // Phase 5.39.2: タブ非表示時は描画停止
     this._frameCount = (this._frameCount || 0) + 1;
-    // base からの相対回転を M5StickC モデルに適用 (球体は固定、ユーザー仕様)
-    const q = this.qRef.clone().multiply(this.targetQuat);
+    // Phase 5.39.3a.7: temp quat 再利用 (clone() 排除)
+    const q = this._tmpQuat1.copy(this.qRef).multiply(this.targetQuat);
     this.m5StickC.quaternion.slerp(q, this.smoothing);
+    // Phase 5.39.3a.7: trail 再構築は RAF tick で 1 回だけ (addTrailPoint 内では _trailDirty フラグだけ)
+    if (this._trailDirty) {
+      this._updateTrailGeometry(performance.now());
+    }
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame(this._tick);
   }
