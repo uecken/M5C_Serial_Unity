@@ -48,6 +48,22 @@
       "tags": ["magic", "wand", "harry-potter", "demo", "sequence", "text-input", "button"],
       "rule_count": 5,
       "file": "harry_potter_wand.json"
+    },
+    {
+      "id": "harry_potter_wingardium",
+      "title": "🪄 Wingardium Leviosa のみ (要 Btn3)",
+      "description": "代表呪文 Wingardium Leviosa の 4-waypoint シーケンス (swish & flick: DR→R→UR→D) のみを発動する単独プロファイル。Btn3 (一番手前) 押下中だけ判定。誤発動なし、デモに最適。",
+      "tags": ["magic", "wand", "harry-potter", "demo", "sequence", "text-input", "button", "single"],
+      "rule_count": 1,
+      "file": "harry_potter_wingardium.json"
+    },
+    {
+      "id": "harry_potter_wingardium_no_btn",
+      "title": "🪄 Wingardium Leviosa (ボタン無)",
+      "description": "Wingardium Leviosa を**ボタン押下なし**で発動するピュアジェスチャ版。単独呪文ゆえ部分シーケンス衝突なし、Kano-canonical UX に近い。",
+      "tags": ["magic", "wand", "harry-potter", "demo", "sequence", "text-input", "gesture-only", "single"],
+      "rule_count": 1,
+      "file": "harry_potter_wingardium_no_btn.json"
     }
   ]
 }
