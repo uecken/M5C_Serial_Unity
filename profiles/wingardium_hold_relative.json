@@ -1,20 +1,22 @@
 {
   "schema": "burst_motion_sample_v1",
   "id": "wingardium_hold_relative",
-  "title": "🪄 Wingardium (Hold + 中間 2 姿勢、相対 Quat + Btn3)",
-  "description": "Hold Start End モード + 中間 2 姿勢 + 相対 Quaternion 判定 + Btn3 ゲート。Btn3 押下時の姿勢を q_ref として、そこからの相対回転で軌跡を捉える。持ち方自由、Yaw ドリフト無関係。",
+  "title": "🪄 Wingardium Hold + 相対 Quat (Wand Catalogue 準拠 U 字)",
+  "description": "Wand Movements Catalogue (Web/img/wand_movements.png) の Wingardium Leviosa (U 字 swish & flick) を相対 Quat で再現。Init Yaw で初期姿勢を設定してから Btn3 押下しつつ U 字を描く。Roll は除外 (twist 無関係)、Yaw/Pitch で U 字を表現。",
   "hardware_required": ["m5stickc"],
+  "engine": {"closest_only": false, "cooldown_ms": 2000},
   "rules": [
     {
-      "name": "wingardium_hold_relative",
+      "name": "wingardium_leviosa",
       "ui_mode": "hold_with_waypoints",
       "posture_basis": "relative",
-      "start_posture":  { "euler": [  0,   0, 0], "euler_tol": [180, 180, 180] },
+      "waypoint_order": "sequential",
+      "start_posture":  { "euler": [0, 0, 0],     "euler_tol": [180, 180, 180] },
       "mid_postures": [
-        { "euler": [ 30,   0, 0], "euler_tol": [25, 25, 180] },
-        { "euler": [ 60, -30, 0], "euler_tol": [25, 25, 180] }
+        { "euler": [0, -45, 30],  "euler_tol": [180, 20, 25] },
+        { "euler": [0, -60, 0],   "euler_tol": [180, 15, 25] }
       ],
-      "end_posture":    { "euler": [  0, -30, 0], "euler_tol": [25, 25, 180] },
+      "end_posture":    { "euler": [0, 20, 20],   "euler_tol": [180, 20, 25] },
       "button_idx": 3,
       "button_state": 0,
       "key": "w",

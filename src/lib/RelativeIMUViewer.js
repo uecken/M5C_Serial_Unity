@@ -1,17 +1,22 @@
-// Burst Motion - RelativeIMUViewer (Phase 5.39.2 新規)
+// Burst Motion - RelativeIMUViewer (Phase 5.39.2 新規、Phase 5.39.3a 改修)
 //
 // 一人称視点 (first-person view) の 3D ビュア。
-// - M5C モデル: 中央固定 (default identity)、オプションで q_ref に定着
-// - worldGroup: q_current⁻¹ で逆回転 (= ワールドが動いて見える、M5C 視点は固定)
+// - M5C モデル: 中央固定 (default identity)、オプションで q_initial に定着
+// - worldGroup: ワールド固定 (球面 / waypoint / 軌跡)
 // - 相対モード rule の rel_quat waypoints を worldGroup 内の球面上に配置
 // - 軌跡: ハイブリッド (押下前=薄い破線プレビュー、押下後=濃い実線固定)
 // - 過去軌跡 trail: 3 秒履歴
 //
+// Phase 5.39.3a (2026-05-14) 変更:
+//   - 「初期姿勢 q_initial」を rule 単位 q_ref → デバイス単位 q_initial に Demote
+//   - setQRef → setQInitial にリネーム、posture.init コマンド経由でのみ更新
+//   - ボタン押下 (trigger.hit enter) では q_initial を更新しない
+//
 // 既存 IMUViewer (絶対 3D ビュア) との設計差:
 //   ┌─────────────────────────────┬──────────────────────────────┐
 //   │ 絶対 IMUViewer              │ 相対 RelativeIMUViewer       │
-//   │ M5C を回転 (球は固定)        │ worldGroup を逆回転 (M5C 固定)│
-//   │ target.quat = 絶対座標       │ target.euler = q_ref からの相対│
+//   │ M5C を回転 (球は固定)        │ M5C を q_initial⁻¹ * q_current で回転 │
+//   │ target.quat = 絶対座標       │ target.euler = q_initial からの相対 │
 //   └─────────────────────────────┴──────────────────────────────┘
 
 import * as THREE from 'three';
@@ -78,10 +83,10 @@ export class RelativeIMUViewer {
     this._m5cMode = opts.m5cMode || 'fixed';   // 'fixed' | 'qref_anchor'
     this._trajectoryMode = 'preview';          // 'preview' (破線) | 'fixed' (実線)
     this._qCurrent = new THREE.Quaternion();   // 現在 quat (M5C 軸変換済、Three 系)
-    this._qInitial = new THREE.Quaternion();   // 初期姿勢 (基準)、最初の setQuaternion で自動取得
+    // Phase 5.39.3a: q_initial はデバイス単位 (posture.init コマンド or NVS 復元値)
+    //   ボタン押下では更新しない (= Init Yaw / Reset Base のみで更新)
+    this._qInitial = new THREE.Quaternion();   // 初期姿勢 (基準)
     this._qInitialValid = false;
-    this._qRef = new THREE.Quaternion();       // 確定 q_ref (M5C 軸変換済、Three 系)
-    this._qRefValid = false;
     this._selectedRule = null;                 // {posture_basis, start_posture, mid_postures, end_posture}
     this.smoothing = opts.smoothing ?? 0.3;
 
@@ -181,40 +186,45 @@ export class RelativeIMUViewer {
     this._m5cMode = (mode === 'qref_anchor') ? 'qref_anchor' : 'fixed';
   }
 
-  /** q_ref 確定通知 (trigger.hit phase='enter' で受信)
-   *   - valid=true: 実 q_ref を基準姿勢 (q_initial) として設定 → M5C モデル回転開始
+  /** Phase 5.39.3a: q_initial 確定通知 (Init Yaw / Reset Base / 接続時 posture.init.get で受信)
+   *   - valid=true: 実 q_initial を基準姿勢として設定 → M5C モデル回転開始
    *                 waypoint を固定 (濃い実線)、trajectoryMode='fixed'
    *   - valid=false: q_initial リセット → M5C モデル中央固定、プレビュー軌跡に戻す
    *
-   *  ★ ユーザー仕様 (Phase 5.39.2.2):
-   *     - ボタン押下前は M5C モデル中央で動かない (q_initial 未設定)
-   *     - ボタン押下 (state[0] enter で q_ref 受信) → q_initial = q_ref に設定
-   *       以降、M5C モデルは「q_ref 基準でデバイスがどう動いたか」を表示
-   *     - ボタン離す → q_initial 解除 → M5C モデル中央に戻る
+   *  ★ Phase 5.39.3a 仕様 (Demote 後):
+   *     - 「初期姿勢 q_initial」はデバイス単位 (NVS 永続)、posture.init コマンドのみで更新
+   *     - Init Yaw 押下 → posture.init source=current → FW NVS 保存 → ack で q_initial を Web に返送
+   *     - Reset Base 押下 → posture.init source=identity → 同上
+   *     - ボタン押下 (trigger.hit enter) では q_initial を更新しない
+   *     - M5C モデルは常に q_initial⁻¹ * q_current で回転表示 (押下前後でリセットされない)
+   *
+   *  setQRef は廃止 (Phase 5.39.2 互換性のため呼出は何もしない wrapper を残す)。
    */
-  setQRef(qrefArr, valid) {
-    console.log('[RelativeIMUViewer.setQRef]', { qrefArr, valid });
-    if (valid && Array.isArray(qrefArr) && qrefArr.length === 4) {
-      const [qw, qx, qy, qz] = qrefArr;
-      this._qRef.set(-qx, qz, qy, qw);
-      this._qRefValid = true;
-      this._qInitial.copy(this._qRef);
+  setQInitial(qInitArr, valid) {
+    console.log('[RelativeIMUViewer.setQInitial]', { qInitArr, valid });
+    if (valid && Array.isArray(qInitArr) && qInitArr.length === 4) {
+      const [qw, qx, qy, qz] = qInitArr;
+      // 軸変換: M5C(qw,qx,qy,qz) → Three(-qx, qz, qy, qw)
+      this._qInitial.set(-qx, qz, qy, qw);
       this._qInitialValid = true;
       this.setTrajectoryMode('fixed');
-      // ★ Phase 5.39.2.9: ボタン押下直後は M5C モデル位置を強制 identity に snap
+      // ★ Phase 5.39.2.9 維持: q_initial 設定直後は M5C モデル位置を強制 identity に snap
       // (slerp の前回値残響で「中央にならない」問題対策)
       // 以降の _tick で q_initial⁻¹ * q_current の値で滑らかに動く
       this.m5StickC.quaternion.identity();
       console.log('[RelativeIMUViewer] q_initial 設定 + M5C モデル中央スナップ完了');
     } else {
-      this._qRef.identity();
-      this._qRefValid = false;
       this._qInitial.identity();
       this._qInitialValid = false;
       this.setTrajectoryMode('preview');
-      // ボタン離す時は slerp で滑らかに中央に戻る (_tick で識別目標になる)
     }
     this._rebuildWaypoints();
+  }
+
+  /** Phase 5.39.2 互換性のため残置 (Phase 5.39.3a 後は no-op)。新コードは setQInitial を使用 */
+  setQRef(qrefArr, valid) {
+    console.warn('[RelativeIMUViewer.setQRef] deprecated since Phase 5.39.3a, use setQInitial instead');
+    // 何もしない (q_initial は posture.init コマンドのみで更新)
   }
 
   /** 軌跡表示モード ('preview' = 薄い破線 | 'fixed' = 濃い実線) */
@@ -361,12 +371,12 @@ export class RelativeIMUViewer {
     if (!this._renderEnabled) return;   // タブ非表示時は描画停止
     this._frameCount = (this._frameCount || 0) + 1;
 
-    // ★ 相対 3D の正しい仕様 (Phase 5.39.2.2):
+    // ★ 相対 3D の仕様 (Phase 5.39.3a 改修):
     //   - ワールド (球面 / waypoint / 軌跡) は固定 (worldGroup.quaternion = identity)
-    //   - M5C モデルは「ボタン押下時の q_ref を基準」とした相対回転で動く
-    //     ・q_initial 未設定 (= ボタン押下前) → M5C モデルは中央固定 (identity)
-    //     ・q_initial 確定 (= setQRef で q_ref 受信) → M5C モデル = q_initial⁻¹ * q_current
-    //   - 起動時に自動取得はしない (= 絶対 3D と同じ見え方になるバグ回避)
+    //   - M5C モデルは「デバイス単位 q_initial を基準」とした相対回転で動く
+    //     ・q_initial 未設定 (= Init Yaw 未押下、NVS にもなし) → M5C モデルは中央固定
+    //     ・q_initial 確定 (= setQInitial で posture.init 経由受信) → q_initial⁻¹ * q_current
+    //   - ボタン押下 (trigger.hit enter) では q_initial は更新されない (Phase 5.39.3a の Demote)
 
     // ワールド固定
     this.worldGroup.quaternion.identity();

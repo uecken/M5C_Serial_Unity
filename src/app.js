@@ -4,12 +4,13 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260514-145216';
-import { BleClient }    from './lib/BleClient.js?v=20260514-145216';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-145216';
-import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260514-145216';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-145216';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-145216';
+import { SerialClient } from './lib/SerialClient.js?v=20260514-162341';
+import { BleClient }    from './lib/BleClient.js?v=20260514-162341';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-162341';
+import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260514-162341';
+import { RelativeTrajectoryGrid } from './lib/RelativeTrajectoryGrid.js?v=20260514-162341';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-162341';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-162341';
 
 const html = htm.bind(h);
 
@@ -114,6 +115,9 @@ function App() {
   // Phase 5.39: Hold with Waypoints — 中間姿勢 (最大 2 個) と判定基準
   const [midPostures, setMidPostures] = useState([]);   // [{euler, euler_tol, quat} | null, ...] 最大 2 個
   const [postureBasis, setPostureBasis] = useState('absolute');   // 'absolute' (default、Mahony 起動基準) | 'relative' (button 押下時を基準)
+  // Phase 5.39.3d: waypoint 判定順序 (sequential = 現状、unordered = 案 B、dtw = 案 C)
+  //   現状 FW は sequential のみ動作、unordered/dtw は UI セレクタにのみ表示 (グレーアウト)
+  const [waypointOrder, setWaypointOrder] = useState('sequential');
   const [postureTol, setPostureTol] = useState(15);   // ±degrees (一律、簡易)
   // 軸別 tol オーバーライド (Phase 5.15、空 or 0 なら postureTol 使用、180 で軸を実質除外)
   const [postureTolRoll, setPostureTolRoll] = useState('');
@@ -172,6 +176,9 @@ function App() {
   // Phase 5.39.2: 相対 3D ビュア (一人称視点) 用 canvas + viewer ref
   const relativeCanvasRef = useRef(null);
   const relativeViewerRef = useRef(null);
+  // Phase 5.39.3b: 相対 2D 軌跡 (ハリポタ Wand chart 風) canvas + grid ref
+  const relativeTrajectoryCanvasRef = useRef(null);
+  const relativeTrajectoryGridRef = useRef(null);
   // Phase 5.39.2: 相対モード rule 登録時の qRef キャプチャ用 (開始姿勢時の sensor.quat を一時保持)
   //   ref で持つので state 再 render を引き起こさない
   const qRefCaptureRef = useRef(null);   // [qw, qx, qy, qz] | null
@@ -181,7 +188,8 @@ function App() {
   const gyroChartCanvasRef = useRef(null);
   const gyroChartRef = useRef(null);
 
-  // Phase 5.39.2: ビュータブ ('absolute' | '2d' | 'relative')、デフォルト absolute
+  // Phase 5.39.2 / Phase 5.39.3b: ビュータブ
+  //   'absolute' | '2d' | 'relative' | 'relative_2d' (Phase 5.39.3b 新規)
   const [viewerTab, setViewerTab] = useState('absolute');
   // Phase 5.39.2: 選択 rule (rule.list 行クリックで切替、-1 = 未選択)
   const [selectedRuleId, setSelectedRuleId] = useState(-1);
@@ -302,10 +310,32 @@ function App() {
     };
   }, [relativeCanvasRef.current]);
 
-  // Phase 5.39.2: タブ切替時に各ビュアの RAF を ON/OFF (非表示タブの CPU 節約)
+  // Phase 5.39.3b: 相対 2D 軌跡 grid 初期化
+  useEffect(() => {
+    if (!relativeTrajectoryCanvasRef.current) return;
+    if (relativeTrajectoryGridRef.current) return;
+    relativeTrajectoryGridRef.current = new RelativeTrajectoryGrid(relativeTrajectoryCanvasRef.current);
+    relativeTrajectoryGridRef.current.resize();
+    const onResize = () => relativeTrajectoryGridRef.current?.resize();
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      if (relativeTrajectoryGridRef.current) {
+        relativeTrajectoryGridRef.current.destroy();
+        relativeTrajectoryGridRef.current = null;
+      }
+    };
+  }, [relativeTrajectoryCanvasRef.current]);
+
+  // Phase 5.39.2 / 5.39.3b: タブ切替時に各ビュアの RAF を ON/OFF (非表示タブの CPU 節約)
   useEffect(() => {
     viewerRef.current?.setRenderEnabled?.(viewerTab === 'absolute');
     relativeViewerRef.current?.setRenderEnabled?.(viewerTab === 'relative');
+    relativeTrajectoryGridRef.current?.setRenderEnabled?.(viewerTab === 'relative_2d');
+    // タブ切替直後に resize (display:none → block で 0×0 に縮んでいた場合の復元)
+    if (viewerTab === 'relative_2d') {
+      requestAnimationFrame(() => relativeTrajectoryGridRef.current?.resize?.());
+    }
   }, [viewerTab]);
 
   // 2D グリッド初期化 (Phase 5.28: ドラッグ編集対応)
@@ -545,6 +575,7 @@ function App() {
       // 選択解除 → 軌跡を消す
       viewerRef.current?.setTargetTrajectory?.([]);
       relativeViewerRef.current?.setSelectedRule?.(null);
+      relativeTrajectoryGridRef.current?.setSelectedRule?.(null);
       return;
     }
     // 絶対 3D ビュアの目標軌跡 (絶対 quat、選択中 rule のみ濃い実線)
@@ -567,12 +598,14 @@ function App() {
       }
       viewerRef.current?.setTargetTrajectory?.(wps);
       relativeViewerRef.current?.setSelectedRule?.(null);
+      relativeTrajectoryGridRef.current?.setSelectedRule?.(rule);   // 絶対 rule でも案内表示用に渡す
     } else {
-      // 相対モード rule: RelativeIMUViewer に渡す。絶対ビュアの軌跡は消す
-      //   (target は q_ref からの相対オフセットなので絶対座標では描けない)
+      // 相対モード rule: RelativeIMUViewer / RelativeTrajectoryGrid に渡す。絶対ビュアの軌跡は消す
+      //   (target は q_initial からの相対オフセットなので絶対座標では描けない)
       viewerRef.current?.setTargetTrajectory?.([]);
       relativeViewerRef.current?.setSelectedRule?.(rule);
-      // 相対 3D タブを推奨ハイライト (タブ名のドット表示は render で対応)
+      relativeTrajectoryGridRef.current?.setSelectedRule?.(rule);
+      // 相対 3D / 2D タブを推奨ハイライト (タブ名のドット表示は render で対応)
     }
   }, [selectedRuleId, ruleList]);
 
@@ -660,6 +693,12 @@ function App() {
       if (relViewer && detail.qw !== undefined) {
         relViewer.setQuaternion(detail.qw, detail.qx, detail.qy, detail.qz);
         relViewer.addTrailPoint(detail.qw, detail.qx, detail.qy, detail.qz, detail.t);
+      }
+      // Phase 5.39.3b: 相対 2D 軌跡 grid にも sensor.quat を渡す
+      const relGrid = relativeTrajectoryGridRef.current;
+      if (relGrid && detail.qw !== undefined) {
+        relGrid.setQuaternion(detail.qw, detail.qx, detail.qy, detail.qz);
+        relGrid.addTrailPoint(detail.qw, detail.qx, detail.qy, detail.qz, detail.t);
       }
       if (viewer && detail.ax !== undefined) {
         viewer.setGravityVector(detail.ax, detail.ay, detail.az);
@@ -770,18 +809,16 @@ function App() {
         rule_name: d.rule_name,
         t: Date.now(),
       });
+      // Phase 5.39.3a: ボタン押下 (enter) では q_initial を更新しない (= デバイス単位に Demote)
+      //   q_initial は posture.init コマンド (Init Yaw / Reset Base) で Web↔FW 経由でのみ更新。
+      //   trail clear のみ実行 (新ジェスチャ開始の視覚的合図)。
+      //   trigger.hit q_ref フィールドは debug バー (lastTriggerHit) 表示用に維持。
       if (d.phase === 'enter') {
         viewerRef.current?.clearTrail?.();
         relativeViewerRef.current?.clearTrail?.();
-        if (Array.isArray(d.q_ref) && d.q_ref.length === 4) {
-          relativeViewerRef.current?.setQRef?.(d.q_ref, true);
-        } else {
-          console.warn('[onTriggerHit] enter phase だが q_ref フィールドなし。FW が posture_basis=relative + q_ref_valid 条件をパスしていない可能性。');
-        }
-      } else if (d.phase === 'release' || d.phase === 'timeout' || d.phase === 'fail_back_to_start') {
-        // state リセット → プレビュー軌跡に戻す
-        relativeViewerRef.current?.setQRef?.(null, false);
+        relativeTrajectoryGridRef.current?.clearTrail?.();
       }
+      // release / timeout / fail_back_to_start でも q_initial は維持 (Phase 5.39.3a)
     };
     const onAck = (ev) => {
       const d = ev.detail;
@@ -797,6 +834,19 @@ function App() {
       // Phase 5.32: mode.set の ack に device_mode が含まれる
       if (d.cmd === 'mode.set' && typeof d.device_mode === 'string') {
         setDeviceMode(d.device_mode);
+      }
+      // Phase 5.39.3a: posture.init ack に q を含む → 相対ビュア / 2D grid に伝達
+      if (d.cmd === 'posture.init' && Array.isArray(d.q) && d.q.length === 4) {
+        relativeViewerRef.current?.setQInitial?.(d.q, d.ok !== false);
+        relativeTrajectoryGridRef.current?.setQInitial?.(d.q, d.ok !== false);
+      }
+    };
+    // Phase 5.39.3a: posture.init.get 応答 (type:posture.init) → q_initial を Web に反映
+    const onPostureInit = (ev) => {
+      const d = ev.detail;
+      if (Array.isArray(d.q) && d.q.length === 4) {
+        relativeViewerRef.current?.setQInitial?.(d.q, d.valid !== false);
+        relativeTrajectoryGridRef.current?.setQInitial?.(d.q, d.valid !== false);
       }
     };
 
@@ -816,6 +866,8 @@ function App() {
       c.addEventListener('type:profile.active', onProfileActive);
       c.addEventListener('type:calibration.step', onCalibStep);
       c.addEventListener('type:ack', onCalibAck);
+      // Phase 5.39.3a: posture.init.get 応答受信用 (FW → Web)
+      c.addEventListener('type:posture.init', onPostureInit);
     });
 
     return () => {
@@ -835,6 +887,7 @@ function App() {
         c.removeEventListener('type:profile.active', onProfileActive);
         c.removeEventListener('type:calibration.step', onCalibStep);
         c.removeEventListener('type:ack', onCalibAck);
+        c.removeEventListener('type:posture.init', onPostureInit);
       });
     };
   }, [addLog]);
@@ -1174,6 +1227,9 @@ function App() {
     if (ruleMode === 'hold_with_waypoints') {
       r.ui_mode = 'hold_with_waypoints';
       r.posture_basis = postureBasis;   // 'absolute' | 'relative'
+      // Phase 5.39.3d: waypoint_order (default sequential、現状 FW は sequential のみ動作)
+      //   unordered / dtw は Phase 5.39.3d.1 / 5.39.5+ で FW 実装後に有効化
+      r.waypoint_order = waypointOrder;
       // 開始姿勢: r.posture に既に設定済 (共通ブロック) — ここで明示的に start_posture にも複製
       if (startPosture) {
         r.start_posture = {
@@ -1259,6 +1315,8 @@ function App() {
         activeClient.send({ cmd: 'rule.list' }).catch(() => {});
         activeClient.send({ cmd: 'profile.list' }).catch(() => {});
         activeClient.send({ cmd: 'watch.set', enabled: true }).catch(() => {});
+        // Phase 5.39.3a: 現在の q_initial を取得 (NVS 復元値、または identity)
+        activeClient.send({ cmd: 'posture.init.get' }).catch(() => {});
         setWatchEnabled(true);
       }, 500);
       return () => clearTimeout(t);
@@ -1885,8 +1943,25 @@ function App() {
         <div class="flex justify-between items-center mb-2">
           <h2 class="font-semibold">📊 センサー / 🎨 3D 姿勢</h2>
           <div class="flex gap-1">
-            <button onClick=${() => { viewerRef.current?.initBase(); }} class="text-xs px-2 py-1 bg-blue-200 hover:bg-blue-300 rounded">Init Yaw</button>
-            <button onClick=${() => { viewerRef.current?.resetBase(); }} class="text-xs px-2 py-1 bg-slate-200 rounded">Reset Base</button>
+            <button onClick=${() => {
+                // Phase 5.39.3a: Init Yaw は FW に posture.init source=current を送る
+                //   → FW NVS 保存 + ack で q を返送 → onAck で relative viewer / 2D grid に伝達
+                viewerRef.current?.initBase();
+                sendCmd({ cmd: 'posture.init', source: 'current' });
+              }}
+              class="text-xs px-2 py-1 bg-blue-200 hover:bg-blue-300 rounded"
+              title="現在の姿勢を q_initial として FW に保存 (NVS 永続)、相対 3D / 相対 2D 軌跡の基準にする">
+              Init Yaw
+            </button>
+            <button onClick=${() => {
+                // Phase 5.39.3a: Reset Base は posture.init source=identity (= q_initial を identity 化)
+                viewerRef.current?.resetBase();
+                sendCmd({ cmd: 'posture.init', source: 'identity' });
+              }}
+              class="text-xs px-2 py-1 bg-slate-200 rounded"
+              title="q_initial = identity (Mahony 起動基準) に戻す">
+              Reset Base
+            </button>
           </div>
         </div>
         <div class="flex flex-wrap gap-2 mb-2 text-xs">
@@ -1922,6 +1997,11 @@ function App() {
                 const r = ruleList.find((x) => x.id === selectedRuleId);
                 return r && r.posture_basis === 'relative';
               })() },
+            // Phase 5.39.3b: 相対 2D 軌跡 (ハリポタ Wand chart 風)
+            { id: 'relative_2d', label: '📈 相対 2D 軌跡', recommend: (() => {
+                const r = ruleList.find((x) => x.id === selectedRuleId);
+                return r && r.posture_basis === 'relative';
+              })() },
           ].map((tab) => html`
             <button onClick=${() => setViewerTab(tab.id)}
               role="tab"
@@ -1949,11 +2029,28 @@ function App() {
         <!-- 相対 3D タブ canvas (Phase 5.39.2) -->
         <canvas ref=${relativeCanvasRef}
           style=${`width:100%; height:240px; display:${viewerTab === 'relative' ? 'block' : 'none'}; border-radius:6px; background:#000010;`}></canvas>
+        <!-- 相対 2D 軌跡タブ canvas (Phase 5.39.3b、ハリポタ Wand chart 風) -->
+        <canvas ref=${relativeTrajectoryCanvasRef}
+          style=${`width:100%; height:240px; display:${viewerTab === 'relative_2d' ? 'block' : 'none'}; border-radius:6px; background:#f8fafc;`}></canvas>
         <!-- 2D Roll-Pitch タブ (既存 PitchRollGrid を移設、Phase 5.39.2 では下の 2D マップに任せて 'プレースホルダ' 表示) -->
         ${viewerTab === '2d' ? html`
           <div class="p-3 text-xs text-slate-500 bg-slate-50 rounded h-[240px] flex items-center justify-center text-center">
             📐 2D Roll-Pitch ビュー: 下の「Roll / Pitch 2D マップ」パネルに描画中。<br/>
             選択 rule (${selectedRuleId >= 0 ? `id=${selectedRuleId}` : '未選択'}) はそちらで濃色強調されます。
+          </div>
+        ` : null}
+        ${viewerTab === 'relative_2d' ? html`
+          <div class="text-[11px] text-slate-500 mt-1 flex items-center gap-2 flex-wrap">
+            <span>📈 相対 2D 軌跡: q_initial を中心、forward 正射影で半球内を 2D 平面化 (Wand Movements chart 風)。</span>
+            ${selectedRuleId >= 0 ? html`
+              <span class="ml-auto text-emerald-700">
+                選択 rule の waypoint を紫円で表示
+              </span>
+            ` : html`
+              <span class="ml-auto text-amber-700">
+                rule 一覧から相対モード rule をクリックして選択してください
+              </span>
+            `}
           </div>
         ` : null}
         ${viewerTab === 'relative' ? html`
@@ -2556,7 +2653,7 @@ function App() {
             ${ruleMode === 'hold_with_waypoints' ? html`
               <!-- 判定基準セレクタ (折り畳み、UI 複雑度抑制ガイドラインに従い default は absolute) -->
               <details class="mt-2 text-xs">
-                <summary class="cursor-pointer text-slate-600">▼ 詳細設定 (判定基準)</summary>
+                <summary class="cursor-pointer text-slate-600">▼ 詳細設定 (判定基準 / 判定順序)</summary>
                 <div class="mt-1 pl-3 flex items-center gap-3 flex-wrap">
                   <span>判定基準:</span>
                   <label class="flex items-center gap-1">
@@ -2569,14 +2666,38 @@ function App() {
                     <input type="radio" name="posture_basis" value="relative"
                       checked=${postureBasis === 'relative'}
                       onChange=${() => setPostureBasis('relative')} />
-                    相対 Quaternion (ボタン押下時を基準)
+                    相対 Quaternion (q_initial 基準、Phase 5.39.3a)
                   </label>
                 </div>
                 ${postureBasis === 'relative' ? html`
                   <div class="mt-1 ml-3 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-                    💡 state[0] (開始条件) 成立時に q_ref を自動取得、以降は相対 quat で判定。Yaw ドリフト無関係、持ち方自由。
+                    💡 Phase 5.39.3a: 「Init Yaw」で設定した q_initial を基準とする (デバイス単位 NVS 永続)。Yaw ドリフト無関係、持ち方は Init Yaw 時に固定。
                   </div>
                 ` : null}
+                <!-- Phase 5.39.3d: waypoint_order セレクタ (3 択、unordered/dtw は将来有効化予定でグレーアウト) -->
+                <div class="mt-2 pl-3 flex items-center gap-2 flex-wrap">
+                  <span>判定順序 (waypoint_order):</span>
+                  <select value=${waypointOrder}
+                    onChange=${(e) => setWaypointOrder(e.target.value)}
+                    class="border rounded px-1 py-0.5 text-xs">
+                    <option value="sequential">順次 (sequential、推奨)</option>
+                    <option value="unordered" disabled
+                      title="Phase 5.39.3d.1 で有効化予定 (案 B: 全 waypoint 通過、順序不問)">
+                      順序不問 (unordered、Phase 5.39.3d.1 で有効化予定)
+                    </option>
+                    <option value="dtw" disabled
+                      title="Phase 5.39.5+ で有効化予定 (案 C: DTW 時系列マッチング)">
+                      DTW (時系列マッチング、Phase 5.39.5+ で有効化予定)
+                    </option>
+                  </select>
+                </div>
+                <div class="mt-1 ml-3 text-[10px] text-slate-500">
+                  ${waypointOrder === 'sequential'
+                    ? '現状: state[0] → state[1] → ... を順次通過 (Phase 5.39.2 から有効)。'
+                    : waypointOrder === 'unordered'
+                    ? '通過順序不問、全 waypoint を一度でも tol 内に通過すれば発火 (Phase 5.39.3d.1 で実装予定)。'
+                    : '時系列軌跡を DTW で類似度評価 (Phase 5.39.5+ で実装予定、RAM 4KB)。'}
+                </div>
               </details>
             ` : null}
           </div>
