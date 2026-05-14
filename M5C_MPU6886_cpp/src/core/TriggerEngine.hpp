@@ -67,6 +67,18 @@ public:
     // ルール取得 (iterate 用)
     const std::vector<ActionRule>& rules() const { return rules_; }
 
+    // ============================================================
+    // Phase 5.39.3a: デバイス単位 「初期姿勢」 q_initial
+    //   posture_basis == PB_RELATIVE_QUAT な rule の判定基準として全 rule 共通で使用。
+    //   設定タイミング: posture.init コマンド (Web UI の Init Yaw / Reset Base)、
+    //                    または起動時に NVS から復元。
+    //   未設定時 (= identity quaternion) は q_initial_valid_=false で、判定は絶対モードへフォールバック。
+    // ============================================================
+    void setInitialPosture(const float q[4]);
+    void getInitialPosture(float q[4]) const;
+    bool isInitialPostureValid() const { return q_initial_valid_; }
+    void clearInitialPosture();   // identity に戻す (q_initial_valid_=false)
+
 private:
     std::vector<ActionRule> rules_;
     IHidSink* hid_sink_;
@@ -89,6 +101,12 @@ private:
     // ユーザー要件: 「cooldown 中は他のルールを適用させない」
     uint32_t last_global_fire_ms_ = 0;
     uint32_t current_tick_ms_ = 0;   // executeAction から参照する用
+
+    // Phase 5.39.3a: デバイス単位 「初期姿勢」
+    //   q_initial_       : 相対モード rule 判定用の参照クォータニオン (w,x,y,z)
+    //   q_initial_valid_ : posture.init で明示設定された場合のみ true、起動直後は false
+    float q_initial_[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+    bool  q_initial_valid_ = false;
 
     // 状態機械 1 ルール評価
     void evaluateRule(ActionRule& rule, const SensorState& s);

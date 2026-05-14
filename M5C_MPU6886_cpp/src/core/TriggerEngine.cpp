@@ -9,7 +9,8 @@ namespace BurstMotion {
 // Forward declarations for helpers (defined later in this file)
 static int evalButton(const ButtonCond& c, const SensorState& s);
 static int evalPosture(const PostureCond& c, const SensorState& s);
-static int evalPostureRelative(const PostureCond& c, const SensorState& s, const float q_ref[4]);
+// Phase 5.39.3a: 第 3 引数は「デバイス単位の q_initial」(以前は rule 単位 q_ref)。動作は同じ。
+static int evalPostureRelative(const PostureCond& c, const SensorState& s, const float q_initial[4]);
 static int evalAccel(const AccelCond& c, const SensorState& s);
 static int evalGyro(const GyroCond& c, const SensorState& s);
 static int evalStillness(const Condition& c, const SensorState& s, ActionRule* rule);
@@ -55,11 +56,33 @@ void TriggerEngine::addRule(const ActionRule& rule) {
     r.current_state = -1;
     r.state_enter_ms = 0;
     r.last_fire_ms = 0;
-    // Phase 5.39 runtime 初期化
+    // Phase 5.39 runtime 初期化 (Phase 5.39.3a 以降 q_ref は未使用、フィールド残置のみ)
     r.q_ref[0] = 1.0f; r.q_ref[1] = 0.0f; r.q_ref[2] = 0.0f; r.q_ref[3] = 0.0f;
     r.q_ref_valid = false;
     r.stillness_since_ms = 0;
     rules_.push_back(r);
+}
+
+// Phase 5.39.3a: デバイス単位 「初期姿勢」 アクセサ
+void TriggerEngine::setInitialPosture(const float q[4]) {
+    q_initial_[0] = q[0];
+    q_initial_[1] = q[1];
+    q_initial_[2] = q[2];
+    q_initial_[3] = q[3];
+    q_initial_valid_ = true;
+}
+void TriggerEngine::getInitialPosture(float q[4]) const {
+    q[0] = q_initial_[0];
+    q[1] = q_initial_[1];
+    q[2] = q_initial_[2];
+    q[3] = q_initial_[3];
+}
+void TriggerEngine::clearInitialPosture() {
+    q_initial_[0] = 1.0f;
+    q_initial_[1] = 0.0f;
+    q_initial_[2] = 0.0f;
+    q_initial_[3] = 0.0f;
+    q_initial_valid_ = false;
 }
 
 void TriggerEngine::clearRules() {
@@ -326,14 +349,16 @@ void TriggerEngine::evaluateRule(ActionRule& rule, const SensorState& s) {
             matchCondition(rule.states[0].match_condition, s, &rule)) {
             rule.current_state = 0;
             rule.state_enter_ms = now;
-            // Phase 5.39: 相対モードなら state[0] enter 瞬間に q_ref をスナップショット
-            if (rule.posture_basis == PB_RELATIVE_QUAT) {
-                rule.q_ref[0] = s.quat[0];
-                rule.q_ref[1] = s.quat[1];
-                rule.q_ref[2] = s.quat[2];
-                rule.q_ref[3] = s.quat[3];
-                rule.q_ref_valid = true;
-            }
+            // Phase 5.39.3a: state[0] enter での q_ref スナップショットは撤去。
+            //   判定は g_engine.q_initial (デバイス単位、posture.init で明示設定) を使用する。
+            //   下記は旧仕様の保留コードであり、将来 rule 単位 ref に戻す可能性のため残す:
+            // if (rule.posture_basis == PB_RELATIVE_QUAT) {
+            //     rule.q_ref[0] = s.quat[0];
+            //     rule.q_ref[1] = s.quat[1];
+            //     rule.q_ref[2] = s.quat[2];
+            //     rule.q_ref[3] = s.quat[3];
+            //     rule.q_ref_valid = true;
+            // }
             executeAction(rule.states[0].on_enter);
             fireWatchEvent(rule, "enter", &rule.states[0].on_enter);
 
@@ -581,11 +606,12 @@ bool TriggerEngine::matchCondition(const Condition& cond, const SensorState& s,
 
     int r;
     r = evalButton(cond.button, s);   if (r >= 0) results[count++] = r;
-    // Phase 5.39: rule の posture_basis を見て absolute / relative を切替
-    //   relative モードかつ q_ref_valid のときだけ相対判定、それ以外は絶対判定
-    //   (q_ref_valid=false で relative の場合、state[0] 入場前なので絶対扱いで暫定判定)
-    if (rule != nullptr && rule->posture_basis == PB_RELATIVE_QUAT && rule->q_ref_valid) {
-        r = evalPostureRelative(cond.posture, s, rule->q_ref);
+    // Phase 5.39.3a: rule の posture_basis を見て absolute / relative を切替
+    //   relative モードかつ デバイス単位 q_initial_valid_ のときだけ相対判定、
+    //   それ以外 (= q_initial 未設定など) は絶対判定にフォールバック。
+    //   q_initial は posture.init コマンドで設定され、TriggerEngine メンバとして保持される。
+    if (rule != nullptr && rule->posture_basis == PB_RELATIVE_QUAT && q_initial_valid_) {
+        r = evalPostureRelative(cond.posture, s, q_initial_);
     } else {
         r = evalPosture(cond.posture, s);
     }
@@ -688,13 +714,16 @@ void TriggerEngine::fireWatchEvent(const ActionRule& rule, const char* phase, co
         if (action->duration_ms) doc["duration_ms"] = action->duration_ms;
         if (action->interval_ms) doc["interval_ms"] = action->interval_ms;
     }
-    // Phase 5.39.2: enter phase + 相対モード時に q_ref を出力 (Web 側で軌跡固定描画用)
-    if (phase && strcmp(phase, "enter") == 0 && rule.posture_basis == PB_RELATIVE_QUAT && rule.q_ref_valid) {
+    // Phase 5.39.3a: enter phase + 相対モード時に「デバイス単位 q_initial」を出力。
+    //   旧 Phase 5.39.2 では rule.q_ref (state[0] enter snapshot) を出力していたが、
+    //   Phase 5.39.3a 以降は g_engine.q_initial_ (posture.init で明示設定) を出力する。
+    //   Web 側は q_ref キーで受信し、軌跡固定描画 / 相対 3D ビュアに使う (キー名は互換性のため維持)。
+    if (phase && strcmp(phase, "enter") == 0 && rule.posture_basis == PB_RELATIVE_QUAT && q_initial_valid_) {
         JsonArray qref = doc["q_ref"].to<JsonArray>();
-        qref.add(rule.q_ref[0]);
-        qref.add(rule.q_ref[1]);
-        qref.add(rule.q_ref[2]);
-        qref.add(rule.q_ref[3]);
+        qref.add(q_initial_[0]);
+        qref.add(q_initial_[1]);
+        qref.add(q_initial_[2]);
+        qref.add(q_initial_[3]);
     }
     // callback 経由で routing (両方経由)、未設定時は Serial 直接出力 (後方互換)
     if (event_output_fn_) {

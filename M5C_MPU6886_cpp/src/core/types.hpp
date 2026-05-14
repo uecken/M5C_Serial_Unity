@@ -72,12 +72,24 @@ enum class PostureJudge : uint8_t { BY_EULER = 0, BY_QUAT = 1 };
 
 // Phase 5.39: 姿勢判定の基準
 //   PB_ABSOLUTE_EULER : Mahony 起動基準の絶対 Euler 判定 (既存挙動、後方互換)
-//   PB_RELATIVE_QUAT  : state[0] enter 時に q_ref を取得し、以降は q_rel = q_ref* ⊗ q_current
-//                       から ZYX Euler を抽出して posture.euler との差を tol 比較
+//   PB_RELATIVE_QUAT  : Phase 5.39.3a で意味が変更:
+//                       「デバイス単位の g_engine.q_initial を ref として、
+//                        q_rel = q_initial* ⊗ q_current の ZYX Euler を tol 比較」
+//                       (旧 Phase 5.39 の rule 単位 q_ref snapshot は撤去)
 //   注: enum class ではなく uint8_t enum (シリアライズ簡略化、PostureBasis = 0/1)
 enum PostureBasis : uint8_t {
     PB_ABSOLUTE_EULER = 0,
     PB_RELATIVE_QUAT  = 1,
+};
+
+// Phase 5.39.3a: waypoint 通過順序の方針
+//   WO_SEQUENTIAL : state[0] → state[1] → ... → state[N-1] の固定順 (既定、既存挙動)
+//   WO_UNORDERED  : 任意順 (Phase 5.39.3d.1 で実装予定、現状は受付のみで動作は SEQUENTIAL と同じ)
+//   WO_DTW        : DTW マッチング (Phase 5.39.5+ で実装予定、現状は受付のみ)
+enum WaypointOrder : uint8_t {
+    WO_SEQUENTIAL = 0,
+    WO_UNORDERED  = 1,
+    WO_DTW        = 2,
 };
 
 // 比較演算
@@ -158,16 +170,22 @@ struct ActionRule {
     // Phase 5.39: 姿勢判定基準 (0=ABS_EULER default、1=REL_QUAT)
     // PostureBasis enum を uint8_t で格納 (serialize 簡略化)
     uint8_t posture_basis;
+    // Phase 5.39.3a: waypoint 順序方針 (WaypointOrder enum、default 0 = WO_SEQUENTIAL)
+    //   現状は受付のみ (UNORDERED/DTW は将来 Phase で実装)
+    uint8_t waypoint_order;
 
     // Runtime state (RAM only、JSON serialize 対象外)
     int8_t current_state;      // -1=idle
     uint32_t state_enter_ms;
     uint32_t last_fire_ms;
 
-    // Phase 5.39 runtime (RAM only):
-    //   q_ref          : posture_basis=PB_RELATIVE_QUAT 時の参照クォータニオン (w,x,y,z)
-    //                    state[0] enter 瞬間の sensor.quat をスナップショット
-    //   q_ref_valid    : q_ref が確定済か (idle 復帰時 false)
+    // Phase 5.39 runtime (RAM only) — Phase 5.39.3a で q_ref の用途は変化:
+    //   q_ref          : (旧 Phase 5.39.2 仕様)
+    //                    Phase 5.39.3a 以降は state[0] enter での snapshot を停止。
+    //                    判定は g_engine.q_initial (デバイス単位) を使用。
+    //                    フィールドは将来 A 案 (rule 単位 ref) に戻す可能性のため残置。
+    //   q_ref_valid    : 旧仕様の有効性フラグ。Phase 5.39.3a では常に false で運用。
+    //                    判定では q_initial_valid_ (TriggerEngine メンバ) を参照する。
     //   stillness_since_ms : 静止判定で「いつから静止していたか」(0 = 未開始)
     float    q_ref[4];
     bool     q_ref_valid;

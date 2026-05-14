@@ -35,7 +35,7 @@
 #define FW_VERSION "2.0.0-dev"
 #endif
 #ifndef FW_PHASE
-#define FW_PHASE "5.39"
+#define FW_PHASE "5.39.3"
 #endif
 // __DATE__ / __TIME__ はビルド時に自動埋め込まれる (例: "Apr 26 2026" "00:24:36")
 #define FW_BUILD __DATE__ " " __TIME__
@@ -793,6 +793,52 @@ static void handleCommand(JsonDocument& in, JsonDocument& out) {
         g_calib6.active = false;
         out["type"] = "ack"; out["cmd"] = "calibrate.full.cancel"; out["ok"] = true;
     }
+    // ================ Phase 5.39.3a: デバイス単位 「初期姿勢」 q_initial =====
+    //   posture.init      : 現在 quat or 指定 quat or identity を q_initial として保存 (NVS 永続化)
+    //   posture.init.get  : 現在の q_initial を返す
+    //   relative モード rule の判定基準として全 rule 共通で使用される。
+    //   Web UI の「Init Yaw」「Reset Base」ボタンから明示設定する仕様。
+    // ============================================================
+    else if (strcmp(cmd, "posture.init") == 0) {
+        // 入力: {"cmd":"posture.init", "source":"current"|"identity"} or {"cmd":"posture.init","quat":[w,x,y,z]}
+        //   - quat 配列が与えられたらそれを優先
+        //   - 無ければ source: "current"=g_sensor_state.quat (default), "identity"=[1,0,0,0]
+        float q[4];
+        if (in["quat"].is<JsonArray>() && in["quat"].size() == 4) {
+            for (int i = 0; i < 4; i++) q[i] = in["quat"][i].as<float>();
+        } else {
+            const char* source = in["source"] | "current";
+            if (strcmp(source, "identity") == 0) {
+                q[0] = 1.0f; q[1] = 0.0f; q[2] = 0.0f; q[3] = 0.0f;
+            } else {  // "current"
+                for (int i = 0; i < 4; i++) q[i] = g_sensor_state.quat[i];
+            }
+        }
+        g_engine.setInitialPosture(q);
+        // NVS 永続化 (namespace: bm_init、key: q_initial = 16 bytes)
+        {
+            Preferences p;
+            if (p.begin("bm_init", false)) {
+                p.putBytes("q_initial", q, sizeof(float) * 4);
+                p.end();
+            }
+        }
+        out["type"] = "ack";
+        out["cmd"] = "posture.init";
+        out["ok"] = true;
+        JsonArray qa = out["q"].to<JsonArray>();
+        for (int i = 0; i < 4; i++) qa.add(q[i]);
+    }
+    else if (strcmp(cmd, "posture.init.get") == 0) {
+        // 入力: {"cmd":"posture.init.get"}
+        // 出力: {"type":"posture.init","q":[w,x,y,z],"valid":true|false}
+        out["type"] = "posture.init";
+        float q[4];
+        g_engine.getInitialPosture(q);
+        JsonArray qa = out["q"].to<JsonArray>();
+        for (int i = 0; i < 4; i++) qa.add(q[i]);
+        out["valid"] = g_engine.isInitialPostureValid();
+    }
     // ================ ActionRule 登録 (簡易版) ================
     else if (strcmp(cmd, "rule.clear") == 0) {
         g_engine.clearRules();
@@ -823,6 +869,10 @@ static void handleCommand(JsonDocument& in, JsonDocument& out) {
             o["current_state"] = r.current_state;  // -1=idle、>=0 = state 滞在中
             // Phase 5.39: posture_basis (0=absolute, 1=relative) を文字列で返す
             o["posture_basis"] = (r.posture_basis == PB_RELATIVE_QUAT) ? "relative" : "absolute";
+            // Phase 5.39.3a: waypoint_order (0=sequential / 1=unordered / 2=dtw) を文字列で返す
+            const char* wo_str = (r.waypoint_order == WO_UNORDERED) ? "unordered"
+                               : (r.waypoint_order == WO_DTW) ? "dtw" : "sequential";
+            o["waypoint_order"] = wo_str;
             // states[0] の posture を返す (ある場合)
             if (r.states_count > 0 && r.states[0].match_condition.posture.enabled) {
                 JsonObject p = o["posture"].to<JsonObject>();
@@ -1163,6 +1213,14 @@ static void handleCommand(JsonDocument& in, JsonDocument& out) {
                 const char* pb = r["posture_basis"] | "absolute";
                 rule.posture_basis = (strcmp(pb, "relative") == 0)
                                        ? PB_RELATIVE_QUAT : PB_ABSOLUTE_EULER;
+                // Phase 5.39.3a: waypoint_order 解釈 (sequential / unordered / dtw)
+                //   現状は受付のみ。UNORDERED/DTW は将来 Phase で実装 (今は SEQUENTIAL と同じ挙動)。
+                {
+                    const char* wo = r["waypoint_order"] | "sequential";
+                    if (strcmp(wo, "unordered") == 0)      rule.waypoint_order = WO_UNORDERED;
+                    else if (strcmp(wo, "dtw") == 0)       rule.waypoint_order = WO_DTW;
+                    else                                    rule.waypoint_order = WO_SEQUENTIAL;
+                }
                 rule.loop = false;  // SEQUENCE (一方通行)
 
                 // mid_postures 個数 (0-2)
@@ -1316,6 +1374,12 @@ static void handleCommand(JsonDocument& in, JsonDocument& out) {
                 out["mode"] = "hold_with_waypoints";
                 out["states"] = (uint32_t)rule.states_count;
                 out["posture_basis"] = (rule.posture_basis == PB_RELATIVE_QUAT) ? "relative" : "absolute";
+                // Phase 5.39.3a: ack に waypoint_order も付与 (Web 側確認用)
+                {
+                    const char* wo_str = (rule.waypoint_order == WO_UNORDERED) ? "unordered"
+                                       : (rule.waypoint_order == WO_DTW) ? "dtw" : "sequential";
+                    out["waypoint_order"] = wo_str;
+                }
                 out["rule_count"] = (uint32_t)g_engine.ruleCount();
                 return;
             }
@@ -1757,6 +1821,21 @@ void setup() {
     loadCalibFromNvs();
     // Device mode を NVS から復元 (Phase 5.32)
     loadDeviceModeNvs();
+
+    // Phase 5.39.3a: デバイス単位 「初期姿勢」 q_initial を NVS から復元
+    //   未保存 (= 工場出荷直後 or NVS クリア後) は valid=false のまま、判定は絶対モードへフォールバック。
+    {
+        Preferences p;
+        if (p.begin("bm_init", true)) {
+            if (p.isKey("q_initial") &&
+                p.getBytesLength("q_initial") == sizeof(float) * 4) {
+                float q_init[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+                p.getBytes("q_initial", q_init, sizeof(float) * 4);
+                g_engine.setInitialPosture(q_init);
+            }
+            p.end();
+        }
+    }
 
     // IMU 初期化 (失敗しても FW は動作継続)
     g_imu_ok = g_imu.begin();

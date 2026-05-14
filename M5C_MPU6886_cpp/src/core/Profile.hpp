@@ -83,6 +83,8 @@ public:
             ro["cooldown_ms"] = r.cooldown_ms;
             // Phase 5.39: posture_basis 保存 (default 0 = absolute、後方互換)
             ro["posture_basis"] = r.posture_basis;
+            // Phase 5.39.3a: waypoint_order 保存 (default 0 = sequential、後方互換)
+            ro["waypoint_order"] = r.waypoint_order;
         }
 
         File f = LittleFS.open(path, "w");
@@ -132,6 +134,8 @@ public:
             r.cooldown_ms = ro["cooldown_ms"] | 500;
             // Phase 5.39: posture_basis 読込 (省略時 0 = absolute、後方互換)
             r.posture_basis = (uint8_t)(ro["posture_basis"] | 0);
+            // Phase 5.39.3a: waypoint_order 読込 (省略時 0 = sequential、後方互換)
+            r.waypoint_order = (uint8_t)(ro["waypoint_order"] | 0);
             JsonArray states = ro["states"];
             uint8_t i = 0;
             for (JsonObject so : states) {
