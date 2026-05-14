@@ -43,9 +43,10 @@ export class RelativeIMUViewer {
     this.worldGroup = new THREE.Group();
     this.scene.add(this.worldGroup);
 
-    // 軸ヘルパ (worldGroup 内、M5C 視点で「世界の前後左右」が見える)
+    // 軸ヘルパ (worldGroup 内、初期姿勢基準の軸を視認用)
+    // ★ 絶対 3D の「World 軸」チェックボックスとは別物、混乱回避のためデフォルト非表示
     this.worldAxes = new THREE.AxesHelper(1.5);
-    this.worldAxes.visible = true;
+    this.worldAxes.visible = false;
     this.worldGroup.add(this.worldAxes);
 
     // ---- M5C モデル (中央固定、default identity) ----
@@ -77,6 +78,8 @@ export class RelativeIMUViewer {
     this._m5cMode = opts.m5cMode || 'fixed';   // 'fixed' | 'qref_anchor'
     this._trajectoryMode = 'preview';          // 'preview' (破線) | 'fixed' (実線)
     this._qCurrent = new THREE.Quaternion();   // 現在 quat (M5C 軸変換済、Three 系)
+    this._qInitial = new THREE.Quaternion();   // 初期姿勢 (基準)、最初の setQuaternion で自動取得
+    this._qInitialValid = false;
     this._qRef = new THREE.Quaternion();       // 確定 q_ref (M5C 軸変換済、Three 系)
     this._qRefValid = false;
     this._selectedRule = null;                 // {posture_basis, start_posture, mid_postures, end_posture}
@@ -231,15 +234,17 @@ export class RelativeIMUViewer {
     // 各 rel euler を Three quat に変換 (M5C 軸基準で構築 → Three 軸変換)
     const quats = relEulers.map((e) => this._m5cEulerToThreeQuat(e[0], e[1], e[2]));
 
-    // waypoint dots (紫、worldGroup 内)
+    // waypoint dots (紫、worldGroup 内、球面より少し外側に)
     for (const q of quats) {
-      const d = this._makeDot(0xa855f7, 0.07);
-      d.position.copy(this._quatToSpherePoint(q));
+      const d = this._makeDot(0xa855f7, 0.09);
+      const p = this._quatToSpherePoint(q).clone().multiplyScalar(1.08);
+      d.position.copy(p);
       this.worldGroup.add(d);
       this.waypointDots.push(d);
     }
 
-    // waypoint 接続線 (Slerp、紫、style は trajectoryMode に依存)
+    // waypoint 接続線 (Slerp、紫、TubeGeometry で太線描画 = WebGL linewidth 仕様回避)
+    // 球面より十分外側 (×1.08) に配置 + Tube で 3D 管描画 → 視認性最大化
     if (quats.length >= 2) {
       const SEG = 32;
       const points = [];
@@ -248,17 +253,17 @@ export class RelativeIMUViewer {
         for (let s = 0; s <= SEG; s++) {
           const t = s / SEG;
           const q = qa.clone().slerp(qb, t);
-          points.push(this._quatToSpherePoint(q).clone().multiplyScalar(1.01));
+          points.push(this._quatToSpherePoint(q).clone().multiplyScalar(1.08));
         }
       }
-      const geo = new THREE.BufferGeometry().setFromPoints(points);
-      const mat = new THREE.LineBasicMaterial({
-        color: 0x8b5cf6,
-        linewidth: 2,
+      const curve = new THREE.CatmullRomCurve3(points, false, 'catmullrom', 0.0);
+      const tubeGeo = new THREE.TubeGeometry(curve, points.length, 0.02, 8, false);
+      const tubeMat = new THREE.MeshBasicMaterial({
+        color: 0xa855f7,
         transparent: true,
-        opacity: 0.5,
+        opacity: 0.85,
       });
-      this.waypointLine = new THREE.Line(geo, mat);
+      this.waypointLine = new THREE.Mesh(tubeGeo, tubeMat);
       this.worldGroup.add(this.waypointLine);
     }
     this._applyTrajectoryStyle();
@@ -338,22 +343,44 @@ export class RelativeIMUViewer {
     if (!this._running) return;
     if (!this._renderEnabled) return;   // タブ非表示時は描画停止
     this._frameCount = (this._frameCount || 0) + 1;
-    // ★ 一人称視点: worldGroup を q_current⁻¹ で逆回転
-    //   worldGroup.quaternion = q_current.invert()
-    const invQ = this._qCurrent.clone().invert();
-    this.worldGroup.quaternion.slerp(invQ, this.smoothing);
-    // M5C モデル: m5cMode で切替
-    if (this._m5cMode === 'qref_anchor' && this._qRefValid) {
-      // q_current * q_ref⁻¹ : 「ref からの相対回転」を M5C 自身の向きで示す
-      const qRefInv = this._qRef.clone().invert();
-      const qDisp = this._qCurrent.clone().multiply(qRefInv);
-      this.m5StickC.quaternion.slerp(qDisp, this.smoothing);
+
+    // ★ 相対 3D の正しい仕様:
+    //   - ワールド (球面 / waypoint / 軌跡) は固定 (worldGroup.quaternion = identity)
+    //   - M5C モデルは q_initial⁻¹ * q_current で回転
+    //     = 初期姿勢を identity と仮定したときの M5C 向き
+    //   - 初期姿勢: 最初の setQuaternion で自動取得 (or initBase / setQRef で更新)
+
+    // 初回 setQuaternion 受信時に自動で q_initial を確定
+    const qcLen = this._qCurrent.lengthSq();
+    if (!this._qInitialValid && qcLen > 0.5) {
+      this._qInitial.copy(this._qCurrent);
+      this._qInitialValid = true;
+    }
+
+    // ワールド固定
+    this.worldGroup.quaternion.identity();
+
+    // M5C モデル回転 = q_initial⁻¹ * q_current
+    if (this._qInitialValid) {
+      const qRel = this._qInitial.clone().invert().multiply(this._qCurrent);
+      this.m5StickC.quaternion.slerp(qRel, this.smoothing);
     } else {
-      // fixed: identity (中央で動かない)
       this.m5StickC.quaternion.slerp(new THREE.Quaternion(), this.smoothing);
     }
+
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame(this._tick);
+  }
+
+  /** 現在姿勢を新しい初期基準にする (絶対 3D の Init Yaw / Reset Base 相当) */
+  initBase() {
+    this._qInitial.copy(this._qCurrent);
+    this._qInitialValid = true;
+  }
+  /** 初期基準を identity に戻す (= Mahony 起動基準と同じ) */
+  resetBase() {
+    this._qInitial.identity();
+    this._qInitialValid = true;
   }
 
   _onResize() {
