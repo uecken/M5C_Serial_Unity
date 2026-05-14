@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260514-110301';
-import { BleClient }    from './lib/BleClient.js?v=20260514-110301';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-110301';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-110301';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-110301';
+import { SerialClient } from './lib/SerialClient.js?v=20260514-114909';
+import { BleClient }    from './lib/BleClient.js?v=20260514-114909';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-114909';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-114909';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-114909';
 
 const html = htm.bind(h);
 
@@ -108,6 +108,9 @@ function App() {
   // 姿勢キャプチャ (Euler [r,p,y]、tol [r,p,y])
   const [startPosture, setStartPosture] = useState(null);   // {euler:[r,p,y], tol:[r,p,y]} | null
   const [endPosture, setEndPosture] = useState(null);
+  // Phase 5.39: Hold with Waypoints — 中間姿勢 (最大 2 個) と判定基準
+  const [midPostures, setMidPostures] = useState([]);   // [{euler, euler_tol, quat} | null, ...] 最大 2 個
+  const [postureBasis, setPostureBasis] = useState('absolute');   // 'absolute' (default、Mahony 起動基準) | 'relative' (button 押下時を基準)
   const [postureTol, setPostureTol] = useState(15);   // ±degrees (一律、簡易)
   // 軸別 tol オーバーライド (Phase 5.15、空 or 0 なら postureTol 使用、180 で軸を実質除外)
   const [postureTolRoll, setPostureTolRoll] = useState('');
@@ -892,6 +895,28 @@ function App() {
   const clearStartPosture = () => setStartPosture(null);
   const clearEndPosture   = () => setEndPosture(null);
 
+  // Phase 5.39: 中間姿勢 (waypoints) キャプチャ (0..2 個)
+  const captureMidPosture = (index) => {
+    if (!sensor) { alert('センサーストリーム ON にしてから姿勢を取得してください'); return; }
+    const newMid = {
+      euler: [sensor.roll, sensor.pitch, sensor.yaw],
+      euler_tol: buildPostureTol(),
+      quat: [sensor.qw, sensor.qx, sensor.qy, sensor.qz],
+    };
+    setMidPostures(prev => {
+      const copy = [...prev];
+      copy[index] = newMid;
+      return copy;
+    });
+  };
+  const clearMidPosture = (index) => {
+    setMidPostures(prev => prev.filter((_, i) => i !== index));
+  };
+  const addMidPostureSlot = () => {
+    if (midPostures.length >= 2) return;
+    setMidPostures(prev => [...prev, null]);   // null スロット = 未キャプチャ
+  };
+
   // 修飾キービット (BleCombo の HID キーコード規約に近い形)
   // bit0=Ctrl, bit1=Shift, bit2=Alt, bit3=GUI(Win)
   const buildModifiers = () => {
@@ -966,6 +991,33 @@ function App() {
     if (ruleButtonEnabled) {
       r.button_idx = parseInt(ruleButtonIdx, 10);
       r.button_state = parseInt(ruleButtonState, 10);
+    }
+    // Phase 5.39: hold_with_waypoints (Hold Start End + 中間姿勢 0..2 個 + 判定基準)
+    if (ruleMode === 'hold_with_waypoints') {
+      r.ui_mode = 'hold_with_waypoints';
+      r.posture_basis = postureBasis;   // 'absolute' | 'relative'
+      // 開始姿勢: r.posture に既に設定済 (共通ブロック) — ここで明示的に start_posture にも複製
+      if (startPosture) {
+        r.start_posture = {
+          euler: startPosture.euler,
+          euler_tol: startPosture.euler_tol,
+        };
+        if (startPosture.quat) r.start_posture.quat = startPosture.quat;
+      }
+      // 中間姿勢配列 (null スロット除外)
+      r.mid_postures = midPostures.filter(p => p != null).map(p => ({
+        euler: p.euler,
+        euler_tol: p.euler_tol,
+        quat: p.quat,
+      }));
+      // 終了姿勢
+      if (endPosture) {
+        r.end_posture = {
+          euler: endPosture.euler,
+          euler_tol: endPosture.euler_tol,
+        };
+        if (endPosture.quat) r.end_posture.quat = endPosture.quat;
+      }
     }
     if (ruleMode === 'hold_start_end' && endPosture) {
       r.end_posture = { euler: endPosture.euler, euler_tol: endPosture.euler_tol };
@@ -1556,6 +1608,13 @@ function App() {
       </div>
     ` : null}
 
+    <!-- Phase 5.39: hold_with_waypoints 用 FW バージョン警告 -->
+    ${connected && ruleMode === 'hold_with_waypoints' && deviceInfo?.fw_phase && parseFloat(deviceInfo.fw_phase) < 5.39 ? html`
+      <div class="mb-3 p-2 bg-red-50 border-l-4 border-red-400 text-sm text-red-700">
+        ⚠ FW Phase ${deviceInfo.fw_phase} < 5.39 のため <b>hold_with_waypoints</b> モードは使用不可。FW を 5.39+ にアップデートしてください。
+      </div>
+    ` : null}
+
     <!-- FW Phase 古い警告 (Closest-only ON で Phase < 5.15 = tol 重み付け未対応) -->
     ${connected && closestOnlyMode && deviceInfo?.fw_phase && parseFloat(deviceInfo.fw_phase) < 5.15 ? html`
       <div class="mb-3 p-3 bg-amber-50 border-l-4 border-amber-400 text-sm">
@@ -2077,6 +2136,7 @@ function App() {
               <option value="oneshot">ONESHOT (1発)</option>
               <option value="hold_start_only">HOLD_START_ONLY (押下保持)</option>
               <option value="hold_start_end">HOLD_START_END (開始/終了 別姿勢)</option>
+              <option value="hold_with_waypoints">HOLD with Waypoints (開始→中間→終了)</option>
             </select>
           </div>
 
@@ -2150,7 +2210,30 @@ function App() {
                 ` : null}
               ` : html`<span class="text-slate-400">未取得 (Stream ON で取得可)</span>`}
             </div>
-            ${ruleMode === 'hold_start_end' ? html`
+            ${ruleMode === 'hold_with_waypoints' ? html`
+              <!-- Phase 5.39: 中間姿勢キャプチャ (0-2 個、+ ボタンで動的追加) -->
+              ${midPostures.map((mid, i) => html`
+                <div class="flex items-center gap-2 mb-1 flex-wrap text-xs">
+                  <button onClick=${() => captureMidPosture(i)} disabled=${!connected || !sensor}
+                    class="px-2 py-0.5 bg-purple-200 hover:bg-purple-300 rounded disabled:opacity-40">
+                    📷 中間姿勢 ${i + 1}
+                  </button>
+                  ${mid ? html`
+                    <span class="font-mono ${postureUseRoll ? 'text-purple-700' : 'text-slate-400 line-through'}">R:${mid.euler[0].toFixed(0)}</span>
+                    <span class="font-mono ${postureUsePitch ? 'text-purple-700' : 'text-slate-400 line-through'}">P:${mid.euler[1].toFixed(0)}</span>
+                    <span class="font-mono ${postureUseYaw ? 'text-purple-700' : 'text-slate-400 line-through'}">Y:${mid.euler[2].toFixed(0)}</span>
+                    <button onClick=${() => clearMidPosture(i)} class="text-xs text-red-600 hover:underline">×</button>
+                  ` : html`<span class="text-slate-400">未取得</span>`}
+                </div>
+              `)}
+              ${midPostures.length < 2 ? html`
+                <button onClick=${addMidPostureSlot}
+                  class="text-xs text-purple-600 hover:underline mb-1">
+                  + 中間姿勢を追加 (${midPostures.length}/2)
+                </button>
+              ` : null}
+            ` : null}
+            ${(ruleMode === 'hold_start_end' || ruleMode === 'hold_with_waypoints') ? html`
               <div class="flex items-center gap-2 flex-wrap text-xs">
                 <button onClick=${captureEndPosture} disabled=${!connected || !sensor}
                   class="px-2 py-0.5 bg-orange-200 hover:bg-orange-300 rounded disabled:opacity-40">📷 終了姿勢</button>
@@ -2167,6 +2250,32 @@ function App() {
                   ` : null}
                 ` : html`<span class="text-slate-400">未取得</span>`}
               </div>
+            ` : null}
+            ${ruleMode === 'hold_with_waypoints' ? html`
+              <!-- 判定基準セレクタ (折り畳み、UI 複雑度抑制ガイドラインに従い default は absolute) -->
+              <details class="mt-2 text-xs">
+                <summary class="cursor-pointer text-slate-600">▼ 詳細設定 (判定基準)</summary>
+                <div class="mt-1 pl-3 flex items-center gap-3 flex-wrap">
+                  <span>判定基準:</span>
+                  <label class="flex items-center gap-1">
+                    <input type="radio" name="posture_basis" value="absolute"
+                      checked=${postureBasis === 'absolute'}
+                      onChange=${() => setPostureBasis('absolute')} />
+                    絶対 Euler (Mahony 起動基準)
+                  </label>
+                  <label class="flex items-center gap-1">
+                    <input type="radio" name="posture_basis" value="relative"
+                      checked=${postureBasis === 'relative'}
+                      onChange=${() => setPostureBasis('relative')} />
+                    相対 Quaternion (ボタン押下時を基準)
+                  </label>
+                </div>
+                ${postureBasis === 'relative' ? html`
+                  <div class="mt-1 ml-3 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                    💡 state[0] (開始条件) 成立時に q_ref を自動取得、以降は相対 quat で判定。Yaw ドリフト無関係、持ち方自由。
+                  </div>
+                ` : null}
+              </details>
             ` : null}
           </div>
 
@@ -2216,7 +2325,7 @@ function App() {
           <!-- 出力アクション -->
           <div class="border rounded p-2 bg-emerald-50">
             <div class="text-xs font-semibold text-slate-600 mb-1">
-              出力 HID キー${ruleMode === 'hold_start_end' ? ' (開始姿勢で press → 終了姿勢で release)' : ''}
+              出力 HID キー${ruleMode === 'hold_start_end' ? ' (開始姿勢で press → 終了姿勢で release)' : ruleMode === 'hold_with_waypoints' ? ' (開始姿勢で press → 中間 → 終了姿勢で release)' : ''}
             </div>
             <div class="flex items-center gap-1 mb-1 flex-wrap text-xs">
               <span>修飾:</span>
@@ -2264,7 +2373,7 @@ function App() {
             `}
           </div>
 
-          ${ruleMode === 'hold_start_end' ? html`
+          ${(ruleMode === 'hold_start_end' || ruleMode === 'hold_with_waypoints') ? html`
             <!-- 終了側 別キー (オプション) -->
             <div class="border rounded p-2 bg-orange-50">
               <div class="text-xs font-semibold text-slate-600 mb-1">

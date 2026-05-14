@@ -64,6 +64,22 @@
       "tags": ["magic", "wand", "harry-potter", "demo", "sequence", "text-input", "gesture-only", "single"],
       "rule_count": 1,
       "file": "harry_potter_wingardium_no_btn.json"
+    },
+    {
+      "id": "wingardium_hold_euler",
+      "title": "🪄 Wingardium Hold + Euler (要 Phase 5.39+)",
+      "description": "Hold + 中間 2 姿勢 + 絶対 Euler、Btn3 ゲート",
+      "tags": ["magic", "wand", "harry-potter", "hold", "euler", "phase-5.39"],
+      "rule_count": 1,
+      "file": "wingardium_hold_euler.json"
+    },
+    {
+      "id": "wingardium_hold_relative",
+      "title": "🪄 Wingardium Hold + 相対 Quat (要 Phase 5.39+)",
+      "description": "Hold + 中間 2 姿勢 + 相対 Quat + Btn3、Yaw drift 無関係",
+      "tags": ["magic", "wand", "harry-potter", "hold", "relative-quat", "phase-5.39"],
+      "rule_count": 1,
+      "file": "wingardium_hold_relative.json"
     }
   ]
 }
