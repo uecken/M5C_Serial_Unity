@@ -89,6 +89,11 @@ export class RelativeIMUViewer {
     this._qInitialValid = false;
     this._selectedRule = null;                 // {posture_basis, start_posture, mid_postures, end_posture}
     this.smoothing = opts.smoothing ?? 0.3;
+    // Phase 5.39.3a.7: hot loop で再利用する temp object (clone()/new を排除)
+    this._tmpQuat1 = new THREE.Quaternion();
+    this._tmpQuat2 = new THREE.Quaternion();
+    this._tmpQuatIdentity = new THREE.Quaternion();
+    this._trailDirty = true;   // addTrailPoint で立て、_tick で消費 → 1 RAF に 1 回だけ再構築
 
     // resize + RAF
     this._resizeObserver = new ResizeObserver(() => this._onResize());
@@ -126,13 +131,14 @@ export class RelativeIMUViewer {
     if (!was && this._renderEnabled) requestAnimationFrame(this._tick);
   }
 
-  /** 過去軌跡 trail に新点 (M5C 軸 quat) — worldGroup 内に世界固定で記録 */
+  /** 過去軌跡 trail に新点 (M5C 軸 quat) — worldGroup 内に世界固定で記録
+   *  Phase 5.39.3a.7: _updateTrailGeometry の毎呼出を撤去 → RAF tick で 1 回だけ再構築 */
   addTrailPoint(qw, qx, qy, qz, timestamp) {
     const t = (typeof timestamp === 'number') ? timestamp : performance.now();
     const q = new THREE.Quaternion(-qx, qz, qy, qw);
     this._trail.push({ q, t });
     this._pruneTrail(t);
-    this._updateTrailGeometry(t);
+    this._trailDirty = true;
   }
 
   _pruneTrail(now) {
@@ -149,13 +155,24 @@ export class RelativeIMUViewer {
     const posAttr = geo.getAttribute('position');
     const colAttr = geo.getAttribute('color');
     const n = this._trail.length;
-    // Phase 5.39.3a.2: 各 trail 点を q_initial⁻¹ * q_trail で相対化してから球面投影
-    //   q_initial が更新されると trail の位置も新基準で再計算される (= 「初期姿勢からの相対軌跡」が一貫表示)
-    const qInvInit = this._qInitialValid ? this._qInitial.clone().invert() : null;
+    // Phase 5.39.3a.7: clone() を排除、temp Quaternion を再利用 (GC 圧迫削減)
+    let qInvInit = null;
+    if (this._qInitialValid) {
+      qInvInit = this._tmpQuat1.copy(this._qInitial).invert();   // reuse temp1
+    }
+    const tmp = this._tmpQuat2;
     for (let i = 0; i < n; i++) {
       const e = this._trail[i];
-      const qRel = qInvInit ? qInvInit.clone().multiply(e.q) : e.q;
-      const p = this._quatToSpherePoint(qRel).clone().multiplyScalar(1.005);
+      let qRel;
+      if (qInvInit) {
+        tmp.copy(qInvInit).multiply(e.q);   // reuse temp2, no allocation
+        qRel = tmp;
+      } else {
+        qRel = e.q;
+      }
+      // _quatToSpherePoint が new Vector3 を返すが、即 multiplyScalar で書換 → clone 不要
+      const p = this._quatToSpherePoint(qRel);
+      p.multiplyScalar(1.005);
       posAttr.setXYZ(i, p.x, p.y, p.z);
       const age = (now - e.t) / this._trailDurationMs;
       const alpha = Math.max(0, 1 - age);
@@ -164,6 +181,7 @@ export class RelativeIMUViewer {
     posAttr.needsUpdate = true;
     colAttr.needsUpdate = true;
     geo.setDrawRange(0, n);
+    this._trailDirty = false;
   }
 
   clearTrail() {
@@ -385,12 +403,18 @@ export class RelativeIMUViewer {
     this.worldGroup.quaternion.identity();
 
     // M5C モデル回転: q_initial 確定済みの場合のみ q_initial⁻¹ * q_current で回転
+    // Phase 5.39.3a.7: clone()/new を排除 (temp quat 再利用)
     if (this._qInitialValid) {
-      const qRel = this._qInitial.clone().invert().multiply(this._qCurrent);
+      const qRel = this._tmpQuat1.copy(this._qInitial).invert().multiply(this._qCurrent);
       this.m5StickC.quaternion.slerp(qRel, this.smoothing);
     } else {
-      // ボタン押下前 = M5C モデル中央で動かない
-      this.m5StickC.quaternion.slerp(new THREE.Quaternion(), this.smoothing);
+      // ボタン押下前 = M5C モデル中央で動かない (identity に slerp)
+      this.m5StickC.quaternion.slerp(this._tmpQuatIdentity, this.smoothing);
+    }
+
+    // Phase 5.39.3a.7: trail 再構築は RAF tick で 1 回だけ実行 (addTrailPoint からは外した)
+    if (this._trailDirty) {
+      this._updateTrailGeometry(performance.now());
     }
 
     this.renderer.render(this.scene, this.camera);
