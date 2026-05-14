@@ -182,21 +182,34 @@ export class RelativeIMUViewer {
   }
 
   /** q_ref 確定通知 (trigger.hit phase='enter' で受信)
-   *   - valid=true: 実 q_ref で waypoint を固定 (濃い実線)、trajectoryMode='fixed'
-   *   - valid=false: プレビューモードに戻す
+   *   - valid=true: 実 q_ref を基準姿勢 (q_initial) として設定 → M5C モデル回転開始
+   *                 waypoint を固定 (濃い実線)、trajectoryMode='fixed'
+   *   - valid=false: q_initial リセット → M5C モデル中央固定、プレビュー軌跡に戻す
+   *
+   *  ★ ユーザー仕様 (Phase 5.39.2.2):
+   *     - ボタン押下前は M5C モデル中央で動かない (q_initial 未設定)
+   *     - ボタン押下 (state[0] enter で q_ref 受信) → q_initial = q_ref に設定
+   *       以降、M5C モデルは「q_ref 基準でデバイスがどう動いたか」を表示
+   *     - ボタン離す → q_initial 解除 → M5C モデル中央に戻る
    */
   setQRef(qrefArr, valid) {
     if (valid && Array.isArray(qrefArr) && qrefArr.length === 4) {
       const [qw, qx, qy, qz] = qrefArr;
       this._qRef.set(-qx, qz, qy, qw);
       this._qRefValid = true;
+      // q_ref を初期姿勢として設定 → M5C モデルが q_ref からの相対回転を表示開始
+      this._qInitial.copy(this._qRef);
+      this._qInitialValid = true;
       this.setTrajectoryMode('fixed');
     } else {
       this._qRef.identity();
       this._qRefValid = false;
+      // q_initial も解除 → M5C モデル中央固定に戻る
+      this._qInitial.identity();
+      this._qInitialValid = false;
       this.setTrajectoryMode('preview');
     }
-    // q_ref 変化時は waypoint も描き直し (qref_anchor モード時に M5C も更新)
+    // q_ref 変化時は waypoint も描き直し
     this._rebuildWaypoints();
   }
 
@@ -344,27 +357,22 @@ export class RelativeIMUViewer {
     if (!this._renderEnabled) return;   // タブ非表示時は描画停止
     this._frameCount = (this._frameCount || 0) + 1;
 
-    // ★ 相対 3D の正しい仕様:
+    // ★ 相対 3D の正しい仕様 (Phase 5.39.2.2):
     //   - ワールド (球面 / waypoint / 軌跡) は固定 (worldGroup.quaternion = identity)
-    //   - M5C モデルは q_initial⁻¹ * q_current で回転
-    //     = 初期姿勢を identity と仮定したときの M5C 向き
-    //   - 初期姿勢: 最初の setQuaternion で自動取得 (or initBase / setQRef で更新)
-
-    // 初回 setQuaternion 受信時に自動で q_initial を確定
-    const qcLen = this._qCurrent.lengthSq();
-    if (!this._qInitialValid && qcLen > 0.5) {
-      this._qInitial.copy(this._qCurrent);
-      this._qInitialValid = true;
-    }
+    //   - M5C モデルは「ボタン押下時の q_ref を基準」とした相対回転で動く
+    //     ・q_initial 未設定 (= ボタン押下前) → M5C モデルは中央固定 (identity)
+    //     ・q_initial 確定 (= setQRef で q_ref 受信) → M5C モデル = q_initial⁻¹ * q_current
+    //   - 起動時に自動取得はしない (= 絶対 3D と同じ見え方になるバグ回避)
 
     // ワールド固定
     this.worldGroup.quaternion.identity();
 
-    // M5C モデル回転 = q_initial⁻¹ * q_current
+    // M5C モデル回転: q_initial 確定済みの場合のみ q_initial⁻¹ * q_current で回転
     if (this._qInitialValid) {
       const qRel = this._qInitial.clone().invert().multiply(this._qCurrent);
       this.m5StickC.quaternion.slerp(qRel, this.smoothing);
     } else {
+      // ボタン押下前 = M5C モデル中央で動かない
       this.m5StickC.quaternion.slerp(new THREE.Quaternion(), this.smoothing);
     }
 

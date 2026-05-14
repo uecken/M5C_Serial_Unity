@@ -4,12 +4,12 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260514-134540';
-import { BleClient }    from './lib/BleClient.js?v=20260514-134540';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-134540';
-import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260514-134540';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-134540';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-134540';
+import { SerialClient } from './lib/SerialClient.js?v=20260514-135244';
+import { BleClient }    from './lib/BleClient.js?v=20260514-135244';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-135244';
+import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260514-135244';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-135244';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-135244';
 
 const html = htm.bind(h);
 
