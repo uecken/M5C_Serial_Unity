@@ -389,6 +389,90 @@ export class RelativeTrajectoryGrid {
     ctx.fillText('30°', cx + R * Math.sin(Math.PI / 6) + 2, cy - 2);
     ctx.fillText('60°', cx + R * Math.sin(Math.PI / 3) + 2, cy - 2);
     ctx.fillText('90° (赤道)', cx + R + 4, cy - 2);
+
+    // Phase 5.39.3a.4: XY 軸ラベル (Roll/Pitch 2D マップとの対応がわかるように)
+    //   X 軸 = 杖の左右方向 ≒ 相対 Yaw
+    //   Y 軸 = 杖の上下方向 ≒ 相対 Pitch
+    //   tan(angle) * R で SCALE=R*1.0 のとき 45° = R, 30° ≈ 0.577R, 60° ≈ 1.73R
+    ctx.fillStyle = '#475569';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('← Yaw (左) | Yaw (右) →', cx, cy + R + 24);
+    // Y 軸ラベル: 縦書きはせず、上下に分けて表示
+    ctx.save();
+    ctx.translate(cx - R - 18, cy);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText('Pitch (上) → ← Pitch (下)', 0, 0);
+    ctx.restore();
+    // X 軸刻み (相対 Yaw deg)
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = 'center';
+    [-60, -45, -30, 30, 45, 60].forEach((deg) => {
+      const radians = deg * Math.PI / 180;
+      const x = cx + Math.tan(radians) * R;
+      if (Math.abs(Math.tan(radians) * R) < R * 1.5) {
+        ctx.fillText(`${deg}°`, x, cy + R + 12);
+      }
+    });
+    // Y 軸刻み
+    [-60, -45, -30, 30, 45, 60].forEach((deg) => {
+      const radians = deg * Math.PI / 180;
+      const y = cy - Math.tan(radians) * R;
+      if (Math.abs(Math.tan(radians) * R) < R * 1.5) {
+        ctx.textAlign = 'right';
+        ctx.fillText(`${deg}°`, cx - R - 4, y + 3);
+      }
+    });
+    ctx.textAlign = 'start';
+  }
+
+  // ==========================================================
+  // Phase 5.39.3a.5: 量表示用ゲッタ (現在 quat → forward / 2D / 相対 Euler)
+  //   app.js の数値オーバーレイから呼び出される
+  // ==========================================================
+  getCurrentInfo() {
+    if (!this._qInitialValid) {
+      return {
+        qInitialValid: false,
+        qCurrent: this._qCurrent,
+        qInitial: this._qInitial,
+        message: 'q_initial 未設定',
+      };
+    }
+    const qInv = RelativeTrajectoryGrid.qConj(this._qInitial);
+    const qRel = RelativeTrajectoryGrid.qMul(qInv, this._qCurrent);
+    const fwd = RelativeTrajectoryGrid.quatToForward(qRel);
+    const twist = RelativeTrajectoryGrid.quatToTwistZDeg(qRel);
+    // 相対 Euler (deg)
+    const eul = RelativeTrajectoryGrid.quatToEulerDeg(qRel);
+    // 2D 投影座標 (壁との交点、SCALE 適用前の正規化値)
+    const visible = fwd[2] > 0.1;
+    const sx = visible ? fwd[0] / fwd[2] : null;
+    const sy = visible ? fwd[1] / fwd[2] : null;
+    return {
+      qInitialValid: true,
+      qCurrent: this._qCurrent,
+      qInitial: this._qInitial,
+      qRel,
+      forward: fwd,
+      twist,
+      relEuler: eul,
+      projection2D: { x: sx, y: sy, visible },
+    };
+  }
+
+  static quatToEulerDeg(q) {
+    // ZYX intrinsic Euler 抽出 (Mahony 規約)
+    const w = q[0], x = q[1], y = q[2], z = q[3];
+    const RAD2DEG = 57.29577951;
+    const roll = Math.atan2(2 * (w*x + y*z), 1 - 2 * (x*x + y*y)) * RAD2DEG;
+    let sp = 2 * (w*y - z*x);
+    if (sp > 1.0) sp = 1.0;
+    if (sp < -1.0) sp = -1.0;
+    const pitch = Math.asin(sp) * RAD2DEG;
+    const yaw = Math.atan2(2 * (w*z + x*y), 1 - 2 * (y*y + z*z)) * RAD2DEG;
+    return [roll, pitch, yaw];
   }
 
   _drawCenterMarker(cx, cy, R) {

@@ -2047,7 +2047,7 @@ function App() {
         ` : null}
         ${viewerTab === 'relative_2d' ? html`
           <div class="text-[11px] text-slate-500 mt-1 flex items-center gap-2 flex-wrap">
-            <span>📈 相対 2D 軌跡: q_initial を中心、forward 正射影で半球内を 2D 平面化 (Wand Movements chart 風)。</span>
+            <span>📈 相対 2D 軌跡: q_initial 中心、遠近射影 (壁と杖の交点)。X軸=Yaw、Y軸=Pitch。</span>
             ${selectedRuleId >= 0 ? html`
               <span class="ml-auto text-emerald-700">
                 選択 rule の waypoint を紫円で表示
@@ -2058,6 +2058,31 @@ function App() {
               </span>
             `}
           </div>
+          <!-- Phase 5.39.3a.5: 量表示オーバーレイ (sensor / q_initial / 相対 quat / forward / 2D / 相対 Euler) -->
+          ${sensor ? html`
+            <div class="text-[10px] mt-1 px-2 py-1 rounded font-mono bg-slate-50 border border-slate-300 grid grid-cols-2 md:grid-cols-3 gap-1">
+              <span><b>sensor.quat</b>: [${sensor.qw?.toFixed(3)}, ${sensor.qx?.toFixed(3)}, ${sensor.qy?.toFixed(3)}, ${sensor.qz?.toFixed(3)}]</span>
+              <span><b>絶対 Euler [°]</b>: R=${sensor.roll?.toFixed(1)} P=${sensor.pitch?.toFixed(1)} Y=${sensor.yaw?.toFixed(1)}</span>
+              <span><b>q_initial</b>: ${(() => {
+                const info = relativeTrajectoryGridRef.current?.getCurrentInfo?.();
+                if (!info || !info.qInitialValid) return html`<span class="text-amber-700">未設定 (Init Yaw で確定)</span>`;
+                const q = info.qInitial;
+                return `[${q.x.toFixed(3)}, ${q.y.toFixed(3)}, ${q.z.toFixed(3)}, ${q.w.toFixed(3)}] (3JS xyzw)`;
+              })()}</span>
+              ${(() => {
+                const info = relativeTrajectoryGridRef.current?.getCurrentInfo?.();
+                if (!info || !info.qInitialValid) return null;
+                return html`
+                  <span><b>q_rel</b>: [${info.qRel[0].toFixed(3)}, ${info.qRel[1].toFixed(3)}, ${info.qRel[2].toFixed(3)}, ${info.qRel[3].toFixed(3)}]</span>
+                  <span><b>forward</b>: [${info.forward[0].toFixed(3)}, ${info.forward[1].toFixed(3)}, ${info.forward[2].toFixed(3)}] z>${info.forward[2] > 0.1 ? '0.1✓' : '0.1❌'}</span>
+                  <span><b>2D (壁交点)</b>: ${info.projection2D.visible
+                    ? `(${info.projection2D.x.toFixed(2)}, ${info.projection2D.y.toFixed(2)})`
+                    : html`<span class="text-red-600">裏側 (forward.z<0.1)</span>`}</span>
+                  <span class="col-span-2 md:col-span-3"><b>相対 Euler [°]</b> (q_rel から抽出): R=${info.relEuler[0].toFixed(1)} P=${info.relEuler[1].toFixed(1)} Y=${info.relEuler[2].toFixed(1)} (twist=${info.twist.toFixed(1)})</span>
+                `;
+              })()}
+            </div>
+          ` : html`<div class="text-[10px] text-slate-400 mt-1">Stream OFF — 数値表示には Stream ON が必要</div>`}
         ` : null}
         ${viewerTab === 'relative' ? html`
           <div class="text-[11px] text-slate-500 mt-1 flex items-center gap-2 flex-wrap">
