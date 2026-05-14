@@ -278,12 +278,39 @@ export class RelativeTrajectoryGrid {
     const cx = W / 2;
     const cy = H / 2;
     const R = Math.min(W, H) * 0.45;
-    // forward.x → +X 右、forward.y → +Y 上 (画面 Y は下向きなので反転)
+    // Phase 5.39.3a.3: 遠近射影 (perspective projection、「壁との交点」モデル)
+    //   ユーザー期待: 杖を「壁」に向けたとき、壁上の交点が 2D 軌跡上の点に
+    //   旧 (正射影): canvas = (fwd.x * R, -fwd.y * R)
+    //   新 (遠近射影): canvas = (fwd.x / fwd.z * scale, -fwd.y / fwd.z * scale)
+    //     杖が真正面 (forward = ẑ) → 中央 (0, 0)
+    //     杖が前方 45° に振り → tan(45°) = 1.0 → 半径 R 程度の位置
+    //     杖が前方 60° に振り → tan(60°) ≈ 1.73 → 半径外 (clamp)
+    //   壁との交点は (fwd.x/fwd.z, fwd.y/fwd.z)、scale で表示範囲調整
+    const fx = fwd[0];
+    const fy = fwd[1];
+    const fz = fwd[2];
+    // 杖が後ろ向き / 真横方向 (fz <= 0.1) は表示外
+    const visible = fz > 0.1;
+    let sx, sy;
+    if (visible) {
+      // tan(角度) 系の透視投影、scale = R * 1.0 で振り角 45° が画面端付近
+      const SCALE = R * 1.0;
+      sx = (fx / fz) * SCALE;
+      sy = (fy / fz) * SCALE;
+      // 画面端を超える場合は clamp (= 振り角 大すぎ、視認外)
+      const MAX = R * 2.5;
+      sx = Math.max(-MAX, Math.min(MAX, sx));
+      sy = Math.max(-MAX, Math.min(MAX, sy));
+    } else {
+      // 裏半球: 表示外、ただし古い軌跡描画用に座標は返す
+      sx = fx * R;
+      sy = fy * R;
+    }
     return {
-      x: cx + fwd[0] * R,
-      y: cy - fwd[1] * R,
-      z: fwd[2],
-      visible: fwd[2] > -0.05,    // 裏半球はマージン込みで弱表示
+      x: cx + sx,
+      y: cy - sy,    // 画面 Y 反転
+      z: fz,
+      visible,
       cx, cy, R,
     };
   }
