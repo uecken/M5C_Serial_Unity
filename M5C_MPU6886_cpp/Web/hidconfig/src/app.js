@@ -328,7 +328,10 @@ function App() {
   }, [relativeTrajectoryCanvasRef.current]);
 
   // Phase 5.39.2 / 5.39.3b: タブ切替時に各ビュアの RAF を ON/OFF (非表示タブの CPU 節約)
+  // Phase 5.39.3a.6: onSensor からタブ別データ供給するため viewerTab を ref に保持
+  const viewerTabRef = useRef(viewerTab);
   useEffect(() => {
+    viewerTabRef.current = viewerTab;
     viewerRef.current?.setRenderEnabled?.(viewerTab === 'absolute');
     relativeViewerRef.current?.setRenderEnabled?.(viewerTab === 'relative');
     relativeTrajectoryGridRef.current?.setRenderEnabled?.(viewerTab === 'relative_2d');
@@ -680,27 +683,29 @@ function App() {
       sensorRef.current = detail;
 
       // ---- 1) 重い imperative API 呼出を full rate で直接実行 ----
+      //   Phase 5.39.3a.6: 非表示タブのビュアにはデータを渡さない (trail buffer 蓄積 + CPU 抑制)
+      const tab = viewerTabRef.current;
       const viewer = viewerRef.current;
       const relViewer = relativeViewerRef.current;
       const grid = gridRef.current;
-      if (viewer && detail.qw !== undefined) {
+      if (viewer && detail.qw !== undefined && tab === 'absolute') {
         viewer.setQuaternion(detail.qw, detail.qx, detail.qy, detail.qz);
         viewer.setCurrentDot(detail.qw, detail.qx, detail.qy, detail.qz);
         // Phase 5.39.2: 過去軌跡 trail に現在 quat を追加 (絶対ビュア、3 秒履歴)
         viewer.addTrailPoint?.(detail.qw, detail.qx, detail.qy, detail.qz, detail.t);
       }
       // Phase 5.39.2: 相対 3D ビュアにも sensor.quat を渡す (worldGroup 逆回転 + trail)
-      if (relViewer && detail.qw !== undefined) {
+      if (relViewer && detail.qw !== undefined && tab === 'relative') {
         relViewer.setQuaternion(detail.qw, detail.qx, detail.qy, detail.qz);
         relViewer.addTrailPoint(detail.qw, detail.qx, detail.qy, detail.qz, detail.t);
       }
       // Phase 5.39.3b: 相対 2D 軌跡 grid にも sensor.quat を渡す
       const relGrid = relativeTrajectoryGridRef.current;
-      if (relGrid && detail.qw !== undefined) {
+      if (relGrid && detail.qw !== undefined && tab === 'relative_2d') {
         relGrid.setQuaternion(detail.qw, detail.qx, detail.qy, detail.qz);
         relGrid.addTrailPoint(detail.qw, detail.qx, detail.qy, detail.qz, detail.t);
       }
-      if (viewer && detail.ax !== undefined) {
+      if (viewer && detail.ax !== undefined && tab === 'absolute') {
         viewer.setGravityVector(detail.ax, detail.ay, detail.az);
       }
       if (grid && detail.roll !== undefined) {
