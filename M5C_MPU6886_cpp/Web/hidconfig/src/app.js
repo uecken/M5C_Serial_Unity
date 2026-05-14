@@ -2066,8 +2066,8 @@ function App() {
               <span><b>q_initial</b>: ${(() => {
                 const info = relativeTrajectoryGridRef.current?.getCurrentInfo?.();
                 if (!info || !info.qInitialValid) return html`<span class="text-amber-700">未設定 (Init Yaw で確定)</span>`;
-                const q = info.qInitial;
-                return `[${q.x.toFixed(3)}, ${q.y.toFixed(3)}, ${q.z.toFixed(3)}, ${q.w.toFixed(3)}] (3JS xyzw)`;
+                const q = info.qInitial;   // [qw, qx, qy, qz]
+                return `[${q[0].toFixed(3)}, ${q[1].toFixed(3)}, ${q[2].toFixed(3)}, ${q[3].toFixed(3)}] (wxyz)`;
               })()}</span>
               ${(() => {
                 const info = relativeTrajectoryGridRef.current?.getCurrentInfo?.();
