@@ -349,16 +349,20 @@ void TriggerEngine::evaluateRule(ActionRule& rule, const SensorState& s) {
             matchCondition(rule.states[0].match_condition, s, &rule)) {
             rule.current_state = 0;
             rule.state_enter_ms = now;
-            // Phase 5.39.3a: state[0] enter での q_ref スナップショットは撤去。
-            //   判定は g_engine.q_initial (デバイス単位、posture.init で明示設定) を使用する。
-            //   下記は旧仕様の保留コードであり、将来 rule 単位 ref に戻す可能性のため残す:
-            // if (rule.posture_basis == PB_RELATIVE_QUAT) {
-            //     rule.q_ref[0] = s.quat[0];
-            //     rule.q_ref[1] = s.quat[1];
-            //     rule.q_ref[2] = s.quat[2];
-            //     rule.q_ref[3] = s.quat[3];
-            //     rule.q_ref_valid = true;
-            // }
+            // Phase 5.39.3a.1 (ユーザー指摘で復活): 相対モード rule の state[0] enter で
+            //   g_engine.q_initial_ を sensor.quat に自動更新。
+            //   これにより「ボタン押下時に M5C モデルが画面中央 (= 初期姿勢) に戻る」UX を実現。
+            //   Init Yaw / Reset Base ボタンで明示設定したものは、次のボタン押下で上書きされる。
+            //   Web UI で 3D 相対ビュア + 相対 2D 軌跡が q_initial 基準で描画される。
+            if (rule.posture_basis == PB_RELATIVE_QUAT) {
+                setInitialPosture(s.quat);   // g_engine.q_initial_ を更新、q_initial_valid_=true
+                // 旧 rule.q_ref も互換性のため同時に更新 (types.hpp 残置フィールド)
+                rule.q_ref[0] = s.quat[0];
+                rule.q_ref[1] = s.quat[1];
+                rule.q_ref[2] = s.quat[2];
+                rule.q_ref[3] = s.quat[3];
+                rule.q_ref_valid = true;
+            }
             executeAction(rule.states[0].on_enter);
             fireWatchEvent(rule, "enter", &rule.states[0].on_enter);
 
