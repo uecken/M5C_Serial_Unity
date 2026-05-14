@@ -154,7 +154,11 @@ export class PitchRollGrid {
     this.draw();
   }
 
+  // Phase 5.35: draw() 呼出回数をカウント (perf overlay 用)
+  getDrawCount() { const n = this._drawCount || 0; this._drawCount = 0; return n; }
+
   draw() {
+    this._drawCount = (this._drawCount || 0) + 1;
     const { ctx, canvas } = this;
     const W = canvas.width;
     const H = canvas.height;

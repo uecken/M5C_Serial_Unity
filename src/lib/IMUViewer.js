@@ -222,8 +222,12 @@ export class IMUViewer {
     this.targetQuat.identity();
   }
 
+  // Phase 5.35: RAF frame count (perf overlay 用)
+  getFrameCount() { const n = this._frameCount || 0; this._frameCount = 0; return n; }
+
   _tick() {
     if (!this._running) return;
+    this._frameCount = (this._frameCount || 0) + 1;
     // base からの相対回転を M5StickC モデルに適用 (球体は固定、ユーザー仕様)
     const q = this.qRef.clone().multiply(this.targetQuat);
     this.m5StickC.quaternion.slerp(q, this.smoothing);

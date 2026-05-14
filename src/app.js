@@ -4,11 +4,11 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260514-100233';
-import { BleClient }    from './lib/BleClient.js?v=20260514-100233';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-100233';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-100233';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-100233';
+import { SerialClient } from './lib/SerialClient.js?v=20260514-101336';
+import { BleClient }    from './lib/BleClient.js?v=20260514-101336';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-101336';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-101336';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-101336';
 
 const html = htm.bind(h);
 
@@ -47,6 +47,23 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [deviceInfo, setDeviceInfo] = useState(null);
   const [sensor, setSensor] = useState(null);
+  // Phase 5.35: パフォーマンス計測オーバーレイ
+  //   sensorPktCount: SerialClient で受信した sensor packet 数 (1 秒間隔でカウンタリセット)
+  //   sensorRate:     直近 1 秒の sensor 到着レート (Hz)
+  //   renderRate:     React App コンポーネントが再 render された頻度 (Hz)
+  //   gridDrawRate:   PitchRollGrid.draw() 呼び出し頻度 (Hz)
+  //   rafRate:        IMUViewer の RAF 駆動 frame rate (Hz)
+  const [perfStats, setPerfStats] = useState({ sensorRate: 0, renderRate: 0, gridDrawRate: 0, rafRate: 0, bytesPerSec: 0 });
+  const perfCountersRef = useRef({
+    sensorPktCount: 0,
+    renderCount: 0,
+    gridDrawCount: 0,
+    rafCount: 0,
+    bytesIn: 0,
+    lastTick: Date.now(),
+  });
+  // useEffect の deps を経由しない、毎 render 加算するカウンタ
+  perfCountersRef.current.renderCount++;
   const [streamRate, setStreamRate] = useState(0);
   const [log, setLog] = useState([]);
   const [autoConnect, setAutoConnect] = useState(
@@ -369,6 +386,33 @@ function App() {
   useEffect(() => { viewerRef.current?.setShowBodyAxes(showBodyAxes); }, [showBodyAxes]);
   useEffect(() => { viewerRef.current?.setShowGravity(showGravity); }, [showGravity]);
 
+  // Phase 5.35: 1 秒ごとに perf カウンタを集計してオーバーレイへ反映
+  useEffect(() => {
+    const id = setInterval(() => {
+      const now = Date.now();
+      const c = perfCountersRef.current;
+      const dt = (now - c.lastTick) / 1000;
+      if (dt <= 0) return;
+      // PitchRollGrid と IMUViewer のカウンタも回収 (getter があれば)
+      const grid = gridRef.current;
+      const viewer = viewerRef.current;
+      const gridDraws = (grid && typeof grid.getDrawCount === 'function') ? grid.getDrawCount() : 0;
+      const rafCount  = (viewer && typeof viewer.getFrameCount === 'function') ? viewer.getFrameCount() : 0;
+      setPerfStats({
+        sensorRate:  c.sensorPktCount / dt,
+        renderRate:  c.renderCount / dt,
+        bytesPerSec: c.bytesIn / dt,
+        gridDrawRate: gridDraws / dt,
+        rafRate: rafCount / dt,
+      });
+      c.sensorPktCount = 0;
+      c.renderCount    = 0;
+      c.bytesIn        = 0;
+      c.lastTick       = now;
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+
   // sensor 受信時に 3D viewer + 2D グリッド + 最近傍ルール更新
   useEffect(() => {
     if (!sensor || !viewerRef.current) return;
@@ -523,6 +567,10 @@ function App() {
     const isNoiseTx = (obj) => obj?.cmd === 'hw.buttons.get';
     const isNoiseRx = (line) => typeof line === 'string' && line.includes('"type":"hw.buttons"');
     const onRaw = (ev) => {
+      // Phase 5.35: 受信総 bytes をカウント (sensor packet 以外も含む実総量)
+      if (typeof ev.detail === 'string') {
+        perfCountersRef.current.bytesIn += ev.detail.length + 1;  // +1 = \n
+      }
       if (isNoiseRx(ev.detail)) return;
       addLog('rx', ev.detail);
     };
@@ -531,6 +579,7 @@ function App() {
       addLog('tx', JSON.stringify(ev.detail));
     };
     const onSensor = (ev) => {
+      perfCountersRef.current.sensorPktCount++;
       setSensor(ev.detail);
       // Stream タイミング統計
       const now = performance.now();
@@ -2412,6 +2461,20 @@ function App() {
         `)}
       </div>
     </div>
+
+    <!-- Phase 5.35: Performance Overlay (固定位置、画面右下) -->
+    ${connected && streamRate > 0 ? html`
+      <div class="fixed bottom-2 right-2 z-50 bg-slate-900/90 text-white text-[10px] font-mono px-2 py-1.5 rounded shadow-lg pointer-events-none">
+        <div class="text-amber-300 font-semibold mb-0.5">📊 Perf (1s avg)</div>
+        <div>📨 sensor: <b class="${perfStats.sensorRate >= streamRate * 0.85 ? 'text-emerald-300' : 'text-red-400'}">${perfStats.sensorRate.toFixed(1)}</b>/${streamRate} Hz</div>
+        <div>📥 bytes:  <b>${(perfStats.bytesPerSec/1024).toFixed(1)}</b> KB/s
+          <span class="${perfStats.bytesPerSec > 10000 ? 'text-red-400' : 'text-slate-400'}">/${(115200/10/1024).toFixed(1)} max</span>
+        </div>
+        <div>🔄 render: <b class="${perfStats.renderRate > 30 ? 'text-red-400' : ''}">${perfStats.renderRate.toFixed(1)}</b> Hz</div>
+        <div>🗺 grid: <b>${perfStats.gridDrawRate.toFixed(1)}</b> Hz</div>
+        <div>🎮 RAF: <b class="${perfStats.rafRate < 30 ? 'text-red-400' : 'text-emerald-300'}">${perfStats.rafRate.toFixed(1)}</b> fps</div>
+      </div>
+    ` : null}
 
     <footer class="mt-4 text-center text-xs text-slate-400 space-x-2">
       <span>Burst Motion | USB:115200 / BLE NUS | JSON Lines</span>
