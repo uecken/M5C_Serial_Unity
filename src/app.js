@@ -4,12 +4,12 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260514-141425';
-import { BleClient }    from './lib/BleClient.js?v=20260514-141425';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-141425';
-import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260514-141425';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-141425';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-141425';
+import { SerialClient } from './lib/SerialClient.js?v=20260514-144329';
+import { BleClient }    from './lib/BleClient.js?v=20260514-144329';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-144329';
+import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260514-144329';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-144329';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-144329';
 
 const html = htm.bind(h);
 
@@ -1973,6 +1973,26 @@ function App() {
                 rule 一覧から相対モード rule をクリックして選択してください
               </span>
             `}
+          </div>
+          <!-- Phase 5.39.2.8: btn.sim 送信ボタン (FW へ Btn 押下シミュレーション、自動テスト用) -->
+          <div class="text-[11px] mt-1 px-2 py-1 rounded font-mono bg-amber-50 border border-amber-300 flex items-center gap-2 flex-wrap">
+            <span class="font-semibold text-amber-900">🤖 btn.sim:</span>
+            <span class="text-slate-500">擬似ボタン押下 (自動テスト用)</span>
+            <button onClick=${() => sendCmd({ cmd: 'btn.sim', idx: 3, state: 1 })}
+              class="px-2 py-0.5 rounded bg-violet-300 hover:bg-violet-400 font-semibold"
+              title="Btn3 押下シミュレーション送信 → state[0] enter 発火 + q_ref snapshot を期待">
+              Btn3 ↓ 押下
+            </button>
+            <button onClick=${() => sendCmd({ cmd: 'btn.sim', idx: 3, state: 0 })}
+              class="px-2 py-0.5 rounded bg-slate-300 hover:bg-slate-400"
+              title="Btn3 release シミュレーション">
+              Btn3 ↑ 離す
+            </button>
+            <button onClick=${() => sendCmd({ cmd: 'btn.sim', clear: true })}
+              class="px-2 py-0.5 rounded bg-red-200 hover:bg-red-300 text-red-900"
+              title="btn.sim override クリア (物理 GPIO 値に戻す)">
+              ✗ clear
+            </button>
           </div>
           <!-- Phase 5.39.2.4: 最終 trigger.hit event の状態 debug 表示 (F12 不要) -->
           <div class="text-[11px] mt-1 px-2 py-1 rounded font-mono bg-slate-100 border border-slate-300 flex items-center gap-2 flex-wrap">
