@@ -4,13 +4,13 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260514-162418';
-import { BleClient }    from './lib/BleClient.js?v=20260514-162418';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-162418';
-import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260514-162418';
-import { RelativeTrajectoryGrid } from './lib/RelativeTrajectoryGrid.js?v=20260514-162418';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-162418';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-162418';
+import { SerialClient } from './lib/SerialClient.js?v=20260514-165233';
+import { BleClient }    from './lib/BleClient.js?v=20260514-165233';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-165233';
+import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260514-165233';
+import { RelativeTrajectoryGrid } from './lib/RelativeTrajectoryGrid.js?v=20260514-165233';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-165233';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-165233';
 
 const html = htm.bind(h);
 
@@ -809,16 +809,22 @@ function App() {
         rule_name: d.rule_name,
         t: Date.now(),
       });
-      // Phase 5.39.3a: ボタン押下 (enter) では q_initial を更新しない (= デバイス単位に Demote)
-      //   q_initial は posture.init コマンド (Init Yaw / Reset Base) で Web↔FW 経由でのみ更新。
-      //   trail clear のみ実行 (新ジェスチャ開始の視覚的合図)。
-      //   trigger.hit q_ref フィールドは debug バー (lastTriggerHit) 表示用に維持。
+      // Phase 5.39.3a.1: FW が state[0] enter で g_engine.q_initial = sensor.quat を自動更新する。
+      //   q_ref event = 新 q_initial 値なので、Web 側 RelativeIMUViewer / RelativeTrajectoryGrid も同期。
+      //   これで M5C モデルが「ボタン押下時の姿勢」を基準として画面中央 (identity) にスナップする。
+      //   Init Yaw / Reset Base の posture.init コマンドも引き続き有効 (ただし次ボタン押下で上書き)。
       if (d.phase === 'enter') {
         viewerRef.current?.clearTrail?.();
         relativeViewerRef.current?.clearTrail?.();
         relativeTrajectoryGridRef.current?.clearTrail?.();
+        // q_ref → Web 側 q_initial 同期
+        if (Array.isArray(d.q_ref) && d.q_ref.length === 4) {
+          relativeViewerRef.current?.setQInitial?.(d.q_ref, true);
+          relativeTrajectoryGridRef.current?.setQInitial?.(d.q_ref, true);
+        }
       }
-      // release / timeout / fail_back_to_start でも q_initial は維持 (Phase 5.39.3a)
+      // release / timeout / fail_back_to_start: q_initial は維持 (Init Yaw 設定値 or 直前のボタン押下値)
+      //   ボタン離した後も M5C モデルはその基準で動き続ける = 「ジェスチャ後の姿勢確認」に使える
     };
     const onAck = (ev) => {
       const d = ev.detail;
