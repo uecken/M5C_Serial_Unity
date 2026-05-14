@@ -193,6 +193,8 @@ export class RelativeIMUViewer {
    *     - ボタン離す → q_initial 解除 → M5C モデル中央に戻る
    */
   setQRef(qrefArr, valid) {
+    // デバッグログ (Phase 5.39.2.3: 一時的、ユーザー検証完了後に削除)
+    console.log('[RelativeIMUViewer.setQRef]', { qrefArr, valid });
     if (valid && Array.isArray(qrefArr) && qrefArr.length === 4) {
       const [qw, qx, qy, qz] = qrefArr;
       this._qRef.set(-qx, qz, qy, qw);
@@ -201,6 +203,7 @@ export class RelativeIMUViewer {
       this._qInitial.copy(this._qRef);
       this._qInitialValid = true;
       this.setTrajectoryMode('fixed');
+      console.log('[RelativeIMUViewer] q_initial 設定完了、M5C 回転開始すべき');
     } else {
       this._qRef.identity();
       this._qRefValid = false;
