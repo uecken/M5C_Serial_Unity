@@ -390,19 +390,22 @@ export class RelativeTrajectoryGrid {
     ctx.fillText('60°', cx + R * Math.sin(Math.PI / 3) + 2, cy - 2);
     ctx.fillText('90° (赤道)', cx + R + 4, cy - 2);
 
-    // Phase 5.39.3a.4: XY 軸ラベル (Roll/Pitch 2D マップとの対応がわかるように)
-    //   X 軸 = 杖の左右方向 ≒ 相対 Yaw
-    //   Y 軸 = 杖の上下方向 ≒ 相対 Pitch
-    //   tan(angle) * R で SCALE=R*1.0 のとき 45° = R, 30° ≈ 0.577R, 60° ≈ 1.73R
+    // Phase 5.39.3a.4 → 5.39.3a.9 訂正:
+    //   forward = q ⊗ ẑ ⊗ q⁻¹ (= 機体 +Z 軸 = LCD 法線方向 = 杖先端) を 2D 投影しているため、
+    //   ZYX Euler 規約 (q = Rz·Ry·Rx) では:
+    //     ・Roll (X 軸周り)  → ẑ の Y 成分が変化 → 画面 Y 軸
+    //     ・Pitch (Y 軸周り) → ẑ の X 成分が変化 → 画面 X 軸
+    //     ・Yaw (Z 軸周り)   → ẑ 不変 (画面に出ない、twist Z indicator で別表示)
+    //   ※ ユーザー期待の「Yaw 動き = 画面 X 軸」を実現するには forward の取り方を変更する必要あり
+    //     (Phase 5.39.3a.10 で検討予定)
     ctx.fillStyle = '#475569';
     ctx.font = 'bold 11px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('← Yaw (左) | Yaw (右) →', cx, cy + R + 24);
-    // Y 軸ラベル: 縦書きはせず、上下に分けて表示
+    ctx.fillText('← Pitch +(機体を後ろに) | Pitch −(機体を前に) →', cx, cy + R + 24);
     ctx.save();
     ctx.translate(cx - R - 18, cy);
     ctx.rotate(-Math.PI / 2);
-    ctx.fillText('Pitch (上) → ← Pitch (下)', 0, 0);
+    ctx.fillText('Roll −(右に倒す) → ← Roll +(左に倒す)', 0, 0);
     ctx.restore();
     // X 軸刻み (相対 Yaw deg)
     ctx.fillStyle = '#94a3b8';
