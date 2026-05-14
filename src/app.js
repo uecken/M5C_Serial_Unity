@@ -4,13 +4,13 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260514-212246';
-import { BleClient }    from './lib/BleClient.js?v=20260514-212246';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-212246';
-import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260514-212246';
-import { RelativeTrajectoryGrid } from './lib/RelativeTrajectoryGrid.js?v=20260514-212246';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-212246';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-212246';
+import { SerialClient } from './lib/SerialClient.js?v=20260514-220447';
+import { BleClient }    from './lib/BleClient.js?v=20260514-220447';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-220447';
+import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260514-220447';
+import { RelativeTrajectoryGrid } from './lib/RelativeTrajectoryGrid.js?v=20260514-220447';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-220447';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-220447';
 
 const html = htm.bind(h);
 
@@ -329,15 +329,21 @@ function App() {
 
   // Phase 5.39.2 / 5.39.3b: タブ切替時に各ビュアの RAF を ON/OFF (非表示タブの CPU 節約)
   // Phase 5.39.3a.6: onSensor からタブ別データ供給するため viewerTab を ref に保持
+  // Phase 5.39.3a.8: 'relative_combo' タブで相対 3D + 相対 2D を同時表示
   const viewerTabRef = useRef(viewerTab);
   useEffect(() => {
     viewerTabRef.current = viewerTab;
     viewerRef.current?.setRenderEnabled?.(viewerTab === 'absolute');
-    relativeViewerRef.current?.setRenderEnabled?.(viewerTab === 'relative');
-    relativeTrajectoryGridRef.current?.setRenderEnabled?.(viewerTab === 'relative_2d');
+    const relOn = (viewerTab === 'relative' || viewerTab === 'relative_combo');
+    const rel2dOn = (viewerTab === 'relative_2d' || viewerTab === 'relative_combo');
+    relativeViewerRef.current?.setRenderEnabled?.(relOn);
+    relativeTrajectoryGridRef.current?.setRenderEnabled?.(rel2dOn);
     // タブ切替直後に resize (display:none → block で 0×0 に縮んでいた場合の復元)
-    if (viewerTab === 'relative_2d') {
+    if (rel2dOn) {
       requestAnimationFrame(() => relativeTrajectoryGridRef.current?.resize?.());
+    }
+    if (relOn) {
+      requestAnimationFrame(() => relativeViewerRef.current?.resize?.());
     }
   }, [viewerTab]);
 
@@ -684,10 +690,13 @@ function App() {
 
       // ---- 1) 重い imperative API 呼出を full rate で直接実行 ----
       //   Phase 5.39.3a.6: 非表示タブのビュアにはデータを渡さない (trail buffer 蓄積 + CPU 抑制)
+      //   Phase 5.39.3a.8: relative_combo タブで相対 3D + 相対 2D 両方表示
       const tab = viewerTabRef.current;
       const viewer = viewerRef.current;
       const relViewer = relativeViewerRef.current;
       const grid = gridRef.current;
+      const relOn = (tab === 'relative' || tab === 'relative_combo');
+      const rel2dOn = (tab === 'relative_2d' || tab === 'relative_combo');
       if (viewer && detail.qw !== undefined && tab === 'absolute') {
         viewer.setQuaternion(detail.qw, detail.qx, detail.qy, detail.qz);
         viewer.setCurrentDot(detail.qw, detail.qx, detail.qy, detail.qz);
@@ -695,13 +704,13 @@ function App() {
         viewer.addTrailPoint?.(detail.qw, detail.qx, detail.qy, detail.qz, detail.t);
       }
       // Phase 5.39.2: 相対 3D ビュアにも sensor.quat を渡す (worldGroup 逆回転 + trail)
-      if (relViewer && detail.qw !== undefined && tab === 'relative') {
+      if (relViewer && detail.qw !== undefined && relOn) {
         relViewer.setQuaternion(detail.qw, detail.qx, detail.qy, detail.qz);
         relViewer.addTrailPoint(detail.qw, detail.qx, detail.qy, detail.qz, detail.t);
       }
       // Phase 5.39.3b: 相対 2D 軌跡 grid にも sensor.quat を渡す
       const relGrid = relativeTrajectoryGridRef.current;
-      if (relGrid && detail.qw !== undefined && tab === 'relative_2d') {
+      if (relGrid && detail.qw !== undefined && rel2dOn) {
         relGrid.setQuaternion(detail.qw, detail.qx, detail.qy, detail.qz);
         relGrid.addTrailPoint(detail.qw, detail.qx, detail.qy, detail.qz, detail.t);
       }
@@ -2013,6 +2022,11 @@ function App() {
                 const r = ruleList.find((x) => x.id === selectedRuleId);
                 return r && r.posture_basis === 'relative';
               })() },
+            // Phase 5.39.3a.8: 相対 3D + 相対 2D 同時表示 (上下分割)
+            { id: 'relative_combo', label: '👁📈 相対 3D+2D', recommend: (() => {
+                const r = ruleList.find((x) => x.id === selectedRuleId);
+                return r && r.posture_basis === 'relative';
+              })() },
           ].map((tab) => html`
             <button onClick=${() => setViewerTab(tab.id)}
               role="tab"
@@ -2037,12 +2051,19 @@ function App() {
         <!-- 絶対 3D タブ canvas (デフォルト) -->
         <canvas ref=${canvasRef}
           style=${`width:100%; height:240px; display:${viewerTab === 'absolute' ? 'block' : 'none'}; border-radius:6px; background:#000;`}></canvas>
-        <!-- 相対 3D タブ canvas (Phase 5.39.2) -->
+        <!-- 相対 3D タブ canvas (Phase 5.39.2) / Phase 5.39.3a.8: combo 時は半分の高さで上に表示 -->
         <canvas ref=${relativeCanvasRef}
-          style=${`width:100%; height:240px; display:${viewerTab === 'relative' ? 'block' : 'none'}; border-radius:6px; background:#000010;`}></canvas>
+          style=${`width:100%;
+                   height:${viewerTab === 'relative_combo' ? '160px' : '240px'};
+                   display:${(viewerTab === 'relative' || viewerTab === 'relative_combo') ? 'block' : 'none'};
+                   border-radius:6px; background:#000010;
+                   ${viewerTab === 'relative_combo' ? 'margin-bottom:4px;' : ''}`}></canvas>
         <!-- 相対 2D 軌跡タブ canvas (Phase 5.39.3b、ハリポタ Wand chart 風) -->
         <canvas ref=${relativeTrajectoryCanvasRef}
-          style=${`width:100%; height:240px; display:${viewerTab === 'relative_2d' ? 'block' : 'none'}; border-radius:6px; background:#f8fafc;`}></canvas>
+          style=${`width:100%;
+                   height:${viewerTab === 'relative_combo' ? '160px' : '240px'};
+                   display:${(viewerTab === 'relative_2d' || viewerTab === 'relative_combo') ? 'block' : 'none'};
+                   border-radius:6px; background:#f8fafc;`}></canvas>
         <!-- 2D Roll-Pitch タブ (既存 PitchRollGrid を移設、Phase 5.39.2 では下の 2D マップに任せて 'プレースホルダ' 表示) -->
         ${viewerTab === '2d' ? html`
           <div class="p-3 text-xs text-slate-500 bg-slate-50 rounded h-[240px] flex items-center justify-center text-center">
@@ -2050,9 +2071,9 @@ function App() {
             選択 rule (${selectedRuleId >= 0 ? `id=${selectedRuleId}` : '未選択'}) はそちらで濃色強調されます。
           </div>
         ` : null}
-        ${viewerTab === 'relative_2d' ? html`
+        ${(viewerTab === 'relative_2d' || viewerTab === 'relative_combo') ? html`
           <div class="text-[11px] text-slate-500 mt-1 flex items-center gap-2 flex-wrap">
-            <span>📈 相対 2D 軌跡: q_initial 中心、遠近射影 (壁と杖の交点)。X軸=Yaw、Y軸=Pitch。</span>
+            <span>📈 相対 2D 軌跡: q_initial 中心、遠近射影 (壁と杖の交点 = 機体 +Z 軸)。X 軸=Pitch、Y 軸=Roll、Yaw は twist Z で別表示。</span>
             ${selectedRuleId >= 0 ? html`
               <span class="ml-auto text-emerald-700">
                 選択 rule の waypoint を紫円で表示
@@ -2090,7 +2111,7 @@ function App() {
             `;
           })()}
         ` : null}
-        ${viewerTab === 'relative' ? html`
+        ${(viewerTab === 'relative' || viewerTab === 'relative_combo') ? html`
           <div class="text-[11px] text-slate-500 mt-1 flex items-center gap-2 flex-wrap">
             <span>👁 q_ref 基準ビュー: M5C モデルが q_ref 基準で回転 (Btn3 押下時 q_ref 確定後)。</span>
             <label class="flex items-center gap-1 cursor-pointer">
