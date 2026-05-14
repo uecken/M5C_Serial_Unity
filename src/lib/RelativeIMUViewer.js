@@ -149,13 +149,16 @@ export class RelativeIMUViewer {
     const posAttr = geo.getAttribute('position');
     const colAttr = geo.getAttribute('color');
     const n = this._trail.length;
+    // Phase 5.39.3a.2: 各 trail 点を q_initial⁻¹ * q_trail で相対化してから球面投影
+    //   q_initial が更新されると trail の位置も新基準で再計算される (= 「初期姿勢からの相対軌跡」が一貫表示)
+    const qInvInit = this._qInitialValid ? this._qInitial.clone().invert() : null;
     for (let i = 0; i < n; i++) {
       const e = this._trail[i];
-      const p = this._quatToSpherePoint(e.q).clone().multiplyScalar(1.005);
+      const qRel = qInvInit ? qInvInit.clone().multiply(e.q) : e.q;
+      const p = this._quatToSpherePoint(qRel).clone().multiplyScalar(1.005);
       posAttr.setXYZ(i, p.x, p.y, p.z);
       const age = (now - e.t) / this._trailDurationMs;
       const alpha = Math.max(0, 1 - age);
-      // 赤系 (絶対と同じ)、worldGroup 内なので逆回転して M5C 視点では動いて見える
       colAttr.setXYZ(i, 0.937 * alpha, 0.267 * alpha, 0.267 * alpha);
     }
     posAttr.needsUpdate = true;
