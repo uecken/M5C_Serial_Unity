@@ -4,11 +4,12 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260514-114909';
-import { BleClient }    from './lib/BleClient.js?v=20260514-114909';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-114909';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-114909';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-114909';
+import { SerialClient } from './lib/SerialClient.js?v=20260514-131449';
+import { BleClient }    from './lib/BleClient.js?v=20260514-131449';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-131449';
+import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260514-131449';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-131449';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-131449';
 
 const html = htm.bind(h);
 
@@ -166,11 +167,22 @@ function App() {
   const viewerRef = useRef(null);
   const gridCanvasRef = useRef(null);
   const gridRef = useRef(null);
+  // Phase 5.39.2: 相対 3D ビュア (一人称視点) 用 canvas + viewer ref
+  const relativeCanvasRef = useRef(null);
+  const relativeViewerRef = useRef(null);
+  // Phase 5.39.2: 相対モード rule 登録時の qRef キャプチャ用 (開始姿勢時の sensor.quat を一時保持)
+  //   ref で持つので state 再 render を引き起こさない
+  const qRefCaptureRef = useRef(null);   // [qw, qx, qy, qz] | null
   const hidTimerRef = useRef(null);
   const accelChartCanvasRef = useRef(null);
   const accelChartRef = useRef(null);
   const gyroChartCanvasRef = useRef(null);
   const gyroChartRef = useRef(null);
+
+  // Phase 5.39.2: ビュータブ ('absolute' | '2d' | 'relative')、デフォルト absolute
+  const [viewerTab, setViewerTab] = useState('absolute');
+  // Phase 5.39.2: 選択 rule (rule.list 行クリックで切替、-1 = 未選択)
+  const [selectedRuleId, setSelectedRuleId] = useState(-1);
 
   // 3D 表示オプション (旧 UI 互換)
   const [showWorldAxes, setShowWorldAxes] = useState(false);
@@ -274,6 +286,25 @@ function App() {
       }
     };
   }, [canvasRef.current]);
+
+  // Phase 5.39.2: 相対 3D ビュア (一人称視点) 初期化、relative タブ表示時のみ canvas マウント
+  useEffect(() => {
+    if (!relativeCanvasRef.current) return;
+    if (relativeViewerRef.current) return;
+    relativeViewerRef.current = new RelativeIMUViewer(relativeCanvasRef.current);
+    return () => {
+      if (relativeViewerRef.current) {
+        relativeViewerRef.current.destroy();
+        relativeViewerRef.current = null;
+      }
+    };
+  }, [relativeCanvasRef.current]);
+
+  // Phase 5.39.2: タブ切替時に各ビュアの RAF を ON/OFF (非表示タブの CPU 節約)
+  useEffect(() => {
+    viewerRef.current?.setRenderEnabled?.(viewerTab === 'absolute');
+    relativeViewerRef.current?.setRenderEnabled?.(viewerTab === 'relative');
+  }, [viewerTab]);
 
   // 2D グリッド初期化 (Phase 5.28: ドラッグ編集対応)
   useEffect(() => {
@@ -489,15 +520,76 @@ function App() {
       gridRef.current.setSequences(sequences);
     }
     if (viewerRef.current) {
-      const quats = refs.filter(r => r.qw !== undefined).map(r => ({
-        w: r.qw, x: r.qx, y: r.qy, z: r.qz
-      }));
+      // Phase 5.39.2: setTargetTrajectory が受け取る {qw,qx,qy,qz} 形式に合わせ、ID も並列で渡す
+      const qrefs = refs.filter(r => r.qw !== undefined);
+      const ids = qrefs.map((r) => r.id);
       import('three').then((THREE) => {
-        const tquats = quats.map(q => new THREE.Quaternion(-q.x, q.z, q.y, q.w));
-        viewerRef.current?.setReferenceQuaternions(tquats);
+        const tquats = qrefs.map(q => new THREE.Quaternion(-q.qx, q.qz, q.qy, q.qw));
+        viewerRef.current?.setReferenceQuaternions(tquats, ids);
       });
     }
   }, [ruleList]);
+
+  // Phase 5.39.2: selectedRuleId 変化を各ビュア / グリッドに反映
+  //   - PitchRollGrid: 選択以外を globalAlpha=0.18 で淡色化
+  //   - IMUViewer (絶対): 選択 rule の絶対 quat 目標軌跡を描画
+  //   - RelativeIMUViewer (相対): 選択 rule が posture_basis='relative' なら相対 waypoint を配置
+  useEffect(() => {
+    gridRef.current?.setSelectedRuleId?.(selectedRuleId);
+    viewerRef.current?.setSelectedRuleId?.(selectedRuleId);
+
+    const rule = ruleList.find((r) => r.id === selectedRuleId);
+    if (!rule) {
+      // 選択解除 → 軌跡を消す
+      viewerRef.current?.setTargetTrajectory?.([]);
+      relativeViewerRef.current?.setSelectedRule?.(null);
+      return;
+    }
+    // 絶対 3D ビュアの目標軌跡 (絶対 quat、選択中 rule のみ濃い実線)
+    if (rule.posture_basis !== 'relative') {
+      // 絶対モード rule: states[].posture.quat or posture.quat を連結
+      const wps = [];
+      if (Array.isArray(rule.states) && rule.states.length > 0) {
+        for (const s of rule.states) {
+          if (s.posture?.quat && s.posture.quat.length === 4) {
+            wps.push({ qw: s.posture.quat[0], qx: s.posture.quat[1], qy: s.posture.quat[2], qz: s.posture.quat[3] });
+          } else if (Array.isArray(s.posture?.euler)) {
+            const e = s.posture.euler;
+            const q = eulerToQuatLocal(e[0], e[1], e[2]);
+            wps.push({ qw: q[0], qx: q[1], qy: q[2], qz: q[3] });
+          }
+        }
+      } else if (rule.posture?.quat && rule.posture.quat.length === 4) {
+        const q = rule.posture.quat;
+        wps.push({ qw: q[0], qx: q[1], qy: q[2], qz: q[3] });
+      }
+      viewerRef.current?.setTargetTrajectory?.(wps);
+      relativeViewerRef.current?.setSelectedRule?.(null);
+    } else {
+      // 相対モード rule: RelativeIMUViewer に渡す。絶対ビュアの軌跡は消す
+      //   (target は q_ref からの相対オフセットなので絶対座標では描けない)
+      viewerRef.current?.setTargetTrajectory?.([]);
+      relativeViewerRef.current?.setSelectedRule?.(rule);
+      // 相対 3D タブを推奨ハイライト (タブ名のドット表示は render で対応)
+    }
+  }, [selectedRuleId, ruleList]);
+
+  // ローカル Euler [Roll, Pitch, Yaw] (deg) → quat [w, x, y, z] (ZYX、Mahony 系)
+  //   selectedRuleId useEffect 内から呼ぶための前方宣言代替 (function expression を const に展開)
+  function eulerToQuatLocal(rollDeg, pitchDeg, yawDeg) {
+    const r = (rollDeg  * Math.PI / 180) / 2;
+    const p = (pitchDeg * Math.PI / 180) / 2;
+    const y = (yawDeg   * Math.PI / 180) / 2;
+    const cr = Math.cos(r), sr = Math.sin(r);
+    const cp = Math.cos(p), sp = Math.sin(p);
+    const cy = Math.cos(y), sy = Math.sin(y);
+    return [
+      cr*cp*cy + sr*sp*sy,
+      sr*cp*cy - cr*sp*sy,
+      cr*sp*cy + sr*cp*sy,
+      cr*cp*sy - sr*sp*cy,
+    ];
+  }
 
   const addLog = useCallback((dir, text) => {
     setLog((prev) => {
@@ -554,10 +646,18 @@ function App() {
 
       // ---- 1) 重い imperative API 呼出を full rate で直接実行 ----
       const viewer = viewerRef.current;
+      const relViewer = relativeViewerRef.current;
       const grid = gridRef.current;
       if (viewer && detail.qw !== undefined) {
         viewer.setQuaternion(detail.qw, detail.qx, detail.qy, detail.qz);
         viewer.setCurrentDot(detail.qw, detail.qx, detail.qy, detail.qz);
+        // Phase 5.39.2: 過去軌跡 trail に現在 quat を追加 (絶対ビュア、3 秒履歴)
+        viewer.addTrailPoint?.(detail.qw, detail.qx, detail.qy, detail.qz, detail.t);
+      }
+      // Phase 5.39.2: 相対 3D ビュアにも sensor.quat を渡す (worldGroup 逆回転 + trail)
+      if (relViewer && detail.qw !== undefined) {
+        relViewer.setQuaternion(detail.qw, detail.qx, detail.qy, detail.qz);
+        relViewer.addTrailPoint(detail.qw, detail.qx, detail.qy, detail.qz, detail.t);
       }
       if (viewer && detail.ax !== undefined) {
         viewer.setGravityVector(detail.ax, detail.ay, detail.az);
@@ -655,6 +755,18 @@ function App() {
       if (gridRef.current && d.phase === 'enter') {
         const idx = ruleReferencesRef.current.findIndex((r) => r.id === d.id);
         if (idx >= 0) gridRef.current.setFiring(idx, 500);
+      }
+      // Phase 5.39.2: enter phase で q_ref が来たら相対ビュアに渡す (実 q_ref で軌跡固定)
+      //   両ビュアの trail を clear (新しいジェスチャ開始の合図)
+      if (d.phase === 'enter') {
+        viewerRef.current?.clearTrail?.();
+        relativeViewerRef.current?.clearTrail?.();
+        if (Array.isArray(d.q_ref) && d.q_ref.length === 4) {
+          relativeViewerRef.current?.setQRef?.(d.q_ref, true);
+        }
+      } else if (d.phase === 'release' || d.phase === 'timeout' || d.phase === 'fail_back_to_start') {
+        // state リセット → プレビュー軌跡に戻す
+        relativeViewerRef.current?.setQRef?.(null, false);
       }
     };
     const onAck = (ev) => {
@@ -866,6 +978,38 @@ function App() {
     if (hidTimerRef.current) clearInterval(hidTimerRef.current);
   }, []);
 
+  // Phase 5.39.2: 相対 quat 計算 (qRef は開始姿勢時の sensor.quat)
+  //   q_rel = quat_conj(qRef) * q_current
+  //   q_rel から ZYX Euler を抽出して相対 Euler を返す (deg)
+  function quatConj(q) { return [q[0], -q[1], -q[2], -q[3]]; }
+  function quatMul(a, b) {
+    return [
+      a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3],
+      a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2],
+      a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1],
+      a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0],
+    ];
+  }
+  function quatToEulerZYX(q) {
+    // ZYX intrinsic (Mahony 系と一致): roll = atan2(2(wx+yz), 1-2(x^2+y^2))
+    //                                  pitch = asin(2(wy-zx))
+    //                                  yaw = atan2(2(wz+xy), 1-2(y^2+z^2))
+    const [w, x, y, z] = q;
+    const sinp = 2 * (w*y - z*x);
+    const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * Math.PI / 2 : Math.asin(sinp);
+    const roll  = Math.atan2(2 * (w*x + y*z), 1 - 2 * (x*x + y*y));
+    const yaw   = Math.atan2(2 * (w*z + x*y), 1 - 2 * (y*y + z*z));
+    const R = 180 / Math.PI;
+    return [roll * R, pitch * R, yaw * R];
+  }
+  // 現在の sensor.quat と qRefCapture から相対 Euler を計算 (相対モード rule 用)
+  function computeRelativeEuler(curQuat) {
+    const qref = qRefCaptureRef.current;
+    if (!qref || !curQuat || curQuat.length !== 4) return null;
+    const qrel = quatMul(quatConj(qref), curQuat);
+    return quatToEulerZYX(qrel);
+  }
+
   // 姿勢キャプチャ (現在の sensor から、quat も保存)
   // Phase 5.38: 判定軸チェックボックスを反映 — OFF の軸は euler_tol=180 で実質除外
   const buildPostureTol = () => {
@@ -883,25 +1027,45 @@ function App() {
       euler_tol: buildPostureTol(),
       quat: [sensor.qw, sensor.qx, sensor.qy, sensor.qz],
     });
+    // Phase 5.39.2: 相対モード rule 登録フロー
+    //   開始姿勢キャプチャ時に sensor.quat を qRefCaptureRef に記録 (中間/終了姿勢で相対化に使用)
+    //   posture_basis='relative' のときのみ意味を持つが、毎回保存しても害なし
+    qRefCaptureRef.current = [sensor.qw, sensor.qx, sensor.qy, sensor.qz];
   };
   const captureEndPosture = () => {
     if (!sensor) { alert('センサーストリーム ON にしてから姿勢を取得してください'); return; }
+    const curQuat = [sensor.qw, sensor.qx, sensor.qy, sensor.qz];
+    // Phase 5.39.2: 相対モード rule (hold_with_waypoints + posture_basis='relative') では
+    //   絶対 Euler ではなく q_rel (=quat_conj(qRefCapture) * sensor.quat) から ZYX Euler を抽出して
+    //   「q_ref からのオフセット」として保存する
+    let eulerVal = [sensor.roll, sensor.pitch, sensor.yaw];
+    if (ruleMode === 'hold_with_waypoints' && postureBasis === 'relative') {
+      const rel = computeRelativeEuler(curQuat);
+      if (rel) eulerVal = rel;
+    }
     setEndPosture({
-      euler: [sensor.roll, sensor.pitch, sensor.yaw],
+      euler: eulerVal,
       euler_tol: buildPostureTol(),
-      quat: [sensor.qw, sensor.qx, sensor.qy, sensor.qz],
+      quat: curQuat,
     });
   };
   const clearStartPosture = () => setStartPosture(null);
   const clearEndPosture   = () => setEndPosture(null);
 
   // Phase 5.39: 中間姿勢 (waypoints) キャプチャ (0..2 個)
+  // Phase 5.39.2: 相対モード時は qRefCapture からの相対 Euler に変換して保存
   const captureMidPosture = (index) => {
     if (!sensor) { alert('センサーストリーム ON にしてから姿勢を取得してください'); return; }
+    const curQuat = [sensor.qw, sensor.qx, sensor.qy, sensor.qz];
+    let eulerVal = [sensor.roll, sensor.pitch, sensor.yaw];
+    if (ruleMode === 'hold_with_waypoints' && postureBasis === 'relative') {
+      const rel = computeRelativeEuler(curQuat);
+      if (rel) eulerVal = rel;
+    }
     const newMid = {
-      euler: [sensor.roll, sensor.pitch, sensor.yaw],
+      euler: eulerVal,
       euler_tol: buildPostureTol(),
-      quat: [sensor.qw, sensor.qx, sensor.qy, sensor.qz],
+      quat: curQuat,
     };
     setMidPostures(prev => {
       const copy = [...prev];
@@ -1729,7 +1893,74 @@ function App() {
             <span>📈 加速度/ジャイロ時間波形</span>
           </label>
         </div>
-        <canvas ref=${canvasRef} style="width:100%; height:240px; display:block; border-radius:6px; background:#000;"></canvas>
+        <!-- Phase 5.39.2: タブ式 UI (絶対 3D / 2D Roll-Pitch / 相対 3D)、デフォルト 絶対 3D -->
+        <div class="flex items-center gap-1 mb-1 border-b border-slate-200" role="tablist">
+          ${[
+            { id: 'absolute', label: '🌐 絶対 3D', recommend: (() => {
+                const r = ruleList.find((x) => x.id === selectedRuleId);
+                return r && r.posture_basis !== 'relative';
+              })() },
+            { id: '2d',       label: '📐 2D Roll-Pitch', recommend: (() => {
+                const r = ruleList.find((x) => x.id === selectedRuleId);
+                return r && r.posture_basis !== 'relative';
+              })() },
+            { id: 'relative', label: '👁 相対 3D', recommend: (() => {
+                const r = ruleList.find((x) => x.id === selectedRuleId);
+                return r && r.posture_basis === 'relative';
+              })() },
+          ].map((tab) => html`
+            <button onClick=${() => setViewerTab(tab.id)}
+              role="tab"
+              aria-selected=${viewerTab === tab.id}
+              class="px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px transition-colors
+                ${viewerTab === tab.id
+                  ? 'border-blue-500 text-blue-700 bg-blue-50'
+                  : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'}">
+              ${tab.label}${tab.recommend ? html` <span class="inline-block w-1.5 h-1.5 bg-emerald-500 rounded-full ml-0.5" title="この rule に推奨のビュア"></span>` : null}
+            </button>
+          `)}
+          ${selectedRuleId >= 0 ? html`
+            <span class="ml-auto text-[10px] text-slate-500 font-mono">
+              選択: ${ruleList.find((x) => x.id === selectedRuleId)?.name || `#${selectedRuleId}`}
+              <button onClick=${() => setSelectedRuleId(-1)}
+                class="ml-1 text-red-500 hover:underline">解除</button>
+            </span>
+          ` : html`
+            <span class="ml-auto text-[10px] text-slate-400">rule 一覧から選択で軌跡可視化</span>
+          `}
+        </div>
+        <!-- 絶対 3D タブ canvas (デフォルト) -->
+        <canvas ref=${canvasRef}
+          style=${`width:100%; height:240px; display:${viewerTab === 'absolute' ? 'block' : 'none'}; border-radius:6px; background:#000;`}></canvas>
+        <!-- 相対 3D タブ canvas (Phase 5.39.2) -->
+        <canvas ref=${relativeCanvasRef}
+          style=${`width:100%; height:240px; display:${viewerTab === 'relative' ? 'block' : 'none'}; border-radius:6px; background:#000010;`}></canvas>
+        <!-- 2D Roll-Pitch タブ (既存 PitchRollGrid を移設、Phase 5.39.2 では下の 2D マップに任せて 'プレースホルダ' 表示) -->
+        ${viewerTab === '2d' ? html`
+          <div class="p-3 text-xs text-slate-500 bg-slate-50 rounded h-[240px] flex items-center justify-center text-center">
+            📐 2D Roll-Pitch ビュー: 下の「Roll / Pitch 2D マップ」パネルに描画中。<br/>
+            選択 rule (${selectedRuleId >= 0 ? `id=${selectedRuleId}` : '未選択'}) はそちらで濃色強調されます。
+          </div>
+        ` : null}
+        ${viewerTab === 'relative' ? html`
+          <div class="text-[11px] text-slate-500 mt-1 flex items-center gap-2 flex-wrap">
+            <span>👁 一人称視点: M5C 中央固定、ワールド (waypoint + 軸 + trail) が逆回転。</span>
+            <label class="flex items-center gap-1 cursor-pointer">
+              <input type="checkbox"
+                onChange=${(e) => relativeViewerRef.current?.setM5CMode?.(e.target.checked ? 'qref_anchor' : 'fixed')} />
+              <span>M5C を q_ref に定着</span>
+            </label>
+            ${selectedRuleId >= 0 ? html`
+              <span class="ml-auto text-emerald-700">
+                選択 rule の rel_quat waypoint を球面に紫表示
+              </span>
+            ` : html`
+              <span class="ml-auto text-amber-700">
+                rule 一覧から相対モード rule をクリックして選択してください
+              </span>
+            `}
+          </div>
+        ` : null}
         ${sensor ? html`
           <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-mono mt-2">
             <div class="bg-sky-50 rounded p-2">
@@ -2066,7 +2297,9 @@ function App() {
                     btnEval = `idx${idx}${r.button.state===0?'押':r.button.state===1?'離':'?'}${isPressed===null?'':ok?'✓':'✗'}`;
                   }
                   return html`
-                    <tr class="${triggerFlash && triggerFlash.id === r.id ? 'bg-yellow-100' : ''} border-t">
+                    <tr class="${triggerFlash && triggerFlash.id === r.id ? 'bg-yellow-100' : (selectedRuleId === r.id ? 'bg-blue-100 ring-2 ring-blue-400' : '')} border-t cursor-pointer hover:bg-slate-50"
+                        onClick=${() => setSelectedRuleId(selectedRuleId === r.id ? -1 : r.id)}
+                        title="${selectedRuleId === r.id ? 'クリックで選択解除' : 'クリックでこの rule の軌跡を 3D / 2D で可視化'}">
                       <td class="px-2 py-1 font-mono">${r.id}</td>
                       <td class="px-2 py-1">${r.name}</td>
                       <td class="px-2 py-1 text-center">${r.states_count}${r.current_state >= 0 ? `🟢${r.current_state}` : ''}</td>
@@ -2108,7 +2341,7 @@ function App() {
                         ` : '-'}
                       </td>
                       <td class="px-1 py-1 text-center">
-                        <button onClick=${() => handleRemoveRule(r.id, r.name)}
+                        <button onClick=${(e) => { e.stopPropagation(); handleRemoveRule(r.id, r.name); }}
                           disabled=${!connected}
                           class="px-1.5 py-0.5 text-xs bg-red-200 hover:bg-red-400 hover:text-white rounded disabled:opacity-30"
                           title="ルール ${r.name} (id=${r.id}) を削除">🗑</button>

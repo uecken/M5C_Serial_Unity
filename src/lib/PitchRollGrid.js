@@ -139,6 +139,15 @@ export class PitchRollGrid {
     this.draw();
   }
 
+  /** Phase 5.39.2: 選択 rule の強調表示
+   *  selectedRuleId === -1: 全 references を通常色で表示
+   *  selectedRuleId >= 0:    その rule だけ濃色、他は globalAlpha=0.18 で淡色
+   */
+  setSelectedRuleId(id) {
+    this.selectedRuleId = (typeof id === 'number') ? id : -1;
+    this.draw();
+  }
+
   // Phase 5.34: 複数 waypoint の SEQUENCE rule を別レイヤで描画
   // seqs = [{id, name, currentState, waypoints: [{roll, pitch, rollTol, pitchTol}, ...]}, ...]
   setSequences(seqs) {
@@ -201,9 +210,15 @@ export class PitchRollGrid {
 
     // 登録参照点 (橙)、発火中=緑フラッシュ、最近傍=緑
     // Phase 5.16: tol で囲まれた矩形を半透明で描画 (発火範囲の可視化)
+    // Phase 5.39.2: selectedRuleId !== -1 のとき、選択以外を globalAlpha=0.18 で淡色化
+    const sel = (typeof this.selectedRuleId === 'number') ? this.selectedRuleId : -1;
     this.references.forEach((r, idx) => {
       const isFiring = (this.firingIdx === idx);
       const isClosest = (this.closest === idx);
+      // Phase 5.39.2: 選択フォーカス (sel >= 0 のとき非選択を薄く描画)
+      const isSelected = (sel === -1) || (r.id === sel);
+      ctx.save();
+      ctx.globalAlpha = isSelected ? 1.0 : 0.18;
       let color, radius;
       if (isFiring) {
         color = '#22c55e';
@@ -264,6 +279,7 @@ export class PitchRollGrid {
         ctx.font = isFiring ? 'bold 11px sans-serif' : '10px sans-serif';
         ctx.fillText(r.name, px + 8, py - 4);
       }
+      ctx.restore();   // Phase 5.39.2: selection focus alpha 解除
     });
 
     // Phase 5.34: SEQUENCE 描画 (waypoint 連結 + 番号 + 矢印)
