@@ -5289,4 +5289,1448 @@ python -m http.server 8000
 
 Plan モード退出後、これらを memory に保存する。
 
+---
+
+## Phase 5.39.3 — 「初期姿勢」の Demote: rule 単位 q_ref → デバイス単位 q_initial (2026-05-14 セッション続き)
+
+### Context
+
+Phase 5.39.2 までの実装では「相対モード rule」が以下の挙動:
+- 各 rule が独自の `rule.q_ref` を持つ
+- state[0] enter (Btn3 押下) の瞬間に `rule.q_ref = sensor.quat` を snapshot
+- 判定: `q_rel = rule.q_ref⁻¹ ⊗ q_current` → Euler 抽出 → tol 比較
+- M5C モデル回転: `q_initial⁻¹ * q_current` (q_initial = rule.q_ref)
+- 球面 waypoint: 各 rule.state.posture.euler を相対 quat として配置
+
+**ユーザー指摘 (2026-05-14)**:
+> 「回転したが、ボタンを押したときに初期姿勢に対して相対クォータニオンが適用されるようになっていない」
+> 「球面の軌跡も、初期姿勢からの相対クォータニオンで球面の軌跡を描く必要がある」
+> 「登録したアクションの姿勢との判定は、初期姿勢に対する相対クォータニオンと比較する必要がある」
+
+ユーザー定義の「初期姿勢」: **Init Yaw / Reset Base ボタンで明示設定する姿勢 (デバイス全体で 1 つ、永続)**
+
+→ 現状の「rule 単位 q_ref、ボタン押下のたびに更新」設計と矛盾。
+
+### ユーザー回答 (AskUserQuestion 2026-05-14)
+
+「初期姿勢」の定義 → **B. Init Yaw / Reset Base ボタンで明示設定した姿勢 (永続)** を採用。「あとで変える可能性がある」と明言。
+
+→ 将来 A (ボタン押下時の q_ref、現状実装) に戻す可能性もあるため、両方共存可能な構造が望ましい。
+
+### 設計判断
+
+#### 採用方針: 「**デバイス単位 q_initial を主軸、rule 単位 q_ref は廃止 (or 任意切替)**」
+
+| 観点 | Phase 5.39.2 までの設計 | Phase 5.39.3 新設計 |
+|------|----------------------|-------------------|
+| q_initial の保持先 | `rule.q_ref` (rule 単位) | **`g_engine.q_initial` (デバイス単位、NVS 永続)** |
+| q_initial の更新タイミング | state[0] enter (ボタン押下のたび) | **`posture.init` コマンド (Init Yaw / Reset Base ボタン)、明示設定のみ** |
+| 判定 (相対モード rule) | `q_rel = rule.q_ref⁻¹ ⊗ q_current` | `q_rel = q_initial⁻¹ ⊗ q_current` (全 rule 共通) |
+| 球面 waypoint | 各 rule.state.posture.euler を相対 quat として配置 (現状) | 同上 (変更なし、ただし全 rule が共通 q_initial 基準) |
+| M5C モデル回転 (相対 3D ビュア) | `q_initial⁻¹ * q_current` (q_initial = rule.q_ref) | 同上 (q_initial = g_engine.q_initial に変更) |
+| ボタン押下時の挙動 | M5C モデル中央 snap (q_ref=q_current) | **M5C モデル中央にならない** (= 初期姿勢からのオフセット位置で表示) |
+| ボタン離した時の挙動 | M5C モデル中央へ slerp (q_initial 解除) | **q_initial は変わらない、M5C モデルはそのまま動き続ける** |
+
+#### 重要な UX 変化
+
+新設計では:
+- 「初期姿勢からのオフセット」が M5C モデル / 球面で常に見える
+- ボタン押下 = state[0] enter trigger だけで、表示や q_initial への影響なし
+- ユーザーが Init Yaw を押す = 「ここを基準にする」と明示
+- 持ち方の自由度は失う (Init Yaw 後に持ち方を変えると、登録した姿勢と合わなくなる)
+
+#### データモデル変更
+
+##### FW (TriggerEngine.hpp + main_v2.cpp)
+
+```cpp
+class TriggerEngine {
+public:
+    // Phase 5.39.3: デバイス単位 q_initial (Init Yaw / Reset Base で設定、NVS 永続)
+    void setInitialPosture(const float q[4]);
+    void getInitialPosture(float q[4]) const;
+    bool isInitialPostureValid() const { return q_initial_valid_; }
+
+private:
+    float q_initial_[4] = {1, 0, 0, 0};   // identity (= 未設定時のデフォルト)
+    bool  q_initial_valid_ = false;
+};
+```
+
+`ActionRule.q_ref[4]` と `q_ref_valid` は **Phase 5.39 互換性のため残置するが使わない** (将来 A 案に戻す可能性のため)。
+
+##### FW (TriggerEngine.cpp 変更)
+
+`evalPostureRelative` の引数を変更:
+```cpp
+// 旧: static int evalPostureRelative(const PostureCond& c, const SensorState& s, const float q_ref[4]);
+// 新: static int evalPostureRelative(const PostureCond& c, const SensorState& s, const float q_initial[4]);
+```
+
+`matchCondition` 内の posture 判定分岐:
+```cpp
+// 旧: rule.posture_basis == PB_RELATIVE_QUAT && rule.q_ref_valid
+// 新: rule.posture_basis == PB_RELATIVE_QUAT && q_initial_valid_
+//     (引数 rule は不要、TriggerEngine メンバ q_initial_ を使用)
+if (rule != nullptr && rule->posture_basis == PB_RELATIVE_QUAT && q_initial_valid_) {
+    r = evalPostureRelative(cond.posture, s, q_initial_);
+} else {
+    r = evalPosture(cond.posture, s);
+}
+```
+
+`evaluateRule` の state[0] enter ロジック変更:
+```cpp
+// 旧: state[0] enter で rule.q_ref = sensor.quat を snapshot
+// 新: snapshot しない (g_engine.q_initial は Init Yaw / Reset Base でのみ更新)
+// → コメント残置: 「Phase 5.39.2 の q_ref snapshot は撤去、デバイス単位 q_initial を使用」
+```
+
+`fireWatchEvent` の q_ref フィールド出力変更:
+```cpp
+// 旧: rule.q_ref を出力
+// 新: g_engine.q_initial を出力 (or 完全削除)
+```
+
+##### FW (main_v2.cpp 新コマンド)
+
+```cpp
+else if (strcmp(cmd, "posture.init") == 0) {
+    // {"cmd":"posture.init", "source":"current"} → 現在 sensor.quat を q_initial に
+    // {"cmd":"posture.init", "source":"identity"} → identity に
+    // {"cmd":"posture.init", "quat":[w,x,y,z]} → 明示指定
+    const char* source = in["source"] | "current";
+    float q[4];
+    if (in["quat"].is<JsonArray>() && in["quat"].size() == 4) {
+        // 明示指定
+        for (int i = 0; i < 4; i++) q[i] = in["quat"][i];
+    } else if (strcmp(source, "identity") == 0) {
+        q[0]=1; q[1]=0; q[2]=0; q[3]=0;
+    } else {  // "current" (default)
+        for (int i = 0; i < 4; i++) q[i] = g_sensor_state.quat[i];
+    }
+    g_engine.setInitialPosture(q);
+    // NVS 永続化
+    Preferences prefs;
+    prefs.begin("burst_motion", false);
+    prefs.putBytes("q_initial", q, 16);
+    prefs.end();
+    out["type"] = "ack";
+    out["cmd"] = "posture.init";
+    out["ok"] = true;
+    JsonArray qa = out["q"].to<JsonArray>();
+    for (int i = 0; i < 4; i++) qa.add(q[i]);
+}
+else if (strcmp(cmd, "posture.init.get") == 0) {
+    // {"cmd":"posture.init.get"} → 現在の q_initial を返す
+    out["type"] = "posture.init";
+    JsonArray qa = out["q"].to<JsonArray>();
+    float q[4];
+    g_engine.getInitialPosture(q);
+    for (int i = 0; i < 4; i++) qa.add(q[i]);
+    out["valid"] = g_engine.isInitialPostureValid();
+}
+```
+
+setup() で NVS から復元:
+```cpp
+Preferences prefs;
+prefs.begin("burst_motion", true);
+float q_init[4] = {1, 0, 0, 0};
+if (prefs.getBytes("q_initial", q_init, 16) == 16) {
+    g_engine.setInitialPosture(q_init);
+}
+prefs.end();
+```
+
+##### Web (RelativeIMUViewer + app.js)
+
+```js
+// RelativeIMUViewer:
+//   現状の setQRef は posture.init.get / posture.init ack で受信した q_initial を保存に変更
+//   ボタン押下時 (trigger.hit enter) では q_initial を更新しない
+//   ただし trigger.hit q_ref event は debug 表示用に保持
+
+// app.js:
+//   Init Yaw ボタン → sendCmd({cmd: "posture.init", source: "current"})
+//   ack 受信時に relativeViewerRef.current.setQInitial(q_init, true) で更新
+//   Reset Base ボタン → sendCmd({cmd: "posture.init", source: "identity"})
+//   接続時に sendCmd({cmd: "posture.init.get"}) で起動時の値を取得
+```
+
+### Web ↔ FW プロトコル変更
+
+| コマンド | 方向 | 説明 |
+|---------|------|------|
+| `{"cmd":"posture.init", "source":"current"}` | Web → FW | 現在 sensor.quat を q_initial として保存 (Init Yaw 相当) |
+| `{"cmd":"posture.init", "source":"identity"}` | Web → FW | identity 化 (Reset Base 相当) |
+| `{"cmd":"posture.init", "quat":[w,x,y,z]}` | Web → FW | 明示指定 |
+| `{"cmd":"posture.init.get"}` | Web → FW | 現在の q_initial を取得 |
+| `{"type":"posture.init", "q":[w,x,y,z], "valid":true}` | FW → Web | get の応答、または set 時の ack |
+
+### Phase 5.39.2.10 の release event 機構との関係
+
+Phase 5.39.2.10 で実装した「button release で state リセット + release event 発火」機構は維持。
+ただし、release event 受信時の Web 側挙動は変更:
+- 旧: `relativeViewer.setQRef(null, false)` で M5C モデル中央復帰
+- 新: q_initial はデバイス単位なので変えない、M5C モデルは引き続き `q_initial⁻¹ * q_current` で動く
+- → 「ボタン離す = state リセット (= 判定中断)、ただし表示は q_initial 基準のまま」
+
+### 実装対象ファイル (絶対パス)
+
+- `M5C_MPU6886_cpp/src/core/TriggerEngine.hpp` (q_initial_ メンバ + setter/getter)
+- `M5C_MPU6886_cpp/src/core/TriggerEngine.cpp` (evalPostureRelative 引数変更、state[0] enter で snapshot しない、fireWatchEvent の q_ref 出力変更)
+- `M5C_MPU6886_cpp/src/main_v2.cpp` (posture.init / posture.init.get コマンド + 起動時 NVS 復元)
+- `M5C_MPU6886_cpp/Web/hidconfig/src/lib/RelativeIMUViewer.js` (setQInitial メソッド追加、setQRef は debug 用に変更)
+- `M5C_MPU6886_cpp/Web/hidconfig/src/app.js` (Init Yaw / Reset Base ボタンの onClick で posture.init 送信、接続時に posture.init.get 取得)
+
+### 検証手順
+
+1. 起動時 → Web 接続 → posture.init.get で q_initial 取得 → `valid: false` (初回) または `valid: true` (NVS 復元)
+2. **Init Yaw ボタン押下** (Web UI) → 現在の M5C 姿勢を q_initial として保存 → NVS 永続化
+3. M5C を動かす → M5C モデル相対 3D で `q_initial⁻¹ * q_current` 回転 (= Init Yaw 時を中央として動く)
+4. Btn3 押下 → state[0] enter → trigger.hit "enter" event 発火 (q_ref フィールドは g_engine.q_initial を含む)
+5. M5C を動かして waypoint 通過 → transition event
+6. Btn3 release → release event 発火、ただし M5C モデルは中央に戻らず q_initial 基準で動き続ける
+7. **Reset Base ボタン押下** → q_initial = identity → M5C モデル位置リセット
+8. 再起動 → NVS から q_initial 復元 → 前回の Init Yaw 設定が維持される
+9. 持ち方を Init Yaw 時と変える → 登録した姿勢が合わなくなる (= 期待挙動、Init Yaw 後の持ち方固定が必要)
+
+### 旧設計 (Phase 5.39.2) との互換性 / 将来戻す可能性
+
+ユーザー明言: 「あとで変える可能性がある」
+
+対応案:
+- `ActionRule.q_ref[4]` と `q_ref_valid` は **撤去せず残置** (Phase 5.39 と同名フィールド維持)
+- ただし新コードは `g_engine.q_initial_` を使う
+- 将来 A 案 (rule 単位 q_ref) に戻す場合: コメント解除 + `state[0] enter で snapshot` 復活 + matchCondition の引数変更
+
+### Phase 5.39.2.11 か Phase 5.39.3 か (位置付け)
+
+これは設計の根本変更だが、Phase 5.39.3 で議論していた「Yaw drift 補正」とは別軸:
+- Phase 5.39.3 (原案) = 動的 Yaw drift 補正 (Twist-Swing 分解)
+- Phase 5.39.3 (新) = 初期姿勢の Demote (rule → device)
+
+→ 名称を **Phase 5.39.3a** とし、原 5.39.3 (Yaw drift 補正) は **Phase 5.39.3b** とする (両者共存可、優先順位は 5.39.3a 先)。
+
+### 実装ロードマップ
+
+| Step | 内容 | 担当 |
+|------|------|------|
+| 1 | FW types.hpp / TriggerEngine.hpp に q_initial_ メンバ + setter/getter | FW agent |
+| 2 | FW TriggerEngine.cpp の evalPostureRelative 引数変更 + matchCondition 分岐変更 | FW agent |
+| 3 | FW main_v2.cpp に posture.init / posture.init.get コマンド + NVS 永続化 | FW agent |
+| 4 | FW state[0] enter での q_ref snapshot を削除 (or 無効化) | FW agent |
+| 5 | Web RelativeIMUViewer に setQInitial メソッド追加 | Web agent |
+| 6 | Web app.js の Init Yaw / Reset Base ボタンに posture.init 送信を追加 | Web agent |
+| 7 | Web 接続時に posture.init.get 自動取得 + RelativeIMUViewer 初期化 | Web agent |
+| 8 | FW ビルド + 書込み + Python btn.sim + posture.init で検証 | Claude |
+| 9 | ユーザーが Web 再接続で実機検証 | ユーザー |
+| 10 | OK ならば暫定 commit、NG ならば再調整 | Claude |
+
+### Phase 5.39.3a 完了基準
+
+- ✅ Init Yaw ボタン押下 → M5C モデル中央 (= 押した瞬間を基準)
+- ✅ M5C を動かす → M5C モデルが Init Yaw 時からの相対回転で動く
+- ✅ ボタン押下 → state[0] enter event 発火 (M5C モデルは動かさない、引き続き q_initial 基準で表示)
+- ✅ ボタン離す → release event 発火 (M5C モデルは引き続き q_initial 基準で表示)
+- ✅ Reset Base ボタン → q_initial = identity 化
+- ✅ 再起動 → NVS から q_initial 復元
+- ✅ 全 rule 共通の q_initial で球面 waypoint 配置 (一貫した球面座標)
+- ✅ アクションルール姿勢判定が q_initial 基準で行われる (FW 動作)
+
+---
+
+## Phase 5.39.3b — 相対 2D 軌跡表示タブ (ハリポタ Wand Movements chart 風)
+
+### Context
+
+ユーザー指摘 (2026-05-14): 「球面の交点との軌跡だと、どのような軌跡なのかわかりがたい。相対 3D 球面の軌跡を、相対 2D 軌跡表示する機能も必要である」
+
+参考画像: [ハリポタ Wand Movements Catalogue](https://www.reddit.com/r/HPHogwartsMystery/comments/9vt6ji/made_a_chart_of_all_the_wand_movements_and_spell/) — wand の振り動作を 2D 線画 (U 字、Z 字、波形 etc) で表現したチャート。
+
+→ 同じスタイルで Burst Motion の rule waypoint + 過去軌跡を 2D に投影して可視化。
+
+### 設計 (★ ユーザー指摘で訂正: 「相対 3D Quat 軌跡を 2D に展開」)
+
+#### 投影法の選定 (★ 2D 投影は Euler ベースではなく Quat ベース)
+
+ユーザー指摘: 「Roll/Pitch ではなく、相対 3D Quat の軌跡を平面 (2D) 描画した軌跡の表示にする必要がある」
+
+→ 球面 (4 次元 quat の 3D 球面投影) を 2D に展開する地図投影法から選択。
+
+| 投影法 | 動作原理 | 利点 | 欠点 | Wand chart との対応 |
+|--------|---------|------|------|--------------------|
+| ★ **案 1: 主軸 forward 正射影 (推奨、Phase 5.39.3b MVP)** | quat から forward vector (`q ⊗ ẑ ⊗ q⁻¹`) を計算、(x, y) を 2D 座標 | Wand 先端の動きと直感対応、quat ベース、計算軽量、ハリポタチャート絵に近い | 半球 (z>0) のみ可視、Roll/twist 失う | ◎ 最良 |
+| 案 2: 等距離方位図法 (Azimuthal Equidistant) | 初期姿勢を中心、forward の角距離を半径、方角を角度として極座標で平面化 | 全方位マップ可、中央からの距離が直感的 | 周辺ほど歪み、計算やや増 | ○ |
+| 案 3: 立体投影 (Stereographic Projection) | 反対極から投影、(x/(1-z), y/(1-z)) で計算 | 角度保存、Slerp 弧が円弧になる (数学的綺麗) | 周辺で歪み大、wand chart との対応薄い | △ |
+| 案 4 (旧計画): Euler Yaw × Pitch 矩形マップ | quat → Euler 抽出、Yaw/Pitch を直接座標 | シンプル | **ジンバルロックで Yaw/Pitch が縮退**、quat の本質を捉えない | × ユーザー指摘で却下 |
+
+#### 採用: 案 1 (主軸 forward 正射影、半球内可視)
+
+#### 新規タブ「📈 相対 2D 軌跡」
+
+タブ構成 (Phase 5.39.2 から追加):
+```
+[ 🌐 絶対 3D ][ 📐 2D Roll-Pitch ][ 👁 相対 3D ][ 📈 相対 2D 軌跡 (新) ]
+```
+
+#### 表示内容
+
+| 要素 | 描画方法 | 色 |
+|------|---------|----|
+| 背景円 (forward 単位ベクトル半球) | 円形枠線 (半径 = 単位) | 灰色 |
+| 背景グリッド (角距離 30° 刻みの同心円 + 経線) | 薄い線 | 灰色 |
+| 中心 (0, 0) = forward = ẑ = 初期姿勢の先端方向 | 十字マーカー + 「init」ラベル | 緑色 |
+| 円周 = 90° (赤道) | 太め線 | 暗灰色 |
+| waypoint (rule.state.posture.euler を quat 変換後 forward 投影) | 番号付き紫円 | 紫 (#a855f7) |
+| waypoint 接続線 (Slerp 結果の各補間 quat を forward 投影 → 折れ線) | 紫実線 | 紫 |
+| 過去軌跡 trail (3 秒、各 sample の forward を折れ線) | グラデーション赤線 | 赤系 |
+| 現在位置 (現在 q_current の forward を投影) | 赤丸 | 赤 |
+| **twist インジケータ (右下)** | テキスト or 円弧で表示、現在の相対 Roll (twist) を別表示 | 青系 |
+
+#### 投影計算 (案 1: 主軸 forward 正射影)
+
+```js
+// quat から forward vector を取得 (ẑ 軸を quat で回転)
+// q = (w, x, y, z) として:
+//   forward = q ⊗ (0,0,1) ⊗ q⁻¹
+//          = (2*(qw*qy + qx*qz),       // forward.x
+//             2*(qy*qz - qw*qx),        // forward.y
+//             qw² - qx² - qy² + qz²)    // forward.z
+function quatToForward(q) {
+    const fx = 2 * (q.w * q.y + q.x * q.z);
+    const fy = 2 * (q.y * q.z - q.w * q.x);
+    const fz = q.w*q.w - q.x*q.x - q.y*q.y + q.z*q.z;
+    return { x: fx, y: fy, z: fz };
+}
+
+// 相対 quat の forward を 2D 投影
+function projectRelative2D(qCurrent, qInitial) {
+    const qRel = quatMul(quatConj(qInitial), qCurrent);   // 相対 quat
+    const fwd = quatToForward(qRel);
+    // 半球内 (z > 0) なら可視、それ以外は「裏側」マーク
+    const visible = fwd.z > -0.05;   // -0.05 はマージン
+    return { x: fwd.x, y: fwd.y, z: fwd.z, visible };
+}
+
+// twist (Z 軸周り回転量) を別途取得
+function quatToTwistZ(q) {
+    // q_yaw component = normalize((qw, 0, 0, qz))、twist 角 = 2 * atan2(|qz|, qw)
+    const norm = Math.sqrt(q.w*q.w + q.z*q.z);
+    return 2 * Math.atan2(Math.abs(q.z), q.w) * 180 / Math.PI * Math.sign(q.z);
+}
+```
+
+#### Slerp 接続線
+
+```js
+function drawWaypointConnections(waypoints) {
+    for (let i = 0; i < waypoints.length - 1; i++) {
+        const qa = waypoints[i].quat;
+        const qb = waypoints[i + 1].quat;
+        const SEG = 32;
+        for (let s = 0; s < SEG; s++) {
+            const t1 = s / SEG;
+            const t2 = (s + 1) / SEG;
+            const q1 = slerp(qa, qb, t1);
+            const q2 = slerp(qa, qb, t2);
+            const p1 = projectRelative2D(q1, qInitial);
+            const p2 = projectRelative2D(q2, qInitial);
+            if (p1.visible && p2.visible) {
+                ctx.moveTo(p1.x * canvasRadius, p1.y * canvasRadius);
+                ctx.lineTo(p2.x * canvasRadius, p2.y * canvasRadius);
+            }
+        }
+    }
+}
+```
+
+#### スケーリング
+
+- canvas の中心を (0, 0) とする
+- 半径 R = canvas.width * 0.45 程度
+- forward の (x, y) を `[(-1, 1), (-1, 1)]` の正方形 → canvas 座標 (x * R, y * R) にマッピング
+- 円周 = 90° (赤道、forward.z = 0) を canvas の半径外周として描画
+
+### 新規ファイル
+
+- `M5C_MPU6886_cpp/Web/hidconfig/src/lib/RelativeTrajectoryGrid.js` (新規)
+  - PitchRollGrid (既存) のロジックを流用、座標系を相対 Yaw/Pitch に変更
+  - setQInitial(qref) → 中心点の座標確定
+  - setQuaternion(qw, qx, qy, qz) → 現在位置 + trail 更新
+  - setSelectedRule(rule) → waypoint 描画
+  - addTrailPoint(qw, qx, qy, qz, t) → 過去軌跡
+
+### app.js 連携
+
+- `viewerTab` に `'relative_2d'` を追加
+- タブクリックで `relativeTrajectoryGridRef.current.setRenderEnabled(...)` で表示切替
+- 相対モード rule 選択時、自動推奨ハイライト (相対 3D タブと同じ条件)
+
+### 検証手順
+
+1. Wingardium Leviosa サンプル (Phase 5.39.3c で調整) を適用 → 相対 2D 軌跡タブを開く
+2. 紫の waypoint 4 個と接続線 (U 字 or Y 字 を呈する) が見える
+3. Init Yaw 設定後、M5C を動かす → 赤線 trail が動きに追従
+4. 振り完了後、軌跡が「ハリポタチャートの絵」と類似することを確認
+
+---
+
+## Phase 5.39.3c — ハリポタ Wand Movements 準拠サンプル (Wingardium Leviosa)
+
+### Context
+
+ユーザー指摘: 「ハリポタの呪文ごとの軌跡をなぞったかが視覚的に分かるように。相対 3D Quat のアクションは添付チャートに従って、手動または自動 (Claude) で登録する。特に初めは Wingardium Leviosa」
+
+参考画像: 添付の Wand Movements Catalogue。**Wingardium Leviosa** は U 字 (上の Y 字風) 形状 = "swish and flick" 動作。
+
+**参考画像ファイル (リポジトリ内)**:
+- 絶対パス: `C:\Users\thefu\Documents\M5C_Serial_Unity\M5C_MPU6886_cpp\Web\img\wand_movements.png`
+- 用途: Phase 5.39.3c の Wingardium Leviosa + 他呪文の振り動作の参照、相対 2D 軌跡 (Phase 5.39.3b) の見た目の目標
+- Web UI から表示する場合: `<img src="./img/wand_movements.png" />` で相対 2D 軌跡タブのヘルプ画像として配置可能
+- 30+ 呪文の動作チャート (Year I-V + 攻撃/守備系)
+
+### Wingardium Leviosa の動作分解 (チャート解釈)
+
+ハリポタチャートの Wingardium Leviosa = U 字を縦反転した形:
+- 開始: 中央
+- 右下に降ろす (swish の前半)
+- 下底
+- 左に持ち上げる (swish の後半)
+- 中央右上で flick (右上に振り上げ)
+
+これを **相対 Euler (Yaw, Pitch)** で表現:
+
+| state | 位置 | rel_euler (Roll, Pitch, Yaw) | 視覚効果 |
+|-------|------|---------------------------|---------|
+| state[0] = start | 中央 (Init Yaw 直後) | (0, 0, 0) | スタート |
+| state[1] = 右下 | 右下 | (0, -45, +30) | Pitch -45, Yaw +30 |
+| state[2] = 下底 | 真下 | (0, -60, 0) | 最下点 |
+| state[3] = end (flick) | 右上 | (0, +20, +20) | 振り上げ + flick |
+
+**注意**: 上記は仮の値、実機で振って実測する必要あり。Wand chart の絵を相対 Euler で再現するには、Roll は使わず Yaw/Pitch のみで描く方針が分かりやすい。
+
+### 新規サンプル: `harry_potter_wingardium_chart.json`
+
+```json
+{
+  "schema": "burst_motion_sample_v1",
+  "id": "harry_potter_wingardium_chart",
+  "title": "🪄 Wingardium Leviosa (Wand Catalogue 準拠)",
+  "description": "ハリポタ Wand Movements Catalogue の Wingardium Leviosa (U 字 swish & flick) を相対 Quat で再現。Init Yaw で初期姿勢を設定してから Btn3 押下しつつ U 字を描く。",
+  "hardware_required": ["m5stickc"],
+  "rules": [
+    {
+      "name": "wingardium_leviosa_chart",
+      "ui_mode": "hold_with_waypoints",
+      "posture_basis": "relative",
+      "start_posture":  { "euler": [0, 0, 0],      "euler_tol": [180, 180, 180] },
+      "mid_postures": [
+        { "euler": [0, -45, 30],  "euler_tol": [180, 20, 25] },
+        { "euler": [0, -60, 0],   "euler_tol": [180, 15, 25] }
+      ],
+      "end_posture":    { "euler": [0, 20, 20],    "euler_tol": [180, 20, 25] },
+      "button_idx": 3,
+      "button_state": 0,
+      "type_text": "wingardium leviosa\n",
+      "cooldown_ms": 2000
+    }
+  ]
+}
+```
+
+**Roll は euler_tol=180 で除外** (Wand 動作で twist は重要でないため)。
+
+### 既存 `wingardium_hold_relative.json` との関係 (★ 改訂必須、ユーザー指示)
+
+ユーザー指示 (2026-05-14): 「wingardium leviosa は、添付した wand movements に変える必要があるので忘れないように」
+
+**Phase 5.39.3c の必須作業**:
+- 既存 `Web/hidconfig/profiles/wingardium_hold_relative.json` の posture.euler 値 (Phase 5.39.2 の仮値) を、**`Web/img/wand_movements.png` の Wingardium Leviosa の U 字軌跡** に合わせて改訂する
+- 改訂後、新規 `harry_potter_wingardium_chart.json` と 2 種類で運用 (or 既存サンプル名を変えず内容だけ改訂)
+- 改訂前後の比較メモを commit メッセージに残す
+
+**改訂前 (Phase 5.39.2 仮値)**:
+```json
+"start_posture":  { "euler": [0, 0, 0], "euler_tol": [180, 180, 180] }
+"mid_postures": [
+    { "euler": [30, 0, 0], "euler_tol": [25, 25, 180] },   // Roll +30 のみ、Pitch ゼロ → U 字ではない
+    { "euler": [60, -30, 0], "euler_tol": [25, 25, 180] }
+]
+"end_posture":    { "euler": [0, -30, 0], "euler_tol": [25, 25, 180] }
+```
+
+→ 上記は「Roll/Pitch のみ動かす仮値」、U 字軌跡を再現していない。
+
+**改訂後 (Wand Movements Catalogue 準拠、U 字 swish & flick)**:
+```json
+"start_posture":  { "euler": [0, 0, 0],     "euler_tol": [180, 180, 180] }    // 中央
+"mid_postures": [
+    { "euler": [0, -45, 30],  "euler_tol": [180, 20, 25] },   // 右下 (Pitch -45°、Yaw +30°)
+    { "euler": [0, -60, 0],   "euler_tol": [180, 15, 25] }    // 下底 (Pitch -60°、Yaw 0°)
+]
+"end_posture":    { "euler": [0, 20, 20],   "euler_tol": [180, 20, 25] }    // 右上 flick (Pitch +20°、Yaw +20°)
+```
+
+→ Roll は除外 (Wand 動作で twist は意味薄)、Yaw/Pitch で U 字を表現。
+
+**実装メモ (Phase 5.39.3c 実装時に必ず実施)**:
+1. 既存 `wingardium_hold_relative.json` の posture.euler 値を上記新値に置換
+2. description 更新: 「Wand Movements Catalogue 準拠、U 字 swish & flick」
+3. Phase 5.39.3b の相対 2D 軌跡タブで動作確認 → 画面に U 字が描かれることを確認
+4. 必要なら実機振りで微調整 (現状値は仮、wand_movements.png の絵を直接読み取った推定)
+5. 改訂値は wand_movements.png を **目視確認後の最終値** で fix
+
+### 検証手順
+
+1. Init Yaw ボタンで初期姿勢設定 (M5C を「ニュートラル位置 = 杖を構えた姿勢」で持つ)
+2. `harry_potter_wingardium_chart` サンプルを適用
+3. 相対 2D 軌跡タブを開く → 4 waypoint で U 字が描かれていることを確認
+4. Btn3 押下 → M5C を U 字に振る → 各 waypoint を順次通過 → state[3] 到達で `wingardium leviosa\n` をキー入力
+5. 相対 2D 軌跡タブで、自分の動き trail が U 字 waypoint をなぞっていることを視認
+
+### 将来追加検討
+
+- Lumos (∧)、Nox (C)、Alohomora (○)、Expelliarmus (鉤) 等の他の呪文も同様にチャート準拠で登録
+- ユーザーが手動で「Wand chart」を見ながら登録する UI ヘルパ (Phase 5.39.4 候補)
+
+---
+
+## Phase 5.39.3 全体の実装優先順位
+
+Phase 5.39.3a / 5.39.3b / 5.39.3c は依存関係あり:
+
+| 順序 | Phase | 内容 | 依存 |
+|------|-------|------|------|
+| 1 | **5.39.3a** | 初期姿勢の Demote (q_initial デバイス単位) | 基盤、最優先 |
+| 2 | **5.39.3b** | 相対 2D 軌跡表示タブ | 5.39.3a 必須 (q_initial で 2D 投影計算) |
+| 3 | **5.39.3c** | Wingardium Leviosa チャート準拠サンプル | 5.39.3a + 5.39.3b 必須 (相対 2D で軌跡確認しながら値調整) |
+
+### 全体実装ロードマップ (Phase 5.39.3 セッション)
+
+| Step | 担当 | 内容 |
+|------|------|------|
+| 1 | FW agent | FW Phase 5.39.3a (q_initial Demote、posture.init コマンド、NVS 永続化) |
+| 2 | Web agent | Web Phase 5.39.3a (RelativeIMUViewer 改修、Init Yaw 連動、posture.init 自動取得) |
+| 3 | Web agent | Web Phase 5.39.3b (RelativeTrajectoryGrid.js 新規、タブ追加) |
+| 4 | Claude | サンプル 5.39.3c (harry_potter_wingardium_chart.json 新規) |
+| 5 | Claude | ビルド + 書込み + 自動検証 (btn.sim + posture.init) |
+| 6 | ユーザー | 実機検証 (Init Yaw → Btn3 + U 字振り → wingardium leviosa 入力 → 2D 軌跡確認) |
+| 7 | Claude | 暫定 commit |
+
+---
+
+## Phase 5.39.3d — 最近傍法による相対 3D Quat 判定 (Sequence の代替)
+
+### Context
+
+ユーザー指摘 (2026-05-14): 「相対 3D Quat の判定は、状態遷移ではなく、最近傍法も検討の余地がある。後者の場合、どうやって判定するか検討が必要」
+
+現状 (Phase 5.39.2) の `hold_with_waypoints` は順次 state machine: state[0] → state[1] → ... → state[N-1] を定義順に通過しないと成立しない。これだとユーザーが Wand 動作を厳密に順序通りに振らないと不発になる。
+
+ハリポタチャートの「形」を捉える用途では、順序前後があっても「形が合致すれば成立」の方が UX 自然。
+
+### 判定アルゴリズム比較表
+
+| 案 | アルゴリズム | 順序判定 | 実装難易度 | UX | 推奨度 |
+|----|------------|---------|----------|-----|------|
+| **現状 (Phase 5.39.2)** | 順次 state machine | ✅ 順序必須 | 完了 | 厳格、軌跡の方向性まで判定 | ◯ 既存維持 |
+| **案 A**: 終端 waypoint 最近傍 | 終端の tol 内到達のみで発火 | ❌ 順序不問 | ★ 低 | ゆるい、最終姿勢だけ判定 | △ |
+| **★ 案 B**: 全 waypoint 順序不問通過 | 各 waypoint が一度でも tol 内に入ったら passed フラグ立て、全 passed で発火 | ◯ 通過必須・順序不問 | ★★ 中 | バランス良、「形を辿ったか」判定 | ★★★ 推奨 |
+| **案 C**: DTW (Dynamic Time Warping) | trajectory 蓄積 → DTW で類似度計算 | △ 時間方向弾性 | ★★★ 中-高 | WB 互換、最も賢い | ★★ Phase 5.39.5+ |
+| **案 D**: 2D 投影 shape matching | Phase 5.39.3b の 2D 軌跡 → 画像類似度 | △ 形状重視 | ★★★★ 高 | ハリポタチャート最適 | △ 将来 |
+
+### 推奨: 案 B (全 waypoint 順序不問通過) を Phase 5.39.3d.1 として実装
+
+#### 判定ロジック
+
+```cpp
+// 各 rule に追加:
+//   uint8_t waypoint_order;  // 0=sequential (default), 1=unordered (案 B)
+//   bool waypoint_passed[N]; // 各 waypoint の通過フラグ (RAM)
+//   uint32_t cluster_start_ms; // クラスタリング開始時刻 (= 最初に passed が立った時刻)
+
+void evaluateUnorderedWaypoints(ActionRule& rule, const SensorState& s) {
+    if (!rule.q_ref_valid || rule.posture_basis != PB_RELATIVE_QUAT) return;
+    uint32_t now = s.timestamp_ms;
+
+    // ボタン release で全 passed リセット (Phase 5.39.2.10 と整合)
+    if (button_released(rule, s)) {
+        for (int i = 0; i < rule.states_count; i++) rule.waypoint_passed[i] = false;
+        rule.cluster_start_ms = 0;
+        fireWatchEvent(rule, "release");
+        return;
+    }
+
+    // 各 unpassed waypoint との距離計算
+    float q_rel[4];
+    computeQRel(s.quat, g_engine.q_initial, q_rel);  // 相対 quat
+    int just_passed = -1;
+    for (int i = 0; i < rule.states_count; i++) {
+        if (rule.waypoint_passed[i]) continue;
+        if (matchPosture(rule.states[i].posture, q_rel)) {
+            rule.waypoint_passed[i] = true;
+            just_passed = i;
+            if (rule.cluster_start_ms == 0) rule.cluster_start_ms = now;
+            fireWatchEvent(rule, "waypoint_passed", &i);  // 通過順序の可視化用
+        }
+    }
+
+    // 全 waypoint passed → 発火
+    bool all_passed = true;
+    for (int i = 0; i < rule.states_count; i++) {
+        if (!rule.waypoint_passed[i]) { all_passed = false; break; }
+    }
+    if (all_passed) {
+        executeAction(rule.states[rule.states_count - 1].on_enter);  // 終端の action 発火
+        fireWatchEvent(rule, "fire");
+        // リセット (連続発火対策)
+        for (int i = 0; i < rule.states_count; i++) rule.waypoint_passed[i] = false;
+        rule.cluster_start_ms = 0;
+        rule.last_fire_ms = now;
+    }
+
+    // タイムアウト (例: ボタン押下から 3 秒以内に全 passed しなかったらリセット)
+    if (rule.cluster_start_ms != 0 && (now - rule.cluster_start_ms) > 3000) {
+        for (int i = 0; i < rule.states_count; i++) rule.waypoint_passed[i] = false;
+        rule.cluster_start_ms = 0;
+        fireWatchEvent(rule, "timeout");
+    }
+}
+```
+
+#### Web UI 連携
+
+- rule.add で新フィールド `waypoint_order: "sequential" | "unordered"` (default "sequential")
+- 相対 2D 軌跡タブで:
+  - 通過済 waypoint = 緑塗りつぶし
+  - 未通過 waypoint = 紫円 (現状)
+  - 通過順序のラベル (例: ①②④③ の順で通過した) を小さく表示
+
+#### サンプルプロファイル
+
+`harry_potter_wingardium_chart` (Phase 5.39.3c) の派生として `_unordered.json` を作る:
+- 4 waypoint + waypoint_order: "unordered"
+- ユーザーが U 字でも逆 U 字でも「全 4 点」通れば成立
+
+### Phase 5.39.3 全体改訂版 ロードマップ
+
+| Step | Phase | 内容 | 優先度 |
+|------|-------|------|------|
+| 1 | 5.39.3a | 初期姿勢 Demote (q_initial デバイス単位) | ★★★ 必須基盤 |
+| 2 | 5.39.3b | 相対 2D 軌跡表示タブ | ★★★ 視覚化、ユーザー要望 |
+| 3 | 5.39.3c | Wingardium Leviosa チャート準拠サンプル | ★★ サンプル |
+| 4 | 5.39.3d.1 | 最近傍法 (案 B、順序不問通過) を ui_mode オプションで追加 | ★★ Phase 5.39.3 末で実装 |
+| 5 | 5.39.5+ | 最近傍法 DTW (案 C) 検討 | ★ 将来 |
+
+### 案 B の利点 / 欠点
+
+**利点**:
+- ユーザーが Wand 動作を「だいたいの形」で振っても成立
+- ハリポタ呪文認識として柔軟
+- 順次評価と独立した別評価パスなので、既存 hold_with_waypoints は完全温存
+
+**欠点**:
+- 「順序」を識別するジェスチャ (例: 上→下 と 下→上 を区別) ができない
+- 振り幅が小さいと「全 waypoint がほぼ同時に通過」と誤判定可能 (= 単一姿勢でクリアしてしまう)
+  - 対策: `cluster_start_ms` でクラスタリング開始時刻を記録、最小経過時間 (例 200ms 以上) でないと発火しない条件を追加
+- waypoint 間の最小距離 / 順序検出が消えるので、複雑なジェスチャの識別力が落ちる
+
+### ユーザー判断ポイント
+
+- 現状 (順次): 厳格、振り方を完璧に覚える必要あり
+- 案 B (順序不問): 柔軟、ただし「同じ waypoint セット」を持つ別呪文は区別できない (= 呪文ごとに waypoint 配置を大きく変える必要)
+
+Phase 5.39.3d.1 は **オプション機能** として実装 (default は sequential 維持)、ユーザーが rule ごとに切替可能とする方針。
+
+---
+
+### Phase 5.39.3d — 詳細比較資料 (ユーザー要望: 案 B 詳細 + 他案比較)
+
+#### 案 B (順序不問通過判定) の完全仕様
+
+##### データモデル
+
+```cpp
+// ActionRule に追加 (Phase 5.39.3d.1)
+struct ActionRule {
+    // ... 既存フィールド
+    uint8_t waypoint_order;   // 0=sequential (default、現状互換)、1=unordered (案 B)
+    
+    // 案 B 用 runtime メンバ (RAM のみ、永続化不要)
+    bool waypoint_passed[MAX_WAYPOINTS];   // 各 waypoint の通過フラグ
+    uint32_t cluster_start_ms;             // 最初の passed が立った時刻
+    int8_t last_passed_idx;                // 直近通過 waypoint (UI 表示用)
+    
+    // 案 B チューニングパラメータ (rule 単位)
+    uint16_t min_cluster_duration_ms;   // 最低クラスタ時間 (default 200ms、誤発火防止)
+    uint16_t max_cluster_duration_ms;   // 最大クラスタ時間 (default 3000ms、タイムアウト)
+};
+```
+
+##### 判定ロジック (擬似コード)
+
+```cpp
+void evaluateRuleUnordered(ActionRule& rule, const SensorState& s) {
+    uint32_t now = s.timestamp_ms;
+    
+    // 0. button release で全 passed リセット
+    if (button_just_released(rule, s)) {
+        resetPassed(rule);
+        fireWatchEvent(rule, "release");
+        return;
+    }
+    
+    // 1. 相対 quat 計算 (Phase 5.39.3a の g_engine.q_initial を使用)
+    float q_rel[4];
+    computeQRel(s.quat, g_engine.q_initial, q_rel);
+    
+    // 2. 各 unpassed waypoint との距離評価
+    for (int i = 0; i < rule.states_count; i++) {
+        if (rule.waypoint_passed[i]) continue;
+        if (matchPosture(rule.states[i].match_condition.posture, q_rel)) {
+            rule.waypoint_passed[i] = true;
+            rule.last_passed_idx = i;
+            if (rule.cluster_start_ms == 0) rule.cluster_start_ms = now;
+            fireWatchEvent(rule, "waypoint_passed", &i);  // UI 可視化
+        }
+    }
+    
+    // 3. クラスタリング最小時間 (誤発火防止)
+    if (rule.cluster_start_ms != 0 &&
+        (now - rule.cluster_start_ms) < rule.min_cluster_duration_ms) {
+        return;  // まだ早い、待機
+    }
+    
+    // 4. 全 waypoint passed → 発火
+    if (allPassed(rule)) {
+        executeAction(rule.states[rule.states_count - 1].on_enter);
+        fireWatchEvent(rule, "fire");
+        rule.last_fire_ms = now;
+        resetPassed(rule);  // 連続発火対策、再度全部通過する必要
+        return;
+    }
+    
+    // 5. タイムアウト
+    if (rule.cluster_start_ms != 0 &&
+        (now - rule.cluster_start_ms) > rule.max_cluster_duration_ms) {
+        resetPassed(rule);
+        fireWatchEvent(rule, "timeout");
+    }
+}
+
+void resetPassed(ActionRule& rule) {
+    for (int i = 0; i < rule.states_count; i++) rule.waypoint_passed[i] = false;
+    rule.cluster_start_ms = 0;
+    rule.last_passed_idx = -1;
+}
+
+bool allPassed(const ActionRule& rule) {
+    for (int i = 0; i < rule.states_count; i++) {
+        if (!rule.waypoint_passed[i]) return false;
+    }
+    return true;
+}
+```
+
+##### `matchPosture` (Phase 5.39 の `evalPostureRelative` を流用)
+
+- judge_by="euler" (default): q_rel から Euler 抽出 → posture.euler との軸別 tol 比較
+- judge_by="quat": q_rel と posture.quat の内積 ≥ quat_dot_min
+
+##### 誤発火防止ロジック
+
+問題: 全 waypoint の posture が中央周辺に集まっていて、振り 1 動作で全部 tol 内に → 誤発火
+
+対策: `min_cluster_duration_ms` (default 200ms):
+- 「最初の passed」から「全 passed」まで最低 200ms の経過が必要
+- これより短い場合は「停止判定」、発火しない
+
+##### UI 連携 (Web)
+
+新 trigger.hit event phase 追加:
+- `"waypoint_passed"` + `{idx: N}` — 通過時の可視化 event
+- `"fire"` — 全 passed で発火
+- `"timeout"` — クラスタタイムアウトでリセット
+
+Web 側可視化:
+- 相対 2D 軌跡タブ:
+  - 通過済 waypoint: **緑塗り** + 通過順序ラベル (例 "①→③→②→④")
+  - 未通過 waypoint: **紫円** (現状)
+  - 全 passed 達成時: 球面が紫色フラッシュ
+- rule.list 表示:
+  - `waypoint_order` 列を追加 (Seq / Unord)
+  - 通過進捗 (例 "3/4") を小さく表示
+
+#### 案 A/B/C/D 完全比較
+
+##### 計算量・メモリ比較
+
+| 案 | 計算量 / tick (100Hz) | 計算量 / fire 判定 | メモリ追加 / rule | 実装行数見積 |
+|----|---------------------|------------------|----------------|----------|
+| 順次 (現状) | O(1) | 0 (tick 内で完結) | 0 (既存) | 完了 |
+| 案 A 終端 | O(1) | 0 | 0 | ~30 行 (FW) |
+| **案 B 順序不問** | O(N), N=states_count (4-8) | O(N) | ~24B (passed[N] + cluster_start + last_idx + 設定) | ~100 行 (FW) + UI 連携 |
+| 案 C DTW | O(1) tick (buffer 追加) | O(M·N), M=trajectory 長 (50-200) | ~4KB/rule (buffer) | ~200 行 |
+| 案 D shape | O(1) tick | O(M·N) Hausdorff | ~2KB/rule | ~300 行 |
+
+ESP32 PICO D4 @ 240MHz の文脈:
+- 案 B の O(N) 計算は 100Hz × N=8 で 800 演算/sec → 0.1% CPU、無視できる
+- 案 C DTW は fire 判定で O(M·N) = 200×8 = 1600 演算、~5μs 程度 → ボタン release 時の 1 回だけならコスト無視
+- 案 D shape は計算重 + 画像処理ライブラリ要
+
+##### 振り方ケース別 認識率予想 (Wingardium Leviosa = 4 waypoint U 字)
+
+| 振り方 | 順次 | 案 A | **案 B** | 案 C | 案 D |
+|--------|----|----|------|----|----|
+| 完璧な U 字 (W0→W1→W2→W3、定義順) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| ちょっと崩れた U 字 (tol 境界) | △ | ✅ | ✅ | ✅ | ✅ |
+| 逆 U 字 (W3→W2→W1→W0) | ❌ | ✅ | **✅** | ❌ | △ |
+| Z 字パターン (W0→W2→W1→W3) | ❌ | ✅ | **✅** | ❌ | △ |
+| 単発ジャブ (W3 だけ突く) | ❌ | ✅ (誤受容!) | ❌ | ❌ | ❌ |
+| 不完全 U 字 (W0→W1→W2 で止める) | ❌ | ❌ | ❌ (W3 未通過) | ❌ | ❌ |
+| 超ゆっくり振り (5 秒) | △ max_dwell 次第 | ✅ | ❌ (timeout) | ✅ | ✅ |
+| 超速振り (100ms 以内) | △ | ✅ | △ (min_cluster 待ち) | ✅ | ✅ |
+
+##### Burst Motion 用途別 推奨案
+
+| 用途 | 推奨案 | 理由 |
+|------|------|------|
+| FPS WASD (姿勢 1 つ = 1 キー) | 順次 (現状) | 単純、誤発火なし |
+| プレゼン Next/Prev (2 waypoint hold) | 順次 or 案 A | シンプル |
+| **ハリポタ呪文 (U 字 / Z 字 / 8 の字)** | **案 B (Phase 5.39.3d で実装)** | 振り方の自由度大、Wand chart 形状認識に最適 |
+| 順序が意味を持つ呪文 (例 上→下 と 下→上 を区別) | 順次 | 案 B では区別不可 |
+| 高度認識 (時間弾性 + 順序保持) | 案 C DTW (Phase 5.39.5+) | WB Magic Caster と同方式 |
+| 視覚的に正確な認識 (チャート絵忠実) | 案 D shape (将来) | 画像処理ベース |
+
+##### 案 B 限界と将来拡張
+
+**限界**:
+1. 「順序を識別する呪文」は表現不可
+   - 例: 「上→下」と「下→上」を別呪文として登録 → 案 B では同じ rule になり区別不可
+2. waypoint セットの重複に弱い
+   - 複数 rule が共通の waypoint を持つ場合、両方とも fire しうる
+   - 対策: cooldown_ms + closest_only_mode で制約
+
+**Phase 5.39.5+ で拡張可能**:
+- 案 C DTW を `waypoint_order: "dtw"` として追加
+- ui_mode は sequential / unordered / dtw の 3 択
+- ユーザーが rule ごとに選択
+- DTW は trajectory buffer + 動的計画法、共通バッファでメモリ節約可
+
+#### Phase 5.39.3d 実装ステップ (詳細)
+
+| Step | 内容 |
+|------|------|
+| 1 | types.hpp に ActionRule に `waypoint_order`, `waypoint_passed[N]`, `cluster_start_ms`, `last_passed_idx`, `min_cluster_duration_ms`, `max_cluster_duration_ms` 追加 |
+| 2 | TriggerEngine.cpp に `evaluateRuleUnordered()` 関数追加 |
+| 3 | `evaluateRule()` の最初で `rule.waypoint_order == 1` 分岐 → `evaluateRuleUnordered` 呼出 |
+| 4 | `fireWatchEvent` の phase に `"waypoint_passed"` を追加サポート |
+| 5 | main_v2.cpp の rule.add で `waypoint_order: "sequential" \| "unordered"` 受付、Profile.hpp で JSON I/O |
+| 6 | Web app.js の rule.add で `waypoint_order` 送信、UI に切替セレクタ追加 |
+| 7 | 相対 2D 軌跡タブで通過済 waypoint を緑塗り、通過順序ラベル表示 |
+| 8 | rule.list 表示に `waypoint_order` 列追加 (Seq / Unord) |
+| 9 | 新サンプル `harry_potter_wingardium_unordered.json` (Phase 5.39.3c の派生) を追加 |
+| 10 | ビルド + 書込み + Python btn.sim + 任意順序振りシミュレーションで検証 |
+
+#### Phase 5.39.3d 完了基準
+
+- ✅ rule.add で `waypoint_order: "unordered"` が受付られる
+- ✅ rule.list で `waypoint_order` フィールドが出力される
+- ✅ Btn3 押下中、任意順序で全 waypoint を通過すれば発火 (例: W3→W0→W2→W1 でも OK)
+- ✅ 1 waypoint だけで停止すれば発火しない
+- ✅ 全 waypoint がほぼ同時 (50ms 内) に passed されても発火しない (min_cluster_duration_ms 制約)
+- ✅ ボタン release で全 passed リセット (Phase 5.39.2.10 と整合)
+- ✅ 相対 2D 軌跡タブで通過済 waypoint が緑表示
+- ✅ Phase 5.39.3a / b / c と統合して Wingardium Leviosa を順序不問で振って発火確認
+
+---
+
+### 段階的アプローチ (★ ユーザー確定: 「3 案を選択可能、今は順次で良い」)
+
+ユーザー方針 (2026-05-14): 「順次 (現状)、案 B 順序不問、案 C DTW を選択可能にしてほしい。今は順次でよい」
+
+→ **即時実装は順次のまま**、将来 3 択切替を見据えてデータモデル + UI 構造だけ準備する。
+
+#### `waypoint_order` フィールドの値域定義
+
+```cpp
+enum WaypointOrder : uint8_t {
+    WO_SEQUENTIAL = 0,   // 順次 (default、現状実装、Phase 5.39 から有効)
+    WO_UNORDERED  = 1,   // 順序不問通過 (Phase 5.39.3d.1 で実装、案 B)
+    WO_DTW        = 2,   // DTW 時系列マッチング (Phase 5.39.5+ で実装、案 C)
+};
+```
+
+JSON での表現:
+```json
+{
+  "waypoint_order": "sequential"   // (default)
+  // or "unordered" or "dtw"
+}
+```
+
+#### 段階的実装スケジュール
+
+| Phase | 実装内容 | デフォルト動作 |
+|-------|--------|-------------|
+| **Phase 5.39.3a / b / c (即時)** | データモデルに `waypoint_order` フィールド追加 (default = `sequential`)、UI セレクタも 3 択準備 (unordered/dtw はグレーアウト) | 全 rule が sequential (現状と完全互換) |
+| **Phase 5.39.3d.1 (次)** | FW で `evaluateRuleUnordered` 実装、`waypoint_order=unordered` で動作 | ユーザーが選択した rule のみ unordered、他は sequential のまま |
+| **Phase 5.39.5+ (将来)** | DTW 実装、`waypoint_order=dtw` で動作 | 同上 |
+
+#### Web UI セレクタ (今すぐ追加、案 B/C はグレーアウト)
+
+rule 編集 UI に新セレクタ:
+```
+判定順序:
+  [ ● 順次 (sequential、推奨) ▼ ]
+    ○ 順序不問 (unordered、Phase 5.39.3d.1 で有効化予定) — グレー
+    ○ DTW (時系列マッチング、Phase 5.39.5+ で有効化予定) — グレー
+```
+
+これで「将来追加予定の機能が見える」UX、ユーザー期待を可視化。
+
+#### 即時 (Phase 5.39.3a/b/c) で実装すべき項目
+
+1. types.hpp の ActionRule に `waypoint_order` フィールド追加 (default = 0 = sequential)
+2. Profile.hpp の JSON I/O に `waypoint_order` 追加 (省略時 sequential、後方互換)
+3. main_v2.cpp rule.add ハンドラで `waypoint_order` パース ("sequential"/"unordered"/"dtw" → enum 値)、ただし unordered/dtw はまだ動作しない
+4. rule.list レスポンスに `waypoint_order` 出力
+5. Web app.js の rule 編集 UI に 3 択セレクタ追加、unordered/dtw はグレーアウト + tooltip 「Phase 5.39.3d.1 / 5.39.5+ で実装予定」
+6. 評価ロジックは現状の sequential のまま (FW 側 `evaluateRuleUnordered` / `evaluateRuleDtw` は未実装)
+
+→ 即時実装で「将来の 3 択切替可能な構造」を準備、まずは順次のまま動作。Phase 5.39.3d.1 / 5.39.5 で順次実装。
+
+#### ROM/RAM 制約対応 (★ ユーザー指摘: 「足りないなら #define で対応」)
+
+##### 現状リソース (Phase 5.39.2.7 時点)
+
+- Flash: 56.5% (744KB / 1.3MB) → 残 ~570KB
+- RAM: 12.0% (39KB / 320KB) → 残 ~280KB
+
+##### 各案追加でのリソース予測
+
+| 案 | Flash 追加 | RAM 追加 (rule あたり) | rule 30 件で RAM 合計 |
+|----|---------|-------------------|--------------------|
+| 案 B unordered | ~3KB (コード ~100 行 + tables) | 24B (passed[]+cluster_start+last_idx+設定) | **720B** |
+| 案 C DTW | ~6KB (コード ~200 行 + DTW テーブル) | 4KB (trajectory buffer 200samples × 16B/quat) | **120KB** ← 圧迫 |
+| 案 D shape | ~8-15KB (Hausdorff + 画像処理 lib) | 2KB (2D投影 buffer) + 共通 lib | 60KB+ |
+
+##### 対策案
+
+1. **案 B**: リソース余裕、無条件で有効化可能 (~3KB Flash + ~720B RAM @ 30 rules)
+
+2. **案 C DTW**: RAM 圧迫の可能性、対応 2 案:
+   - **対策 1: trajectory buffer を共通化** — rule ごとではなく `g_engine.trajectory[]` 1 つだけ (現在評価中の 1 rule のみ使用、closest_only_mode と整合)
+     - → RAM 4KB のみ (rule 数 N に依存しない)
+   - **対策 2: `#define ENABLE_WAYPOINT_DTW`** (ユーザー提案、recommended)
+     - DTW 機能を条件コンパイルでオプション化
+     - 未定義時はコード/RAM 共に未割当 → リソース最小化
+
+##### `#define` ベース機能フラグ (Phase 5.39.3 以降の方針)
+
+```cpp
+// src/core/types.hpp または別 build_config.hpp:
+//   PlatformIO env ごとに -D で指定、未定義時は機能除外
+#ifndef ENABLE_WAYPOINT_UNORDERED
+#define ENABLE_WAYPOINT_UNORDERED 1   // 案 B、default 有効 (RAM 軽量)
+#endif
+
+#ifndef ENABLE_WAYPOINT_DTW
+#define ENABLE_WAYPOINT_DTW 0          // 案 C、default 無効 (RAM 重い、明示有効化必要)
+#endif
+```
+
+##### platformio.ini 設定例
+
+```ini
+[env:m5stick-c-v2]
+; 標準 env、案 B 有効・案 C 無効
+build_flags = -D BOARD_M5STICKC -D ENABLE_WAYPOINT_UNORDERED=1 -D ENABLE_WAYPOINT_DTW=0
+
+[env:m5stick-c-v2-full]
+; フル機能 env、案 C も有効 (RAM 余裕ある場合)
+build_flags = -D BOARD_M5STICKC -D ENABLE_WAYPOINT_UNORDERED=1 -D ENABLE_WAYPOINT_DTW=1
+
+[env:m5stick-c-v2-min]
+; 最小機能 env、ROM/RAM 節約 (将来 HW 制約ある場合)
+build_flags = -D BOARD_M5STICKC -D ENABLE_WAYPOINT_UNORDERED=0 -D ENABLE_WAYPOINT_DTW=0
+```
+
+##### FW コードでの #ifdef ガード
+
+```cpp
+// TriggerEngine.cpp
+void TriggerEngine::evaluateRule(ActionRule& rule, const SensorState& s) {
+    if (rule.waypoint_order == WO_SEQUENTIAL) {
+        evaluateRuleSequential(rule, s);   // 現状 (常時有効)
+        return;
+    }
+#if ENABLE_WAYPOINT_UNORDERED
+    if (rule.waypoint_order == WO_UNORDERED) {
+        evaluateRuleUnordered(rule, s);   // 案 B
+        return;
+    }
+#endif
+#if ENABLE_WAYPOINT_DTW
+    if (rule.waypoint_order == WO_DTW) {
+        evaluateRuleDtw(rule, s);          // 案 C
+        return;
+    }
+#endif
+    // フォールバック: 未定義の waypoint_order なら sequential
+    evaluateRuleSequential(rule, s);
+}
+```
+
+`#if ENABLE_WAYPOINT_DTW` 内に DTW trajectory buffer の宣言・初期化を入れる:
+```cpp
+#if ENABLE_WAYPOINT_DTW
+private:
+    float dtw_trajectory_[200][4];  // 4KB、共通バッファ (現在評価中 rule のみ使用)
+    int   dtw_trajectory_len_ = 0;
+#endif
+```
+
+##### Web UI 側の対応
+
+device.info に `features` フィールドを追加して、FW が対応する機能を Web 側で確認:
+```json
+{
+  "type": "device.info",
+  "fw_phase": "5.39.3",
+  "features": {
+    "waypoint_unordered": true,
+    "waypoint_dtw": false
+  }
+}
+```
+
+Web UI のセレクタは features に応じてグレーアウト動的制御:
+- features.waypoint_dtw=false → 「DTW」オプションをグレーアウト + tooltip 「この FW では未有効、build_flags に -D ENABLE_WAYPOINT_DTW=1 で有効化可」
+
+##### この方針の利点
+
+1. **デフォルト構成は ROM/RAM 余裕**: 案 B 有効 + 案 C 無効 = +3KB Flash + ~720B RAM のみ
+2. **必要なら案 C を build 時オプトイン**: ユーザーが PlatformIO env を選ぶだけ
+3. **将来量産版 (LSM6DSV16X + PSRAM) では全機能有効化**: PSRAM があれば DTW buffer も余裕
+4. **コード可読性維持**: `#if` ガードで機能ごとに区切る、未使用機能は完全除外
+
+##### ★ ユーザー再確認 (2026-05-14): 「#define 切替は本当に必要か？」
+
+**結論: 現状の RAM/Flash 余裕を考えると、`#define` 切替は不要**。全機能常時有効でも OK。
+
+**数値検証 (Phase 5.39.2.10 時点)**:
+| 機能 | Flash 増 | RAM 増 (DTW は共通バッファ化前提) |
+|------|---------|--------------------------------|
+| 案 B unordered | ~3KB | 24B × 30 rules = ~720B |
+| 案 C DTW | ~6KB | **4KB 固定** (現在評価中の 1 rule のみ使用、共通バッファ) |
+| **合計** | ~9KB (+0.7%) | ~5KB (+1.5%) |
+
+→ Flash 残 570KB / RAM 残 280KB → 全機能有効でも余裕 100 倍以上。
+
+**修正方針**: 即時実装では **全機能常時有効** (`#define` 不要)、ui_mode = 0/1/2 で実行時切替のみ。
+
+ただし、設計の柔軟性のため `#define ENABLE_WAYPOINT_*` フラグは **コード内に残置** (将来 RAM 不足時に切替可能)。default は全 1 (有効):
+
+```cpp
+#ifndef ENABLE_WAYPOINT_UNORDERED
+#define ENABLE_WAYPOINT_UNORDERED 1   // 即時実装で有効
+#endif
+
+#ifndef ENABLE_WAYPOINT_DTW
+#define ENABLE_WAYPOINT_DTW 1          // 即時実装で有効 (RAM 余裕)
+#endif
+```
+
+PlatformIO env は単一 (`[env:m5stick-c-v2]`) のみ、build_flags は現状通り。将来 RAM 不足が顕在化したら個別 env (`m5stick-c-v2-min` 等) を追加。
+
+##### この方針の真の利点
+
+1. **シンプル**: ユーザーは PlatformIO env を選ばなくてよい (1 つの env で全機能 ON)
+2. **将来の余地は残す**: `#define` フラグはコード内に残置、必要時に切替可能
+3. **DTW の RAM コストは共通バッファ化で抑制**: rule 数 N に依存しない 4KB のみ
+4. **量産時の最適化**: 量産直前に DTW 不要なら #define で除外、Flash 6KB + RAM 4KB 節約可
+
+---
+
+### 順次 (sequential、現状実装) の状態遷移判定基準 詳細
+
+ユーザー質問: 「順次 (sequential、現状維持) の状態遷移判定基準は？」
+
+#### 状態モデル
+
+- `rule.current_state` の値:
+  - `-1` = **idle** (起動時 / リセット時 / cooldown 中 / 全 state 通過後)
+  - `0..N-1` = state[i] 滞在中
+
+#### 評価アルゴリズム (TriggerEngine.cpp の `evaluateRule`、毎 100Hz tick 呼出)
+
+##### Step 1: idle (current_state = -1) の場合
+
+```
+1. cooldown チェック:
+   if (cooldown_ms > 0 && (now - last_fire_ms) < cooldown_ms) return;
+2. state[0].match_condition を AND 評価
+3. match なら:
+   - current_state = 0
+   - state_enter_ms = now
+   - [Phase 5.39 相対モード時] q_ref = sensor.quat snapshot
+     (Phase 5.39.3a 後は g_engine.q_initial を使うため snapshot 不要)
+   - executeAction(state[0].on_enter)  // 例: AT_PRESS でキー押下
+   - fireWatchEvent("enter") + q_ref (相対モード時)
+```
+
+##### Step 2: state[i] 滞在中 (i >= 0) の場合
+
+```
+a. タイムアウトチェック:
+   if (state[i].max_dwell_ms > 0 && (now - state_enter_ms) > max_dwell_ms) {
+       executeAction(state[i].on_exit);
+       fireWatchEvent("timeout");
+       current_state = -1; (idle)
+       return;
+   }
+
+b. (Phase 5.39.2.10) ボタン release チェック:
+   if (rule[0].button.enabled && evalButton(state[0].button) == 0) {
+       executeAction(state[i].on_exit);
+       fireWatchEvent("release");
+       current_state = -1;
+       return;
+   }
+
+c. 次状態への遷移チェック:
+   next = i + 1;
+   if (next >= states_count) {
+       next = loop ? 0 : -1;
+   }
+   if (next < 0) {
+       // 最終 state、終端処理
+       executeAction(state[i].on_exit);
+       last_fire_ms = now;
+       current_state = -1;
+       return;
+   }
+   if (state[next].match_condition match) {
+       executeAction(state[i].on_exit);
+       current_state = next;
+       state_enter_ms = now;
+       executeAction(state[next].on_enter);
+       fireWatchEvent("transition");
+   }
+```
+
+#### 各 state の match_condition (5 サブ条件 AND 評価)
+
+| サブ条件 | 評価式 | enabled=false なら |
+|---------|------|----------------|
+| **button** | sensor.btn bit & state.button.idx == state.button.state | 無視 (常時 true) |
+| **posture (絶対モード)** | sensor.quat から Euler 抽出 → posture.euler との軸別 tol 比較 (or Quat 内積) | 無視 |
+| **posture (相対モード)** | q_rel = q_initial⁻¹ × sensor.quat → Euler 抽出 → posture.euler (相対オフセット値) との比較 | 無視 |
+| **accel** | sensor.accel_abs と threshold を CMP_GTE / CMP_LTE 比較 | 無視 |
+| **gyro** | sensor.gyro_abs と threshold を比較 | 無視 |
+| **stillness** (Phase 5.39) | |a-1g| < accel_th && |g| < gyro_th を window_ms 連続 | 無視 |
+
+→ **全 enabled 条件が AND で true = match**
+
+#### 遷移トリガーの本質
+
+「順次の状態遷移判定基準」のキーポイント:
+
+1. **state[i+1] の Condition が成立した「最初の tick」で遷移**
+   - = 「条件が False → True に変化した瞬間」がトリガー
+   - 既に True を維持していれば毎 tick 評価されるが、現状態にいる限り遷移しない (i から i+1 にしか進めない)
+
+2. **state[i] の Condition が False になっても、現状態を維持**
+   - HOLD 系の特徴: state[0] のボタン押下条件が False (= ボタン release) になっても、自動 release しない
+   - 例外: Phase 5.39.2.10 で rule 代表 button release 時に release event 発火を追加
+
+3. **次状態へのみ進める (戻れない)**
+   - state[i] → state[i+1] は可能、state[i] → state[i-1] は不可
+   - loop=true (HOLD_*) の場合は state[N-1] → state[0] に循環
+   - loop=false (ONESHOT/SEQUENCE/hold_with_waypoints) では最終 state で idle 復帰
+
+4. **タイムアウト = max_dwell_ms**
+   - state[i] に max_dwell_ms 以上滞在で `timeout` event + idle
+   - max_dwell_ms = 0 (default) なら無制限
+
+5. **cooldown_ms = rule 単位の再 enter 抑制**
+   - 発火 (= idle 復帰) 後、cooldown_ms 経過まで state[0] enter 不可
+
+#### 例: Wingardium Hold (hold_with_waypoints, states_count=4)
+
+state 構成:
+- `state[0]` = 開始姿勢 (button=Btn3 押下、posture=ref からの任意)、`on_enter = AT_PRESS`
+- `state[1]` = 中間姿勢 1 (button=Btn3 押下、posture=R+30°/P-15°)
+- `state[2]` = 中間姿勢 2 (button=Btn3 押下、posture=R+60°/P-30°)
+- `state[3]` = 終了姿勢 (posture=R+0°/P-30°)、`on_enter = AT_RELEASE`
+
+評価フロー:
+```
+1. idle → Btn3 押下 + 開始姿勢 → state[0] enter (Btn3 press)
+2. state[0] → 中間 1 姿勢に振る + Btn3 押下中 → state[1] transition
+3. state[1] → 中間 2 姿勢に振る + Btn3 押下中 → state[2] transition
+4. state[2] → 終了姿勢に振る + Btn3 押下中 → state[3] transition (= AT_RELEASE)
+5. state[3] → 最終 state、loop=false → idle 復帰 (cooldown 開始)
+6. または途中で Btn3 release → release event + idle (Phase 5.39.2.10)
+```
+
+→ **「順序を守らないと進めない」「途中で止まると現状態に留まる」「ボタン離せば中断」が順次評価の本質**
+
+#### 順次の利点 / 欠点 (案 B / C との対比)
+
+| 観点 | 順次 (現状) | 案 B (unordered) | 案 C (DTW) |
+|------|----------|---------------|---------|
+| 振り方の自由度 | ❌ 順序厳守 | ✅ 順序自由 | ◯ 時間自由、順序保持 |
+| 上→下 vs 下→上 識別 | ✅ できる | ❌ できない | ✅ できる |
+| 振り途中で止まる | 現状態維持 (Btn 押下中) | 現状態維持 | 現状態維持 (trajectory 蓄積継続) |
+| ボタン release | release event (Phase 5.39.2.10) | release event + passed リセット | release event + trajectory リセット |
+| 軌跡認識の厳密さ | ★★★ (1 つ 1 つ通過必須) | ★★ (順序問わず全 waypoint 通過) | ★★★★ (時系列マッチ) |
+| 計算量 | O(1) / tick | O(N) / tick | O(M·N) / fire 判定 |
+| 実装複雑度 | 完了 | ★★ | ★★★ |
+
+#### 順次の問題点
+
+1. **振り方の許容範囲が狭い**: ユーザーが waypoint を順序通り通過する必要、慣れないと不発
+2. **逆順や Z 字パターンを許容しない**: 「同じ形を別方向に描く」も別物として扱う (これは利点でもある)
+3. **min_dwell_ms / max_dwell_ms 調整がシビア**: 振り速度が違うユーザーに対応しづらい
+
+これらの問題を案 B (順序自由) / 案 C (時間弾性) でフォローする方針が Phase 5.39.3d.1 / 5.39.5。
+
+---
+
+### 判定基準 × waypoint_order の 9 通り組合せ詳細 (ユーザー要望)
+
+ユーザー質問: 「絶対 3D Quat、相対 3D Quat、Euler のそれぞれにおける waypoint_order の挙動を教えて」
+
+#### 判定基準 (3 区分、Plan で議論済)
+
+| 名称 | posture_basis | judge_by | 計算 |
+|------|--------------|---------|------|
+| **絶対 3D Quat** | absolute | quat | q_target と sensor.quat の内積 (cone) |
+| **相対 3D Quat** | relative | quat | q_rel = q_initial⁻¹ × sensor.quat、q_target との内積 |
+| **Euler** (絶対 or 相対) | absolute or relative | euler | Euler 抽出 → Roll/Pitch/Yaw 軸別 tol 比較 |
+
+#### 9 通りマトリクス: 計算ロジック
+
+##### 1. 絶対 3D Quat × sequential (現状実装で対応可)
+- 各 tick で state[next].posture.quat (絶対座標、Mahony 起動基準) と sensor.quat の内積
+- |dot| >= quat_dot_min なら次状態へ遷移、順次評価
+- **持ち方固定必須**、起動からの drift 影響を直接受ける
+
+##### 2. 絶対 3D Quat × unordered (案 B、Phase 5.39.3d.1 で実装)
+- 各 unpassed state の target_quat と sensor.quat の内積
+- |dot| >= quat_dot_min なら waypoint_passed[i] = true
+- 全 passed で発火 (順不同)、min_cluster_duration_ms 制約あり
+
+##### 3. 絶対 3D Quat × DTW (案 C、Phase 5.39.5+)
+- ボタン押下中、sensor.quat trajectory をバッファリング (1 rule 共通 4KB)
+- 登録 waypoint sequence (target_quats[]) と DTW でマッチング、コスト関数 = quat 内積 (or 1-|dot|)
+- 類似度 >= threshold なら発火
+
+##### 4. 相対 3D Quat × sequential (Phase 5.39 で実装済、5.39.3a で q_initial に変更)
+- q_rel = q_initial⁻¹ × sensor.quat (q_initial は Init Yaw 設定、デバイス単位)
+- state[next].posture.quat (相対座標、q_initial 基準) と q_rel の内積
+- 順次遷移
+- **持ち方自由、Yaw drift 無関係、ジンバルロック完全回避** (★ Wand 用途 推奨)
+
+##### 5. 相対 3D Quat × unordered (★ ハリポタ呪文 推奨)
+- 各 unpassed state の target_rel_quat と q_rel の内積
+- 全 passed で発火 (順不同)
+- 振り方の自由度最大、Yaw drift 無関係、ジンバルロック無関係 (★★ Wingardium Leviosa 等)
+
+##### 6. 相対 3D Quat × DTW (案 C 最終形態、Phase 5.39.5+)
+- q_rel trajectory をバッファリング
+- 登録 waypoint sequence (target_rel_quats[]) と DTW でマッチング
+- WB Magic Caster Wand と同等、Yaw drift 無関係 (★★★ 最強)
+
+##### 7. Euler × sequential (現状の主流、Phase 5.38/5.39 で実装済)
+- judge_by="euler", posture_basis に応じて絶対 or 相対 Euler を計算
+- 各 state の posture.euler (Roll/Pitch/Yaw) と sensor.euler を軸別 tol 比較
+- 全 enabled 軸が tol 内なら遷移、順次評価
+- **軸別 tol 指定可、UI 直感的**、ただしジンバルロック領域不安定
+
+##### 8. Euler × unordered (Phase 5.39.3d.1 で実装)
+- 各 unpassed state の posture.euler と現在 Euler を軸別 tol 比較
+- 全 passed で発火 (順不同)
+- 軸別 tol + 順序不問
+
+##### 9. Euler × DTW (Phase 5.39.5+)
+- Euler trajectory (Roll, Pitch, Yaw の時系列、3D) をバッファリング
+- DTW でマッチング、距離関数 = 軸別 normalized Euler 距離 (tol で正規化)
+- ジンバルロック領域では trajectory が暴れるため、Euler 抽出時の縮退検出 + skip 処理が必要 (Quat より複雑)
+
+#### 9 通り 推奨用途マトリクス
+
+| 判定基準 \ waypoint_order | sequential | unordered | dtw |
+|---------------------------|----------|---------|-----|
+| **絶対 3D Quat** | 起動直後の短時間用途、持ち方固定 | 同上、順序不問でゆるく | 高度認識、持ち方固定前提 |
+| **相対 3D Quat** | ★ Wand 用途 (Wingardium Hold) ◎ | ★★ ハリポタ呪文 順序自由 ◎◎ | ★★★ 最強、WB 互換 |
+| **Euler (絶対)** | UI 直感、現状の主流 | 軸別 tol + 順序自由 | 不安定 (ジンバルロック) |
+| **Euler (相対)** | 軸別 tol で Wand 動作、Phase 5.39 で実装済 | 軸別 tol + 順序自由 + drift 無関係 | 不安定 (ジンバルロック) |
+
+#### 各組合せの利点・欠点まとめ
+
+| 組合せ | 利点 | 欠点 | 計算量 |
+|--------|------|------|------|
+| 絶対 Quat seq | シンプル、quat 内積で完結 | 持ち方固定、長時間運用で drift | O(1)/tick |
+| 絶対 Quat unord | 順序不問、quat | 持ち方固定 | O(N)/tick |
+| 絶対 Quat DTW | 時間弾性 | 持ち方固定、計算重 | O(M·N) fire |
+| **相対 Quat seq** | 持ち方自由、drift 無関係 | 順序厳守 | O(1)/tick |
+| **相対 Quat unord** | 持ち方自由、順序自由 | 順序識別不可 | O(N)/tick |
+| **相対 Quat DTW** | 最強、WB 互換 | 計算重、buffer 必要 | O(M·N) fire |
+| Euler seq | 軸別 tol、UI 直感 | ジンバルロック | O(1)/tick |
+| Euler unord | 軸別 tol + 順序自由 | ジンバルロック | O(N)/tick |
+| Euler DTW | 軸別 + 時間弾性 | ジンバルロック、複雑 | O(M·N) fire |
+
+#### 実装影響
+
+##### FW 側
+
+waypoint_order ごとに別評価関数:
+```cpp
+void TriggerEngine::evaluateRule(ActionRule& rule, const SensorState& s) {
+    if (rule.waypoint_order == WO_SEQUENTIAL) {
+        evaluateRuleSequential(rule, s);   // 現状、posture_basis × judge_by 内分岐
+    } else if (rule.waypoint_order == WO_UNORDERED) {
+        evaluateRuleUnordered(rule, s);    // Phase 5.39.3d.1、内部で posture_basis/judge_by 分岐
+    } else if (rule.waypoint_order == WO_DTW) {
+        evaluateRuleDtw(rule, s);          // Phase 5.39.5+、quat or Euler trajectory
+    }
+}
+```
+
+各評価関数の中で `posture_basis` + `judge_by` を見て、絶対/相対/Euler/Quat を判別。
+
+##### Profile 互換性
+
+Phase 5.39 既存 rule: waypoint_order 省略 → default sequential、posture_basis 省略 → default absolute、judge_by 省略 → default euler
+→ Phase 5.39 と完全後方互換。
+
+##### サンプルプロファイル別
+
+| サンプル | 推奨組合せ |
+|---------|----------|
+| FPS WASD | Euler (絶対) × seq (現状) |
+| ストファイ 波動拳 | Euler (絶対) × seq、または相対 Quat × DTW (将来) |
+| **Wingardium Hold** | **相対 Quat × seq** (現状) → **相対 Quat × unord** (Phase 5.39.3d.1 で派生サンプル追加) |
+| Lumos (∧) | 相対 Quat × seq (順序意味あり、上→下) |
+| Nox (C) | 相対 Quat × seq (順序意味あり、左→下→右) |
+| 振り単発 | 絶対 Quat × seq or Euler |
+
+このマトリクスを元に Web UI のセレクタ + サンプルプロファイル設計を進める。
+
+---
+
+### Phase 5.39.4 候補: 「📋 Rule Detail」タブ (rule 全フィールド表示、ユーザー要望)
+
+ユーザー質問 (2026-05-14): 「今の設定が何であるかを読み取るための設定・表示タブは別途必要か？ (必要なら後で実装する)」
+
+→ **必要**。現状の rule.list テーブルは縦長 + 絞った情報のみ表示で、全フィールド (posture_basis、judge_by、waypoint_order、stillness、各 state の euler_tol/dwell 等) が読み取れない。
+
+#### Phase 5.39.4 として実装予定
+
+実装内容:
+- 新タブ「📋 Rule Detail」を追加 (絶対 3D / 2D Roll-Pitch / 相対 3D / 相対 2D / **Rule Detail**)
+- 選択中 rule (selectedRuleId) の全フィールドを整形表示 (JSON 風 or 階層テーブル)
+- 表示項目:
+  - `ui_mode`, `posture_basis`, `judge_by`, `waypoint_order`
+  - `cooldown_ms`, `button` (idx + state)
+  - `stillness` 設定 (window_ms / accel_th_mg / gyro_th_dps)
+  - 各 state の詳細:
+    - `posture.euler` + `euler_tol` (軸別)
+    - `posture.quat` + `quat_dot_min`
+    - `on_enter` / `on_exit` (AT_PRESS / AT_RELEASE / AT_FIRE_MACRO 等、key コード一覧含む)
+    - `max_dwell_ms` / `min_dwell_ms`
+    - 各 state 個別の button/accel/gyro/stillness 条件
+- 「📋 JSON コピー」ボタン (rule 全 JSON をクリップボードにコピー、デバッグ + share 用)
+- 将来の「⚙ 編集」モード (read-only から read-write へ、Phase 5.39.5+)
+
+#### UI イメージ
+
+```
+┌─ 📋 Rule Detail: wingardium_hold_relative (id=6400) ───────┐
+│ Header                                                      │
+│ ━━ Rule 全体設定 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │
+│ ui_mode:        hold_with_waypoints                         │
+│ posture_basis:  relative   judge_by: euler                  │
+│ waypoint_order: sequential                                  │
+│ cooldown_ms:    2000ms                                      │
+│ button:         Btn3 (idx=3, state=押下)                    │
+│ stillness:      無効                                        │
+│                                                             │
+│ ━━ states[0] (start_posture) ━━━━━━━━━━━━━━━━━━━━━━━━ │
+│ posture.euler:     [0, 0, 0]                                │
+│ posture.euler_tol: [180, 180, 180]                          │
+│ posture.quat:      [1, 0, 0, 0]                             │
+│ on_enter:          AT_PRESS key='w' (0x77)                  │
+│ on_exit:           AT_NONE                                  │
+│ max_dwell_ms:      0 (無制限)                               │
+│ min_dwell_ms:      0                                        │
+│                                                             │
+│ ━━ states[1] (mid_postures[0]) ━━━━━━━━━━━━━━━━━━━━━━ │
+│ posture.euler:     [30, 0, 0]                               │
+│ posture.euler_tol: [25, 25, 180]   (Roll±25, Pitch±25, Yaw無視)│
+│ ...                                                         │
+│                                                             │
+│ [ 📋 JSON コピー ]   [ ⚙ 編集 (Phase 5.39.5+) ]            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 実装ファイル (Phase 5.39.4)
+
+- `Web/hidconfig/src/app.js`: viewerTab に 'rule_detail' を追加、表示ロジック追加
+- 新規ファイル不要 (app.js 内に整形描画関数を実装)
+
+#### 既存 rule.list テーブルとの違い
+
+- rule.list テーブル: **複数 rule の一覧** (横スクロール、絞った列のみ)
+- Rule Detail タブ: **1 rule の全フィールド詳細** (縦スクロール、全要素)
+
+→ 両者は補完関係、共存。
+
+#### Phase 配置
+
+- Phase 5.39.3 (今): 実装しない (Phase 5.39.3a/b/c に集中)
+- **Phase 5.39.4 (次)**: Rule Detail タブ実装、JSON コピーボタン
+- Phase 5.39.5+: 編集モード (read-write、rule.set コマンドと連動)
+
+---
+
+### 用語整理 (ui_mode 命名の妥当性、Phase 5.39.3+ 検討事項)
+
+ユーザー質問: 「ui とは何か？」
+
+#### `ui_mode` の "ui" の意味
+
+- "ui" = **User Interface** の略 (Phase 5.27/5.34 周辺で命名)
+- 命名意図: Web UI のユーザー向け動作モード選択 (Phase 5.39 で hold_with_waypoints 等追加)
+- ただし FW 内部評価でも参照、純粋な UI 専用ではない
+
+#### 命名の妥当性
+
+- **微妙**: 「UI 専用」のニュアンスがあるが、実際は FW/Web 両方で使う
+- より正確な名前: `mode` (中立) / `rule_type` (rule の種別) / `state_machine_type` (状態機械タイプ)
+
+#### Phase 5.39.4+ で改名検討する場合
+
+影響範囲:
+- FW: `main_v2.cpp` (rule.add ハンドラ、rule.list レスポンス)、`Profile.hpp` (JSON I/O)、`types.hpp` (定義)
+- Web: `app.js` (rule.add 送信、rule.list 表示、UI セレクタ)
+- 既存 サンプル JSON: 全 `ui_mode` を新名に置換
+- 既存 LittleFS 内 profile: マイグレーション必要
+
+→ ~50 箇所変更、リネーム作業は中規模。Phase 5.39.4 で「`mode` への改名」を検討候補。
+
+#### 当面の方針
+
+**現状の `ui_mode` を維持**、Phase 5.39.4 で Rule Detail タブを実装する際に改名も検討。
+
+ユーザー希望次第:
+- 「`ui_mode` のまま」 → 現状維持
+- 「`mode` に改名」 → Phase 5.39.4 で実施
+- 「`rule_type` に改名」 → 同上
+
 
