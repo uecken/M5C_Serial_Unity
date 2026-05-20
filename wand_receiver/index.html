@@ -353,6 +353,7 @@
   let advCount = 0;
   let lastAdvMs = 0, watchdog = null, manaOn = false, lastScanStartMs = 0;
   const WATCHDOG_MS = 8000;        // この秒数 広告が来なければ「魔力切れ」
+  let wingRxCount = 0, wingHzT0 = 0;  // WINGARDIUM 受信レート(Hz) 実測用 (1秒窓)
   function updateCount() { if (advCountEl) advCountEl.textContent = '受信 ' + advCount + '件'; }
 
   // 魔力切れ表示 (魔法画面オーバーレイ + ログ)。受信途絶/スキャン制限/開始失敗で on。
@@ -394,6 +395,13 @@
       featherTarget = Math.max(-1, Math.min(1, (strength - 128) / 127));
       clearTimeout(bleWingTimer);
       bleWingTimer = setTimeout(() => { if (levitating && levitateSource === 'ble') stopLevitate(); }, 1500);
+      // 受信レート(Hz)を1秒窓で実測 → ボトルネックが杖(送信側)か Android(受信側)かの判断材料
+      wingRxCount++;
+      const tnow = Date.now();
+      if (tnow - wingHzT0 >= 1000) {
+        log(`🪶 BLE受信レート ${wingRxCount} Hz (杖→Android→Chrome 実測)`, 'text-sky-300');
+        wingRxCount = 0; wingHzT0 = tnow;
+      }
       return;
     }
 
