@@ -20,7 +20,19 @@
       background: radial-gradient(circle at 50% 40%, #131a2e 0%, #070a14 70%, #03050b 100%);
       cursor: pointer;
       touch-action: manipulation;   /* 通常時もダブルタップズーム抑止 + タップ遅延除去 */
+      position: relative;           /* 魔力切れオーバーレイの基準 */
     }
+
+    /* ===== 魔力切れ (受信途絶/スキャン制限) ===== */
+    #manaMsg { display: none; }
+    .stage.mana #manaMsg {
+      display: flex; position: absolute; inset: 0; z-index: 10;
+      flex-direction: column; align-items: center; justify-content: center; text-align: center;
+      background: rgba(3,5,11,0.6); backdrop-filter: blur(1px); border-radius: inherit;
+      animation: manaPulse 1.6s ease-in-out infinite;
+    }
+    .stage.mana .orb { filter: grayscale(1) brightness(.35); }   /* 球体を魔力切れ表現 */
+    @keyframes manaPulse { 0%,100% { opacity: .82 } 50% { opacity: 1 } }
 
     .orb {
       --i: 0;
@@ -158,6 +170,12 @@
     <div class="stage rounded-2xl border border-slate-700 flex flex-col items-center justify-center py-10 mb-3 select-none">
       <div id="orb" class="orb"></div>
       <div id="spellLabel" class="mt-7 text-sm text-slate-400 min-h-[1.5rem]">呪文を待っています…</div>
+      <!-- 魔力切れオーバーレイ (受信が途絶える=スキャン制限などで表示。全画面でも出る) -->
+      <div id="manaMsg">
+        <div class="text-4xl font-bold text-rose-300">🪫 魔力切れ</div>
+        <div class="mana-sub text-xs text-rose-200/80 mt-1">魔力（BLE 広告）が途絶えました</div>
+        <div class="text-[11px] text-slate-300 mt-2">Bluetooth を OFF→ON して「スキャン開始」で魔力を回復</div>
+      </div>
     </div>
 
     <!-- 手動テスト (BLE 無しでも、どの端末でも見た目を確認できる) -->
@@ -197,6 +215,7 @@
   const scanBtn    = document.getElementById('scanBtn');
   const dbgEl      = document.getElementById('dbg');
   const advCountEl = document.getElementById('advCount');
+  const manaMsg    = document.getElementById('manaMsg');
 
   // ===== エフェクト制御 =====
   // baseOn = Lumos で点いた持続状態。pulse/flicker/fade は一時的に上書きし、終了後 base に戻る。
@@ -269,10 +288,29 @@
   let lastSeq = -1;
 
   let advCount = 0;
-  let noAdvTimer = null;
+  let lastAdvMs = 0, watchdog = null, manaOn = false, lastScanStartMs = 0;
+  const WATCHDOG_MS = 8000;        // この秒数 広告が来なければ「魔力切れ」
   function updateCount() { if (advCountEl) advCountEl.textContent = '受信 ' + advCount + '件'; }
+
+  // 魔力切れ表示 (魔法画面オーバーレイ + ログ)。受信途絶/スキャン制限/開始失敗で on。
+  function setMana(on, reason) {
+    if (on === manaOn) return;
+    manaOn = on;
+    manaMsg.parentElement.classList.toggle('mana', on);   // .stage に .mana を付与
+    if (on) {
+      manaMsg.querySelector('.mana-sub').textContent = reason || '魔力（BLE 広告）が途絶えました';
+      log('🪫 魔力切れ — ' + (reason || 'BLE 広告が途絶えました'), 'text-rose-300');
+      log('  → Android のスキャン制限(OPPORTUNISTIC 落ち)等の可能性。Bluetooth を OFF→ON で回復します。', 'text-rose-300');
+    } else {
+      log('✨ 魔力回復 — 受信を再開しました', 'text-emerald-300');
+    }
+  }
+  function clearMana() { manaOn = false; manaMsg.parentElement.classList.remove('mana'); }
+
   function onAdv(e) {
     advCount++;
+    lastAdvMs = Date.now();
+    if (manaOn) setMana(false);          // 受信が戻ったら魔力回復
     updateCount();
     // デバッグ: 受信した全広告を出す (杖の 0xFFFF が出るか、そもそも広告が届くかの切り分け)
     if (dbgEl && dbgEl.checked) {
@@ -294,37 +332,50 @@
   }
 
   async function startScan() {
+    // 連続スキャン抑止: Android は 5回/30秒 を超えるとスキャンを制限する。churn を防ぐ。
+    const since = Date.now() - lastScanStartMs;
+    if (lastScanStartMs && since < 2500) {
+      log(`⏳ 連続スキャンは Android に制限されます。あと ${Math.ceil((2500 - since) / 1000)} 秒待って再開してください。`, 'text-amber-300');
+      return;
+    }
     try {
       scan = await navigator.bluetooth.requestLEScan({
-        acceptAllAdvertisements: true,   // company_id は JS 側でフィルタ
+        acceptAllAdvertisements: true,   // company_id は JS 側でフィルタ (ambient 広告を魔力ハートビートに利用)
         keepRepeatedDevices: true,       // 杖は再送するので毎パケット拾う
       });
+      lastScanStartMs = Date.now();
       navigator.bluetooth.addEventListener('advertisementreceived', onAdv);
       stateEl.textContent = '🟢 スキャン中';
       stateEl.className = 'mono text-[11px] px-2 py-1 rounded bg-emerald-900 border border-emerald-600 text-emerald-200';
       scanBtn.textContent = '⏹ スキャン停止';
       log('スキャン開始 (周辺の BLE 広告を待機中…)', 'text-violet-300');
 
-      // 無受信タイマー: 6秒間 1件も来なければ アダプタ/ドライバ/Windows BLE 側の問題と判定
       advCount = 0; updateCount();
-      clearTimeout(noAdvTimer);
-      noAdvTimer = setTimeout(() => {
-        if (advCount === 0) {
-          log('⚠ 6秒間、広告を1件も受信できていません (杖以外も含めゼロ)。', 'text-rose-300');
-          log('  → Chrome に BLE 広告が全く届いていない状態です。杖ではなく PC 側 (BLE アダプタ/ドライバ/Windows Bluetooth) が原因の可能性大。', 'text-rose-300');
-          log('  → chrome://bluetooth-internals で adapter present/powered と Devices→Start Scan を確認してください。', 'text-rose-300');
+      clearMana();
+      lastAdvMs = Date.now();
+      // 魔力ウォッチドッグ: WATCHDOG_MS 秒 広告が途絶えたら「魔力切れ」表示
+      //   (acceptAll なので通常は周辺機器の広告が常時届く → 無音=スキャン制限/アダプタ異常)
+      clearInterval(watchdog);
+      watchdog = setInterval(() => {
+        if (!scan) return;
+        if (Date.now() - lastAdvMs > WATCHDOG_MS) {
+          setMana(true, advCount === 0
+            ? `スキャン開始後 ${WATCHDOG_MS / 1000}秒、広告を1件も受信できません`
+            : `受信が ${WATCHDOG_MS / 1000}秒以上 途絶えました`);
         }
-      }, 6000);
+      }, 2000);
     } catch (err) {
       log('スキャン開始失敗: ' + err.message, 'text-rose-400');
       log('  → 許可ダイアログをキャンセルした / フラグ未有効 / アダプタ無効 などが原因。', 'text-rose-400');
+      setMana(true, 'スキャンを開始できませんでした');
     }
   }
   function stopScan() {
-    clearTimeout(noAdvTimer);
+    clearInterval(watchdog);
     try { scan && scan.stop(); } catch (_) {}
     scan = null;
     navigator.bluetooth.removeEventListener('advertisementreceived', onAdv);
+    clearMana();
     stateEl.textContent = '停止中';
     stateEl.className = 'mono text-[11px] px-2 py-1 rounded bg-slate-800 border border-slate-700';
     scanBtn.textContent = '📡 スキャン開始';
@@ -338,8 +389,11 @@
   //   Android がスキャンを OPPORTUNISTIC に強制ダウングレード → 受信ゼロになる。
   window.addEventListener('pagehide', () => { try { scan && scan.stop(); } catch (_) {} });
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && scan) { try { scan.stop(); } catch (_) {} scan = null;
+    if (document.hidden && scan) {
+      clearInterval(watchdog);
+      try { scan.stop(); } catch (_) {} scan = null;
       navigator.bluetooth.removeEventListener('advertisementreceived', onAdv);
+      clearMana();
       stateEl.textContent = '⏸ 復帰時に再開';
       stateEl.className = 'mono text-[11px] px-2 py-1 rounded bg-slate-800 border border-slate-700';
       scanBtn.textContent = '📡 スキャン開始';
