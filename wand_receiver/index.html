@@ -124,7 +124,6 @@
             <li>杖を<b>上に振る</b> → 🔆 Lumos（光球が点灯・持続）</li>
             <li>杖を<b>下に振る</b> → 🌑 Nox（消灯）</li>
             <li>杖を<b>前に突く</b> → 🔥 Incendio（オレンジ flicker）</li>
-            <li>その他の強い振り → ✨ Shake</li>
             <li>※ Aguamenti は杖シリアルコマンド <span class="mono">a</span> で送信</li>
           </ul>
         </div>
@@ -140,14 +139,14 @@
           <b class="text-slate-100">③ 上映 (魔法の効果だけ見せる)</b>
           <ul class="list-disc ml-5 mt-1 space-y-0.5">
             <li><b>魔法画面（球体）をダブルタップ</b>で 拡大⇄通常 を切替（スキャンは継続）。PC は <b>Esc</b> でも戻れます</li>
-            <li>キーボード <span class="mono">L</span>=Lumos / <span class="mono">N</span>=Nox / <span class="mono">I</span>=Incendio / <span class="mono">A</span>=Aguamenti / <span class="mono">S</span>=Shake で手動発火（杖が無くても上映可）</li>
+            <li>キーボード <span class="mono">L</span>=Lumos / <span class="mono">N</span>=Nox / <span class="mono">I</span>=Incendio / <span class="mono">A</span>=Aguamenti で手動発火（杖が無くても上映可）</li>
           </ul>
         </div>
         <div>
           <b class="text-slate-100">④ スマホ自体を杖にする (BLE 不要・iPhone でも可)</b>
           <ul class="list-disc ml-5 mt-1 space-y-0.5">
             <li><b>「📱 スマホで魔法」</b>にチェック（iPhone はモーション権限の許可が出る → 許可）</li>
-            <li>スマホを<b>少し静止</b>させてから <b>上に素早く振る → Lumos</b> / <b>下に振る → Nox</b>（その他の強い振り → Shake）</li>
+            <li>スマホを<b>少し静止</b>させてから <b>上に素早く振る → Lumos</b> / <b>下に振る → Nox</b>（上下が不明瞭な振りは無反応）</li>
             <li>重力基準フリック検出なので持つ向きは自由。ダブルタップで全画面にして振ると映えます</li>
           </ul>
         </div>
@@ -184,7 +183,6 @@
   // ===== 杖プロトコル (shared/beacon_protocol.h と一致) =====
   const COMPANY_ID = 0xFFFF;
   const SPELLS = {
-    0x01: { name: 'SHAKE',     label: '✨ シェイク',       color: '#a78bfa', mode: 'pulse',   ms: 5000 },
     0x10: { name: 'LUMOS',     label: '🔆 ルーモス (点灯)', color: '#fff3c4', mode: 'on',      ms: 0 },
     0x11: { name: 'NOX',       label: '🌑 ノックス (消灯)', color: '#000000', mode: 'off',     ms: 0 },
     0x20: { name: 'INCENDIO',  label: '🔥 インセンディオ',  color: '#ff7a18', mode: 'flicker', ms: 3000 },
@@ -380,7 +378,7 @@
 
   // ===== キーボード操作 =====
   //   Esc: プレゼン解除 / l n i a s: 各呪文を手動発火 (杖が無くてもプレゼン可)
-  const KEY_SPELL = { l: 0x10, n: 0x11, i: 0x20, a: 0x21, s: 0x01 };
+  const KEY_SPELL = { l: 0x10, n: 0x11, i: 0x20, a: 0x21 };
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { exitPresentation(); return; }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -452,7 +450,7 @@
     let trig;
     if      (ratioUp >= MCFG.updownRatio && upProj > 0) trig = 0x10;  // 上 → LUMOS
     else if (ratioUp >= MCFG.updownRatio && upProj < 0) trig = 0x11;  // 下 → NOX
-    else                                                trig = 0x01;  // その他 → SHAKE
+    else return;                                                      // 上下が不明瞭な振りは無視 (Shake 廃止)
     lastFlickMs = now;
     showSpell(trig, strength);
     const r = ev.rotationRate || {};

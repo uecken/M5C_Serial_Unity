@@ -4,13 +4,13 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260520-121212';
-import { BleClient }    from './lib/BleClient.js?v=20260520-121212';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260520-121212';
-import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260520-121212';
-import { RelativeTrajectoryGrid } from './lib/RelativeTrajectoryGrid.js?v=20260520-121212';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260520-121212';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260520-121212';
+import { SerialClient } from './lib/SerialClient.js?v=20260520-121858';
+import { BleClient }    from './lib/BleClient.js?v=20260520-121858';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260520-121858';
+import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260520-121858';
+import { RelativeTrajectoryGrid } from './lib/RelativeTrajectoryGrid.js?v=20260520-121858';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260520-121858';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260520-121858';
 
 const html = htm.bind(h);
 
