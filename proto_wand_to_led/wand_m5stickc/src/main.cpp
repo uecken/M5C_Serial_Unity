@@ -188,7 +188,7 @@ void begin() {
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);  // +9dBm (最大に近い)
   adv = NimBLEDevice::getAdvertising();
   adv->setMinInterval(0x20);   // 20ms (BLE 仕様最小)
-  adv->setMaxInterval(0x30);   // 30ms
+  adv->setMaxInterval(0x20);   // 20ms 固定 (浮遊モードのピッチ更新を最速で電波に乗せる)
   adv->setScanResponse(false);
   adv->setAdvertisementType(BLE_GAP_CONN_MODE_NON);  // 非接続 broadcast
 }
@@ -289,30 +289,34 @@ void check(float ax, float ay, float az) {
   }
 
   // 各方向への射影
-  float up_proj   = lx*ux + ly*uy + lz*uz;                       // 鉛直 (重力フレーム)
-  float fwd_proj  = project_axis(lx, ly, lz, WAND_FORWARD);      // 前後 (機体軸)
-  float ratio_up  = fabsf(up_proj)  / lmag;                      // 鉛直成分の割合
-  float ratio_fwd = fabsf(fwd_proj) / lmag;                      // 前後成分の割合
+  float up_proj    = lx*ux + ly*uy + lz*uz;                      // 鉛直 (重力フレーム)
+  float fwd_proj   = project_axis(lx, ly, lz, WAND_FORWARD);     // 前後 (機体軸)
+  float right_proj = project_axis(lx, ly, lz, WAND_RIGHT);       // 左右 (機体軸)
+  float ratio_up    = fabsf(up_proj)    / lmag;                  // 鉛直成分の割合
+  float ratio_fwd   = fabsf(fwd_proj)   / lmag;                  // 前後成分の割合
+  float ratio_right = fabsf(right_proj) / lmag;                  // 左右成分の割合
 
   // strength: linear accel の強さを 0-255 にマップ
   int s = (int)((lmag - gcfg::flick_threshold_g) * 91.0f);
   if (s < 0) s = 0; if (s > 255) s = 255;
 
-  // 判定優先: 上下 (重力) > 前突き (機体前)。
-  //   明確な呪文 (LUMOS/NOX/INCENDIO) に当てはまらない曖昧な振りは「何もしない」
+  // 判定優先: 上下 (重力) > 前突き (機体前 +Y) > 横振り (機体左右 ±X)。
+  //   明確な呪文 (LUMOS/NOX/EXPECTO/INCENDIO) に当てはまらない曖昧な振りは「何もしない」
   //   (beacon を出さず無視。受信側 LED も反応しない)
   uint8_t trig;
   const char* name;
   if (ratio_up >= gcfg::updown_ratio && up_proj > 0) {
-    trig = wand_beacon::TRIG_LUMOS;    name = "LUMOS (up)";
+    trig = wand_beacon::TRIG_LUMOS;            name = "LUMOS (up)";
   } else if (ratio_up >= gcfg::updown_ratio && up_proj < 0) {
-    trig = wand_beacon::TRIG_NOX;      name = "NOX (down)";
+    trig = wand_beacon::TRIG_NOX;              name = "NOX (down)";
   } else if (ratio_fwd >= gcfg::updown_ratio && fwd_proj > 0) {
-    trig = wand_beacon::TRIG_INCENDIO; name = "INCENDIO (thrust)";
+    trig = wand_beacon::TRIG_EXPECTO_PATRONUM; name = "EXPECTO PATRONUM (thrust +Y)";
+  } else if (ratio_right >= gcfg::updown_ratio) {
+    trig = wand_beacon::TRIG_INCENDIO;         name = "INCENDIO (side-swing)";
   } else {
     // 曖昧な振り → 何もしない (魔法発動せず・beacon なし・LED フラッシュなし)
-    Serial.printf("--- ignored (ambiguous) lmag=%.2fg up=%.2f(%.2f) fwd=%.2f(%.2f) ---\n",
-                  lmag, up_proj, ratio_up, fwd_proj, ratio_fwd);
+    Serial.printf("--- ignored (ambiguous) lmag=%.2fg up=%.2f(%.2f) fwd=%.2f(%.2f) rt=%.2f(%.2f) ---\n",
+                  lmag, up_proj, ratio_up, fwd_proj, ratio_fwd, right_proj, ratio_right);
     return;
   }
 
@@ -320,8 +324,8 @@ void check(float ax, float ay, float az) {
   ble::emit_beacon(trig, (uint8_t)s, wand_beacon::TARGET_ALL);
   last_trigger_ms = now;
   wled::flash();  // 内蔵 LED を一瞬光らせて検出をフィードバック
-  Serial.printf("*** %s  lmag=%.2fg up=%.2f(%.2f) fwd=%.2f(%.2f) s=%d ***\n",
-                name, lmag, up_proj, ratio_up, fwd_proj, ratio_fwd, s);
+  Serial.printf("*** %s  lmag=%.2fg up=%.2f(%.2f) fwd=%.2f(%.2f) rt=%.2f(%.2f) s=%d ***\n",
+                name, lmag, up_proj, ratio_up, fwd_proj, ratio_fwd, right_proj, ratio_right, s);
 }
 
 // ============================================================
@@ -334,7 +338,10 @@ constexpr float    WINGARDIUM_PITCH_SIN   = 0.70f;  // 先端が上 ~45° 以上
 constexpr float    WINGARDIUM_STILL_LMAG  = 0.30f;  // 動き成分がこれ未満 = 静止
 constexpr uint32_t WINGARDIUM_HOLD_MS     = 800;    // 上向き保持の活性化時間
 constexpr uint32_t LEVITATION_MS          = 8000;   // 浮遊モード持続 (活性化/送信で延長)
-constexpr uint32_t LEVIT_SEND_INTERVAL_MS = 100;    // ピッチ送信間隔
+constexpr uint32_t LEVIT_SEND_INTERVAL_MS = 50;     // ピッチ送信間隔 = 20Hz。
+                                                    // adv interval(20ms)が物理下限なので、これ以上速めても
+                                                    // 1 値あたり adv パケットが 1 発未満になり取りこぼし時に飛ぶ。
+                                                    // 50ms なら 1 値につき adv 2〜3 発出て確実 + スマホ反映 ~20Hz
 
 uint32_t up_hold_since   = 0;   // 上向き保持の開始時刻 (0=保持なし)
 uint32_t levitation_until = 0;  // 浮遊モード終了時刻 (0=非浮遊)
@@ -581,11 +588,12 @@ void handle_line(char* line) {
     case 't': emit_named(wand_beacon::TRIG_SHAKE, target);     break;
     case 'l': emit_named(wand_beacon::TRIG_LUMOS, target);     break;
     case 'n': emit_named(wand_beacon::TRIG_NOX, target);       break;
-    case 'i': emit_named(wand_beacon::TRIG_INCENDIO, target);  break;
+    case 'i': emit_named(wand_beacon::TRIG_INCENDIO, target);  break;  // 横振り
     case 'a': emit_named(wand_beacon::TRIG_AGUAMENTI, target); break;
+    case 'e': emit_named(wand_beacon::TRIG_EXPECTO_PATRONUM, target); break;  // 前突き = 守護霊
     case 'w': detector::force_levitation(); break;  // Wingardium 浮遊モードを強制開始 (8s ピッチ連続送信)
     default:
-      Serial.println("[CMD] t/l/n/i/a/w | <id> <cmd> | gshow/gth=/gratio=/gcool=/galpha=/gsave/gdefault");
+      Serial.println("[CMD] t/l/n/i/a/e/w | <id> <cmd> | gshow/gth=/gratio=/gcool=/galpha=/gsave/gdefault");
       break;
   }
 }
@@ -611,7 +619,7 @@ void setup() {
   delay(500);
   Serial.println();
   Serial.println("=== Wand Beacon (gesture) ===");
-  Serial.println("Up-flick=LUMOS / Down-flick=NOX / Thrust=INCENDIO");
+  Serial.println("Up-flick=LUMOS / Down-flick=NOX / Thrust+Y=EXPECTO / Side-swing=INCENDIO");
   Serial.println("Hold-up(0.8s)=WINGARDIUM levitation (pitch stream)");
   Serial.println("Adv burst: 500ms, Cooldown: 1s");
 
@@ -626,7 +634,7 @@ void setup() {
 
   gcfg::load();   // NVS からジェスチャ閾値を読み込み (無ければデフォルト)
   gcfg::print();
-  Serial.println("[CMD] t/l/n/i/a/w | <id> <cmd> | gshow/gth=/gratio=/gcool=/galpha=/gsave");
+  Serial.println("[CMD] t/l/n/i/a/e/w | <id> <cmd> | gshow/gth=/gratio=/gcool=/galpha=/gsave");
 
   // 重力推定を初期化 (起動直後の静止姿勢で 1 回読む)
   {
