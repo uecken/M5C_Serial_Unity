@@ -176,7 +176,7 @@
             <li><b>「📱 スマホで魔法」</b>にチェック（iPhone はモーション権限の許可が出る → 許可）</li>
             <li>スマホを<b>少し静止</b>させてから <b>上に素早く振る → Lumos</b> / <b>下に振る → Nox</b>（上下が不明瞭な振りは無反応）</li>
             <li>重力基準フリック検出なので持つ向きは自由。ダブルタップで全画面にして振ると映えます</li>
-            <li>🪶 <b>ウィンガーディアム・レヴィオーサ</b>（キー <span class="mono">W</span> / 手動ボタン / 杖 BLE）→ 羽が出現。<b>スマホを上に傾けると羽が上、下げると下へゆっくり浮遊</b>。羽をタップで解除</li>
+            <li>🪶 <b>ウィンガーディアム・レヴィオーサ</b>：<b>上フリックを2連</b>（スマホ）/ キー <span class="mono">W</span> / 手動ボタン / 杖 BLE で起動 → 羽が出現。<b>スマホを上に傾けると羽が上、下げると下へ浮遊</b>。羽をタップで解除</li>
           </ul>
         </div>
         <p class="text-slate-400">BLE が使えない端末でも、「📱 スマホで魔法」や下の「手動テスト」ボタン・キーボードでエフェクトを出せます。</p>
@@ -550,6 +550,7 @@
   };
   let gX = 0, gY = 0, gZ = 1, gravReady = false;   // 重力推定 [g]
   let lastFlickMs = 0;
+  let lastUpFlickMs = 0;                              // 上フリック2連 (Wingardium 起動) 検出用
   let peakLin = 0, lastHudMs = 0, motionEvt = 0, noMotionTimer = null;
 
   function onMotion(ev) {
@@ -602,6 +603,16 @@
     else if (ratioUp >= MCFG.updownRatio && upProj < 0) trig = 0x11;  // 下 → NOX
     else return;                                                      // 上下が不明瞭な振りは無視 (Shake 廃止)
     lastFlickMs = now;
+    // 上フリック2連 (2秒以内) → ウィンガーディアム起動 (スマホ簡易活性化)。以後は傾きで羽を上下
+    if (trig === 0x10 && !levitating) {
+      if (now - lastUpFlickMs < 2000) {
+        lastUpFlickMs = 0;
+        startLevitate('motion');
+        log('📱🪶 上フリック2連 → ウィンガーディアム起動 (スマホを上下に傾けて羽を操作)', 'text-sky-200');
+        return;
+      }
+      lastUpFlickMs = now;
+    }
     showSpell(trig, strength);
     const r = ev.rotationRate || {};
     const gyro = Math.hypot(r.alpha || 0, r.beta || 0, r.gamma || 0);
