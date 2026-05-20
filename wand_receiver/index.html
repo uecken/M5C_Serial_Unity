@@ -18,6 +18,8 @@
 
     .stage {
       background: radial-gradient(circle at 50% 40%, #131a2e 0%, #070a14 70%, #03050b 100%);
+      cursor: pointer;
+      touch-action: manipulation;   /* 通常時もダブルタップズーム抑止 + タップ遅延除去 */
     }
 
     .orb {
@@ -104,6 +106,9 @@
       <label class="text-[11px] flex items-center gap-1 cursor-pointer select-none px-2 py-1 rounded bg-slate-800 border border-slate-700" title="受信した全 BLE 広告を 0xFFFF 以外も含めてログに出す (切り分け用)">
         <input type="checkbox" id="dbg"> 🐞 全広告ログ
       </label>
+      <label class="text-[11px] flex items-center gap-1 cursor-pointer select-none px-2 py-1 rounded bg-sky-900 border border-sky-700" title="スマホ本体を振って魔法を発動 (重力基準フリック検出)。BLE 不要・iPhone でも可。静止→上/下フリックで Lumos/Nox">
+        <input type="checkbox" id="motion"> 📱 スマホで魔法
+      </label>
       <button id="scanBtn" disabled
         class="ml-auto px-3 py-1.5 text-sm rounded-lg bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-slate-500 font-semibold">
         📡 スキャン開始
@@ -139,7 +144,15 @@
             <li>キーボード <span class="mono">L</span>=Lumos / <span class="mono">N</span>=Nox / <span class="mono">I</span>=Incendio / <span class="mono">A</span>=Aguamenti / <span class="mono">S</span>=Shake で手動発火（杖が無くても上映可）</li>
           </ul>
         </div>
-        <p class="text-slate-400">BLE が使えない端末でも、下の「手動テスト」ボタンやキーボードでエフェクトの見た目だけ確認できます。</p>
+        <div>
+          <b class="text-slate-100">④ スマホ自体を杖にする (BLE 不要・iPhone でも可)</b>
+          <ul class="list-disc ml-5 mt-1 space-y-0.5">
+            <li><b>「📱 スマホで魔法」</b>にチェック（iPhone はモーション権限の許可が出る → 許可）</li>
+            <li>スマホを<b>少し静止</b>させてから <b>上に素早く振る → Lumos</b> / <b>下に振る → Nox</b>（その他の強い振り → Shake）</li>
+            <li>重力基準フリック検出なので持つ向きは自由。ダブルタップで全画面にして振ると映えます</li>
+          </ul>
+        </div>
+        <p class="text-slate-400">BLE が使えない端末でも、「📱 スマホで魔法」や下の「手動テスト」ボタン・キーボードでエフェクトを出せます。</p>
       </div>
     </details>
 
@@ -380,6 +393,82 @@
       log(`⌨ (キー) ${spellName(trig)}`, 'text-amber-300');
     }
   });
+
+  // ===== スマホ本体モーションで魔法 (重力基準フリック検出: 杖FW main.cpp detector の移植) =====
+  //   チェック ON 時のみ DeviceMotion を取得。静止中に重力を EMA 推定し、そこからの
+  //   linear accel フリックを 上=Lumos / 下=Nox / その他=Shake に判定 (FW と同アルゴリズム)。
+  //   重力基準なので持つ向きは自由。iOS/Android の accel 符号差にも up_proj は不変。
+  const motionEl = document.getElementById('motion');
+  const G = 9.80665;                    // 1g [m/s^2]
+  const MCFG = {
+    flickTh:     1.5,    // linear accel 閾値 [g]            (FW: DEF_FLICK_THRESHOLD_G)
+    updownRatio: 0.75,   // |鉛直成分|/|動き| の閾値          (FW: DEF_UPDOWN_RATIO)
+    cooldownMs:  1000,   // トリガ間隔 [ms]                  (FW: DEF_COOLDOWN_MS)
+    gravAlpha:   0.05,   // 重力 EMA 係数 (FW 0.02@100Hz→60Hz向けにやや大)
+    stillBand:   0.15,   // 静止判定幅 [g]                   (FW: DEF_STILL_BAND)
+  };
+  let gX = 0, gY = 0, gZ = 1, gravReady = false;   // 重力推定 [g]
+  let lastFlickMs = 0;
+
+  function onMotion(ev) {
+    const a = ev.accelerationIncludingGravity;
+    if (!a || a.x == null) return;
+    const ax = a.x / G, ay = a.y / G, az = a.z / G;          // m/s^2 → g
+    const amag = Math.hypot(ax, ay, az);
+    if (!gravReady) { gX = ax; gY = ay; gZ = az; gravReady = true; return; }
+
+    // 静止ゲート: ほぼ1g のときだけ重力を更新 (フリック混入を防ぐ)
+    if (Math.abs(amag - 1) < MCFG.stillBand) {
+      gX += MCFG.gravAlpha * (ax - gX);
+      gY += MCFG.gravAlpha * (ay - gY);
+      gZ += MCFG.gravAlpha * (az - gZ);
+    }
+    const gmag = Math.max(0.1, Math.hypot(gX, gY, gZ));
+    const ux = gX / gmag, uy = gY / gmag, uz = gZ / gmag;    // 「上」単位ベクトル
+    const lx = ax - gX, ly = ay - gY, lz = az - gZ;          // linear = 生 − 重力
+    const lmag = Math.hypot(lx, ly, lz);
+    const now = Date.now();
+    if (lmag < MCFG.flickTh || (now - lastFlickMs) <= MCFG.cooldownMs) return;
+
+    const upProj  = lx * ux + ly * uy + lz * uz;             // 鉛直成分 (符号付き)
+    const ratioUp = Math.abs(upProj) / lmag;
+    let strength  = Math.round((lmag - MCFG.flickTh) * 91);
+    strength = Math.max(0, Math.min(255, strength));
+
+    let trig;
+    if      (ratioUp >= MCFG.updownRatio && upProj > 0) trig = 0x10;  // 上 → LUMOS
+    else if (ratioUp >= MCFG.updownRatio && upProj < 0) trig = 0x11;  // 下 → NOX
+    else                                                trig = 0x01;  // その他 → SHAKE
+    lastFlickMs = now;
+    showSpell(trig, strength);
+    const r = ev.rotationRate || {};
+    const gyro = Math.hypot(r.alpha || 0, r.beta || 0, r.gamma || 0);
+    log(`📱 ${spellName(trig)}  lmag=${lmag.toFixed(2)}g up=${upProj.toFixed(2)}(${ratioUp.toFixed(2)}) gyro=${gyro.toFixed(0)}°/s s=${strength}`, 'text-sky-300');
+  }
+
+  async function enableMotion() {
+    if (typeof DeviceMotionEvent === 'undefined') {
+      log('この端末は DeviceMotion 非対応 (PC など)。スマホで開いてください。', 'text-rose-400');
+      motionEl.checked = false; return;
+    }
+    // iOS 13+ は明示許可が必要 (このチェック操作=ユーザージェスチャ内で要求)
+    if (typeof DeviceMotionEvent.requestPermission === 'function') {
+      try {
+        const res = await DeviceMotionEvent.requestPermission();
+        if (res !== 'granted') { log('モーション権限が許可されませんでした。', 'text-rose-400'); motionEl.checked = false; return; }
+      } catch (err) {
+        log('モーション権限の要求に失敗: ' + err.message, 'text-rose-400'); motionEl.checked = false; return;
+      }
+    }
+    gravReady = false;
+    window.addEventListener('devicemotion', onMotion);
+    log('📱 スマホモーション ON — 少し静止 → 上/下に素早く振って (Lumos/Nox)', 'text-sky-300');
+  }
+  function disableMotion() {
+    window.removeEventListener('devicemotion', onMotion);
+    log('📱 スマホモーション OFF', 'text-slate-400');
+  }
+  motionEl.addEventListener('change', () => { motionEl.checked ? enableMotion() : disableMotion(); });
 
   // ===== 手動テストボタン (BLE 無しでも全端末でエフェクト確認) =====
   const simRow = document.getElementById('simRow');
