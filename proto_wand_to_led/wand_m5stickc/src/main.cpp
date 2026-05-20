@@ -149,6 +149,8 @@ void enable_wom(int threshold_mg) {
   uint8_t thr = (uint8_t)(threshold_mg / 3.9f);   // mg → LSB
   if (thr < 1) thr = 1;
 
+  pinMode(IMU_INT_PIN, INPUT);   // GPIO35 (INT 監視用、診断 + ext0 wake)
+
   write_reg(0x6B, 0x00);   // PWR_MGMT_1: sleep 解除, 内部クロック
   delay(10);
   write_reg(0x6C, 0x07);   // PWR_MGMT_2: gyro 無効, accel 有効
@@ -159,15 +161,17 @@ void enable_wom(int threshold_mg) {
   write_reg(0x69, 0xC0);   // ACCEL_INTEL_CTRL: EN=1, MODE=1(前サンプル比較), OR
   write_reg(0x38, 0xE0);   // INT_ENABLE: WOM_X/Y/Z_INT_EN
   write_reg(0x37, 0xA0);   // INT_PIN_CFG: active-low + latch
-  write_reg(0x6B, 0x20);   // PWR_MGMT_1: CYCLE=1 (低電力 accel cycle)
-
-  // 重要: WOM 有効化直後は「前サンプル比較」の初回が誤発火し INT が latch される。
-  //   cycle mode で数サンプル安定させてから INT_STATUS をクリアし、INT を de-assert。
-  //   これをやらないと deep sleep 直後に ext0 が即トリガし、即 wake ループになる。
-  delay(150);
-  (void)read_reg(0x3A);    // 起動時の誤 WOM 割込をクリア → INT が HIGH (idle) に戻る
+  // ★ CYCLE モードは使わない: accel を通常モードで連続動作させ、毎サンプル比較で
+  //    WOM 判定する。CYCLE の間欠サンプリングだと速い振りを取りこぼす (womtest で確認)。
+  //    代償: 連続 accel で ~0.5mA (CYCLE ~10μA より大) だが、振りで確実に wake する。
+  //    PWR_MGMT_1 は 0x00 (通常モード) のまま。
+  // 初回の誤 WOM (前サンプル無し) をクリアして INT を idle(HIGH) に戻す
+  delay(100);
+  (void)read_reg(0x3A);
   delay(20);
-  (void)read_reg(0x3A);    // 念のため再クリア
+  (void)read_reg(0x3A);
+  Serial.printf("[WOM] cfg done thr=%dmg(%dLSB) normal-mode, INT(GPIO%d)=%d (1=idle/0=asserted)\n",
+                threshold_mg, thr, IMU_INT_PIN, digitalRead(IMU_INT_PIN));
 }
 #endif
 }  // namespace imu
@@ -439,6 +443,28 @@ void handle_line(char* line) {
   if (strncmp(line, "gband=", 6) == 0)  { gcfg::still_band = atof(line+6); gcfg::print(); return; }
   if (strncmp(line, "wom=", 4) == 0)    { gcfg::wom_thr_mg = (uint32_t)atol(line+4); gcfg::print(); return; }
   if (strncmp(line, "sleep=", 6) == 0)  { pm::enabled = (atoi(line+6) != 0); Serial.printf("[PM] sleep %s\n", pm::enabled ? "ON" : "OFF"); return; }
+  if (strcmp(line, "dsleep") == 0)      { Serial.println("[PM] forced deep sleep (test)"); pm::enter_deep_sleep(); return; }  // 即 deep sleep (WOM テスト用)
+#if ENABLE_IMU_WOM_WAKE
+  if (strcmp(line, "womtest") == 0) {
+    // 眠らずに WOM を設定し INT(GPIO35) を 15s 監視。振って INT が 0(asserted) に落ちるか確認
+    Serial.println("[WOMTEST] WOM 設定 → INT(GPIO35) を 15s 監視。振って INT=0 になれば WOM 発火 OK");
+    imu::enable_wom((int)gcfg::wom_thr_mg);
+    uint32_t tEnd = millis() + 15000;
+    int last = -1, fires = 0;
+    while (millis() < tEnd) {
+      int v = digitalRead(IMU_INT_PIN);
+      if (v != last) {
+        Serial.printf("[WOMTEST] INT=%d (t=%lu)\n", v, (unsigned long)millis());
+        if (v == 0) { fires++; (void)imu::read_reg(0x3A); }  // asserted を数えてクリア(再発火可能に)
+        last = v;
+      }
+      delay(5);
+    }
+    Serial.printf("[WOMTEST] 終了 fires=%d。通常モードに復帰\n", fires);
+    imu::begin();  // 通常 accel モードへ戻す
+    return;
+  }
+#endif
 
   // --- トリガコマンド ("<id> <cmd>" or "<cmd>") ---
   uint16_t target = wand_beacon::TARGET_ALL;
