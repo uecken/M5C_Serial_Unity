@@ -34,6 +34,22 @@
     .stage.mana .orb { filter: grayscale(1) brightness(.35); }   /* 球体を魔力切れ表現 */
     @keyframes manaPulse { 0%,100% { opacity: .82 } 50% { opacity: 1 } }
 
+    /* ===== ウィンガーディアム・レヴィオーサ (浮遊する羽) ===== */
+    #feather { display: none; }
+    .stage.levitate #feather {
+      display: block;
+      position: absolute; left: 50%; top: 50%;
+      /* 中央寄せ + JS が --fy(縦オフセット px) を設定。rotate は別プロパティで揺れ演出 */
+      transform: translate(-50%, calc(-50% + var(--fy, 0px)));
+      transition: transform .18s ease-out;     /* 目標へゆっくり追従 */
+      font-size: clamp(72px, 26vmin, 220px); line-height: 1;
+      filter: drop-shadow(0 0 18px rgba(219,234,254,.6));
+      cursor: pointer; z-index: 6; will-change: transform, rotate;
+      animation: featherSway 3.6s ease-in-out infinite;
+    }
+    .stage.levitate .orb { opacity: .12; filter: blur(2px); }   /* 球体は控えめに */
+    @keyframes featherSway { 0%,100% { rotate: -7deg } 50% { rotate: 7deg } }
+
     .orb {
       --i: 0;
       --c: #fff7d6;
@@ -151,7 +167,7 @@
           <b class="text-slate-100">③ 上映 (魔法の効果だけ見せる)</b>
           <ul class="list-disc ml-5 mt-1 space-y-0.5">
             <li><b>魔法画面（球体）をダブルタップ</b>で 拡大⇄通常 を切替（スキャンは継続）。PC は <b>Esc</b> でも戻れます</li>
-            <li>キーボード <span class="mono">L</span>=Lumos / <span class="mono">N</span>=Nox / <span class="mono">I</span>=Incendio / <span class="mono">A</span>=Aguamenti で手動発火（杖が無くても上映可）</li>
+            <li>キーボード <span class="mono">L</span>=Lumos / <span class="mono">N</span>=Nox / <span class="mono">I</span>=Incendio / <span class="mono">A</span>=Aguamenti / <span class="mono">W</span>=Wingardium(浮遊) で手動発火（杖が無くても上映可）</li>
           </ul>
         </div>
         <div>
@@ -160,6 +176,7 @@
             <li><b>「📱 スマホで魔法」</b>にチェック（iPhone はモーション権限の許可が出る → 許可）</li>
             <li>スマホを<b>少し静止</b>させてから <b>上に素早く振る → Lumos</b> / <b>下に振る → Nox</b>（上下が不明瞭な振りは無反応）</li>
             <li>重力基準フリック検出なので持つ向きは自由。ダブルタップで全画面にして振ると映えます</li>
+            <li>🪶 <b>ウィンガーディアム・レヴィオーサ</b>（キー <span class="mono">W</span> / 手動ボタン / 杖 BLE）→ 羽が出現。<b>スマホを上に傾けると羽が上、下げると下へゆっくり浮遊</b>。羽をタップで解除</li>
           </ul>
         </div>
         <p class="text-slate-400">BLE が使えない端末でも、「📱 スマホで魔法」や下の「手動テスト」ボタン・キーボードでエフェクトを出せます。</p>
@@ -169,6 +186,7 @@
     <!-- ステージ (光球) -->
     <div class="stage rounded-2xl border border-slate-700 flex flex-col items-center justify-center py-10 mb-3 select-none">
       <div id="orb" class="orb"></div>
+      <div id="feather">🪶</div>
       <div id="spellLabel" class="mt-7 text-sm text-slate-400 min-h-[1.5rem]">呪文を待っています…</div>
       <!-- 魔力切れオーバーレイ (受信が途絶える=スキャン制限などで表示。全画面でも出る) -->
       <div id="manaMsg">
@@ -205,6 +223,7 @@
     0x11: { name: 'NOX',       label: '🌑 ノックス (消灯)', color: '#000000', mode: 'off',     ms: 0 },
     0x20: { name: 'INCENDIO',  label: '🔥 インセンディオ',  color: '#ff7a18', mode: 'flicker', ms: 3000 },
     0x21: { name: 'AGUAMENTI', label: '💧 アグアメンティ',  color: '#38bdf8', mode: 'fade',    ms: 5000 },
+    0x22: { name: 'WINGARDIUM', label: '🪶 ウィンガーディアム レヴィオーサ', color: '#dbeafe', mode: 'levitate', ms: 0 },
   };
 
   const orb        = document.getElementById('orb');
@@ -216,12 +235,17 @@
   const dbgEl      = document.getElementById('dbg');
   const advCountEl = document.getElementById('advCount');
   const manaMsg    = document.getElementById('manaMsg');
+  const feather    = document.getElementById('feather');
+  const stageEl    = document.querySelector('.stage');
 
   // ===== エフェクト制御 =====
   // baseOn = Lumos で点いた持続状態。pulse/flicker/fade は一時的に上書きし、終了後 base に戻る。
   let baseOn = false;
   let baseColor = '#fff3c4';
   let tempTimer = null;
+  // レヴィオーサ(浮遊): featherY 現在位置 / featherTarget 目標 (-1=最下, 0=中央, +1=最上)
+  let levitating = false, featherY = 0, featherTarget = 0, levitateSource = 'manual';
+  let levitateRAF = null, bleWingTimer = null;
 
   function setOrb(color, intensity) {
     orb.style.setProperty('--c', color || '#fff3c4');
@@ -241,6 +265,14 @@
   function showSpell(trigId, strength) {
     const s = SPELLS[trigId];
     if (!s) return;
+
+    // レヴィオーサ: 浮遊モードのトグル (手動ボタン/キー W/単発呼び出し用)
+    if (s.mode === 'levitate') {
+      levitating ? stopLevitate() : startLevitate('manual');
+      return;
+    }
+    if (levitating) stopLevitate();   // 他の呪文を出すときは浮遊を解除
+
     clearTimeout(tempTimer);
     orb.classList.remove('flicker', 'pulse');
     orb.style.transition = '';              // 直前の fade で伸ばした transition をリセット
@@ -267,6 +299,37 @@
     if (s.mode === 'flicker') orb.classList.add('flicker');
     if (s.mode === 'pulse')   orb.classList.add('pulse');
     tempTimer = setTimeout(endTemp, s.ms);
+  }
+
+  // ===== ウィンガーディアム・レヴィオーサ (浮遊する羽) =====
+  //   featherTarget は BLE(strength=pitch) か スマホの傾き が設定。
+  //   rAF ループで featherY を target へゆっくり寄せて「浮遊」感を出す。
+  function startLevitate(source) {
+    levitateSource = source || 'manual';
+    featherTarget = 0;
+    if (levitating) return;
+    levitating = true;
+    stageEl.classList.add('levitate');
+    spellLabel.textContent = '🪶 ウィンガーディアム レヴィオーサ';
+    log('🪶 ウィンガーディアム・レヴィオーサ — 羽が浮遊。杖/スマホの上下に合わせて羽が上下。羽をタップで解除', 'text-sky-200');
+    if (!levitateRAF) levitateRAF = requestAnimationFrame(featherLoop);
+  }
+  function stopLevitate() {
+    if (!levitating) return;
+    levitating = false;
+    clearTimeout(bleWingTimer);
+    if (levitateRAF) { cancelAnimationFrame(levitateRAF); levitateRAF = null; }
+    stageEl.classList.remove('levitate');
+    feather.style.removeProperty('--fy');
+    if (spellLabel.textContent.includes('レヴィオーサ'))
+      spellLabel.textContent = baseOn ? '🔆 点灯中' : '呪文を待っています…';
+    log('🪶 レヴィオーサ 解除', 'text-slate-400');
+  }
+  function featherLoop() {
+    featherY += 0.10 * (featherTarget - featherY);          // ゆっくり追従
+    const maxPx = (stageEl.clientHeight || 320) * 0.34;
+    feather.style.setProperty('--fy', (-featherY * maxPx).toFixed(1) + 'px');
+    if (levitating) levitateRAF = requestAnimationFrame(featherLoop);
   }
 
   // ===== ログ =====
@@ -324,6 +387,16 @@
     const trig     = md.getUint8(1);
     const strength = md.byteLength > 2 ? md.getUint8(2) : 0;
     const target   = md.byteLength >= 5 ? md.getUint16(3, true) : 0xFFFF;
+
+    // WINGARDIUM(0x22) は連続制御 (strength=pitch 0..255)。seq dedup を通さず毎回 羽を更新
+    if (trig === 0x22) {
+      if (!levitating) startLevitate('ble');
+      featherTarget = Math.max(-1, Math.min(1, (strength - 128) / 127));
+      clearTimeout(bleWingTimer);
+      bleWingTimer = setTimeout(() => { if (levitating && levitateSource === 'ble') stopLevitate(); }, 1500);
+      return;
+    }
+
     if (seq === lastSeq) return;                     // 同一振りの再送を抑止 (seq で重複排除)
     lastSeq = seq;
     showSpell(trig, strength);
@@ -404,7 +477,6 @@
   //   魔法画面 (ステージ) を ダブルタップ / ダブルクリック で 拡大⇄通常 をトグル。
   //   戻るは ダブルタップ / Esc。スキャンは裏で継続。
   const presentHint    = document.getElementById('presentHint');
-  const stageEl        = document.querySelector('.stage');
   let   hintTimer      = null;
 
   function enterPresentation() {
@@ -445,7 +517,10 @@
 
   // ===== キーボード操作 =====
   //   Esc: プレゼン解除 / l n i a s: 各呪文を手動発火 (杖が無くてもプレゼン可)
-  const KEY_SPELL = { l: 0x10, n: 0x11, i: 0x20, a: 0x21 };
+  const KEY_SPELL = { l: 0x10, n: 0x11, i: 0x20, a: 0x21, w: 0x22 };
+
+  // 羽をタップ/クリックで浮遊を解除 (全画面でも戻れる)
+  feather.addEventListener('click', (e) => { e.stopPropagation(); if (levitating) stopLevitate(); });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { exitPresentation(); return; }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -496,6 +571,13 @@
     const lx = ax - gX, ly = ay - gY, lz = az - gZ;          // linear = 生 − 重力
     const lmag = Math.hypot(lx, ly, lz);
     const now = Date.now();
+
+    // レヴィオーサ中: 端末のピッチ(上下の傾き)を羽の目標位置に。上向き=+1 / 水平=0 / 下向き=-1。
+    //   (杖 BLE の strength=pitch と同じ意味。flick→呪文 は発火させない)
+    if (levitating) {
+      featherTarget = Math.max(-1, Math.min(1, -gY / gmag));
+      return;
+    }
 
     // ライブ表示: 閾値の前に毎回更新 (モーションが読めているか/どれだけ振れているかを可視化)
     if (lmag > peakLin) peakLin = lmag;
