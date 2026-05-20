@@ -68,6 +68,32 @@
       </button>
     </div>
 
+    <!-- 使い方 (共有先の誰でも分かるように) -->
+    <details class="mb-3 text-xs bg-slate-800/60 border border-slate-700 rounded-lg">
+      <summary class="cursor-pointer px-3 py-2 font-semibold text-slate-200 select-none">▸ 使い方</summary>
+      <div class="px-3 pb-3 space-y-2 text-slate-300">
+        <div>
+          <b class="text-slate-100">① 杖の操作 → 画面が反応</b>
+          <ul class="list-disc ml-5 mt-1 space-y-0.5">
+            <li>杖を<b>上に振る</b> → 🔆 Lumos（光球が点灯・持続）</li>
+            <li>杖を<b>下に振る</b> → 🌑 Nox（消灯）</li>
+            <li>杖を<b>前に突く</b> → 🔥 Incendio（オレンジ flicker）</li>
+            <li>その他の強い振り → ✨ Shake</li>
+            <li>※ Aguamenti は杖シリアルコマンド <span class="mono">a</span> で送信</li>
+          </ul>
+        </div>
+        <div>
+          <b class="text-slate-100">② このページ側</b>
+          <ol class="list-decimal ml-5 mt-1 space-y-0.5">
+            <li>Android Chrome / PC Chrome・Edge で開く（iPhone 不可）</li>
+            <li>初回のみ <span class="mono">chrome://flags/#enable-experimental-web-platform-features</span> を有効化して再起動</li>
+            <li>上の「📡 スキャン開始」を押し、Bluetooth スキャンを許可</li>
+          </ol>
+        </div>
+        <p class="text-slate-400">BLE が使えない端末でも、下の「手動テスト」ボタンでエフェクトの見た目だけ確認できます。</p>
+      </div>
+    </details>
+
     <!-- ステージ (光球) -->
     <div class="stage rounded-2xl border border-slate-700 flex flex-col items-center justify-center py-10 mb-3 select-none">
       <div id="orb" class="orb"></div>
@@ -126,11 +152,18 @@
     setOrb(baseColor, baseOn ? 1 : 0);
   }
 
+  function endTemp() {
+    orb.style.transition = '';              // fade 用に変えた transition を既定 (.55s) へ戻す
+    renderBase();
+    spellLabel.textContent = baseOn ? '🔆 点灯中' : '呪文を待っています…';
+  }
+
   function showSpell(trigId, strength) {
     const s = SPELLS[trigId];
     if (!s) return;
     clearTimeout(tempTimer);
     orb.classList.remove('flicker', 'pulse');
+    orb.style.transition = '';              // 直前の fade で伸ばした transition をリセット
     spellLabel.textContent = s.label;
 
     if (s.mode === 'on')  { baseOn = true;  baseColor = s.color; renderBase(); return; }
@@ -138,13 +171,22 @@
 
     // strength(0-255) を明るさに反映
     const intensity = Math.max(0.55, Math.min(1, (Number(strength) || 200) / 255 + 0.25));
+
+    if (s.mode === 'fade') {
+      // Aguamenti: 一旦点灯 → ms かけて base 状態へ実フェード
+      setOrb(s.color, intensity);
+      requestAnimationFrame(() => {
+        orb.style.transition = `--i ${s.ms}ms linear, box-shadow ${s.ms}ms linear, background ${s.ms}ms linear`;
+        setOrb(s.color, baseOn ? 1 : 0);
+      });
+      tempTimer = setTimeout(endTemp, s.ms);
+      return;
+    }
+
     setOrb(s.color, intensity);
     if (s.mode === 'flicker') orb.classList.add('flicker');
     if (s.mode === 'pulse')   orb.classList.add('pulse');
-    // fade は CSS transition (.55s) に任せ、ms 後に base へ戻す
-    tempTimer = setTimeout(() => { renderBase();
-      spellLabel.textContent = baseOn ? '🔆 点灯中' : '呪文を待っています…';
-    }, s.ms);
+    tempTimer = setTimeout(endTemp, s.ms);
   }
 
   // ===== ログ =====
