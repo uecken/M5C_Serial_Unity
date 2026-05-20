@@ -298,9 +298,9 @@ void check(float ax, float ay, float az) {
   int s = (int)((lmag - gcfg::flick_threshold_g) * 91.0f);
   if (s < 0) s = 0; if (s > 255) s = 255;
 
-  // 判定優先: 上下 (重力) > 前突き (機体前) > SHAKE。
-  //   明確な呪文に当てはまらない曖昧な振り → SHAKE = 「魔法失敗」リアクション
-  //   (受信側で一瞬だけ点灯。呪文成功は 5秒点灯/全点灯と区別される)
+  // 判定優先: 上下 (重力) > 前突き (機体前)。
+  //   明確な呪文 (LUMOS/NOX/INCENDIO) に当てはまらない曖昧な振りは「何もしない」
+  //   (beacon を出さず無視。受信側 LED も反応しない)
   uint8_t trig;
   const char* name;
   if (ratio_up >= gcfg::updown_ratio && up_proj > 0) {
@@ -310,7 +310,10 @@ void check(float ax, float ay, float az) {
   } else if (ratio_fwd >= gcfg::updown_ratio && fwd_proj > 0) {
     trig = wand_beacon::TRIG_INCENDIO; name = "INCENDIO (thrust)";
   } else {
-    trig = wand_beacon::TRIG_SHAKE;    name = "SHAKE (失敗→一瞬点灯)";
+    // 曖昧な振り → 何もしない (魔法発動せず・beacon なし・LED フラッシュなし)
+    Serial.printf("--- ignored (ambiguous) lmag=%.2fg up=%.2f(%.2f) fwd=%.2f(%.2f) ---\n",
+                  lmag, up_proj, ratio_up, fwd_proj, ratio_fwd);
+    return;
   }
 
   // 物理ジェスチャは全機宛て (TARGET_ALL)
