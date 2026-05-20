@@ -6,6 +6,7 @@
 #include <Wire.h>
 #include <NimBLEDevice.h>
 #include <Preferences.h>
+#include "device_config.h"
 #include "../../shared/beacon_protocol.h"
 
 // ============================================================
@@ -72,10 +73,10 @@ void print() {
 // MPU6886 (M5StickC 内蔵 IMU, I2C: SDA=21, SCL=22)
 // ============================================================
 namespace imu {
-constexpr uint8_t I2C_ADDR     = 0x68;
-constexpr int     SDA_PIN      = 21;
-constexpr int     SCL_PIN      = 22;
-constexpr float   ACC_LSB_TO_G = 1.0f / 4096.0f;  // ±8g スケール
+constexpr uint8_t I2C_ADDR     = IMU_I2C_ADDR;
+constexpr int     SDA_PIN      = IMU_I2C_SDA;
+constexpr int     SCL_PIN      = IMU_I2C_SCL;
+constexpr float   ACC_LSB_TO_G = 1.0f / IMU_ACC_LSB_PER_G;  // device_config.h
 
 bool write_reg(uint8_t reg, uint8_t val) {
   Wire.beginTransmission(I2C_ADDR);
@@ -273,8 +274,8 @@ void check(float ax, float ay, float az) {
 //   無効時: 常時消灯
 // ============================================================
 namespace wled {
-constexpr int      PIN      = 10;   // 内蔵赤 LED (active-low)
-constexpr int      BTN_A    = 37;   // M5StickC 前面 A ボタン (active-low, 外部プルアップ)
+constexpr int      PIN      = BUILTIN_LED_PIN;  // 内蔵赤 LED (active-low)
+constexpr int      BTN_A    = BUTTON_A_PIN;     // 前面 A ボタン (active-low)
 constexpr uint32_t FLASH_MS = 75;
 
 bool     enabled        = false;    // デフォルト OFF (起動時は光らない)
