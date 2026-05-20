@@ -41,7 +41,7 @@
       position: absolute; left: 50%; top: 50%;
       /* 中央寄せ + JS が --fy(縦オフセット px) を設定。rotate は別プロパティで揺れ演出 */
       transform: translate(-50%, calc(-50% + var(--fy, 0px)));
-      transition: transform .08s ease-out;     /* 目標へ追従 (小さいほど速い) */
+      transition: transform .03s linear;     /* rAF の追従が主体。CSS 側はほぼ遅延なし */
       font-size: clamp(72px, 26vmin, 220px); line-height: 1;
       filter: drop-shadow(0 0 18px rgba(219,234,254,.6));
       cursor: pointer; z-index: 6; will-change: transform, rotate;
@@ -366,7 +366,8 @@
     log('🪶 レヴィオーサ 解除', 'text-slate-400');
   }
   function featherLoop() {
-    featherY += 0.24 * (featherTarget - featherY);          // 追従 (大きいほど速い)
+    // 受信が 30-40Hz と十分速いので強い平滑化は不要。係数を上げて追従を速く。
+    featherY += 0.55 * (featherTarget - featherY);          // 追従 (大きいほど速い / 1=即時)
     const maxPx = (stageEl.clientHeight || 320) * 0.34;
     feather.style.setProperty('--fy', (-featherY * maxPx).toFixed(1) + 'px');
     if (levitating) levitateRAF = requestAnimationFrame(featherLoop);
