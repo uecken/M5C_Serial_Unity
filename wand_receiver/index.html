@@ -59,14 +59,6 @@
     }
     body.presentation .orb { width: clamp(240px, 62vmin, 640px); }
 
-    /* 戻るボタン: 通常は非表示、プレゼン時のみ右上に薄く表示 (hover/タップで濃く) */
-    #exitPresent { display: none; }
-    body.presentation #exitPresent {
-      display: inline-flex; position: fixed; top: 14px; right: 14px; z-index: 50;
-      opacity: .28; transition: opacity .25s;
-    }
-    body.presentation #exitPresent:hover, body.presentation #exitPresent:focus { opacity: 1; }
-
     /* 戻り方ヒント (プレゼン突入時に数秒だけ表示) */
     #presentHint { display: none; }
     body.presentation #presentHint {
@@ -80,12 +72,9 @@
   </style>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen">
-  <!-- プレゼンモード関連 (body 直下に置き、プレゼン CSS で隠されないようにする) -->
-  <button id="exitPresent" class="px-3 py-1.5 text-sm rounded-lg bg-slate-800/80 hover:bg-slate-700 border border-slate-500 backdrop-blur">
-    ✕ 戻る
-  </button>
+  <!-- プレゼン突入時の戻り方ヒント (body 直下に置き、プレゼン CSS で隠されないようにする) -->
   <div id="presentHint" class="text-xs text-slate-200 bg-slate-900/75 px-4 py-1.5 rounded-full backdrop-blur border border-slate-600">
-    ダブルタップ / Esc で通常画面へ戻る
+    ダブルタップで通常画面へ戻る（PC は Esc も可）
   </div>
   <div class="max-w-3xl mx-auto p-4">
 
@@ -140,7 +129,7 @@
         <div>
           <b class="text-slate-100">③ 上映 (魔法の効果だけ見せる)</b>
           <ul class="list-disc ml-5 mt-1 space-y-0.5">
-            <li><b>魔法画面（球体）をダブルタップ</b>で 拡大⇄通常 を切替（スキャンは継続）。<b>Esc</b>・右上「✕ 戻る」でも戻れます</li>
+            <li><b>魔法画面（球体）をダブルタップ</b>で 拡大⇄通常 を切替（スキャンは継続）。PC は <b>Esc</b> でも戻れます</li>
             <li>キーボード <span class="mono">L</span>=Lumos / <span class="mono">N</span>=Nox / <span class="mono">I</span>=Incendio / <span class="mono">A</span>=Aguamenti / <span class="mono">S</span>=Shake で手動発火（杖が無くても上映可）</li>
           </ul>
         </div>
@@ -338,8 +327,7 @@
 
   // ===== プレゼンモード (魔法の効果=球体だけ全画面) =====
   //   魔法画面 (ステージ) を ダブルタップ / ダブルクリック で 拡大⇄通常 をトグル。
-  //   戻るは Esc / 右上「✕ 戻る」でも可。スキャンは裏で継続。
-  const exitPresentBtn = document.getElementById('exitPresent');
+  //   戻るは ダブルタップ / Esc。スキャンは裏で継続。
   const presentHint    = document.getElementById('presentHint');
   const stageEl        = document.querySelector('.stage');
   let   hintTimer      = null;
@@ -375,7 +363,6 @@
     else lastTap = now;
   }, { passive: false });
 
-  exitPresentBtn.addEventListener('click', exitPresentation);
   // ブラウザ全画面が解除されたら (Esc/ブラウザUI) プレゼンも解除して同期
   document.addEventListener('fullscreenchange', () => {
     if (!document.fullscreenElement) document.body.classList.remove('presentation');
