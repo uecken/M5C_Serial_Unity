@@ -41,7 +41,7 @@
       position: absolute; left: 50%; top: 50%;
       /* 中央寄せ + JS が --fy(縦オフセット px) を設定。rotate は別プロパティで揺れ演出 */
       transform: translate(-50%, calc(-50% + var(--fy, 0px)));
-      transition: transform .18s ease-out;     /* 目標へゆっくり追従 */
+      transition: transform .08s ease-out;     /* 目標へ追従 (小さいほど速い) */
       font-size: clamp(72px, 26vmin, 220px); line-height: 1;
       filter: drop-shadow(0 0 18px rgba(219,234,254,.6));
       cursor: pointer; z-index: 6; will-change: transform, rotate;
@@ -326,7 +326,7 @@
     log('🪶 レヴィオーサ 解除', 'text-slate-400');
   }
   function featherLoop() {
-    featherY += 0.10 * (featherTarget - featherY);          // ゆっくり追従
+    featherY += 0.24 * (featherTarget - featherY);          // 追従 (大きいほど速い)
     const maxPx = (stageEl.clientHeight || 320) * 0.34;
     feather.style.setProperty('--fy', (-featherY * maxPx).toFixed(1) + 'px');
     if (levitating) levitateRAF = requestAnimationFrame(featherLoop);
@@ -575,7 +575,8 @@
     // レヴィオーサ中: 端末のピッチ(上下の傾き)を羽の目標位置に。上向き=+1 / 水平=0 / 下向き=-1。
     //   (杖 BLE の strength=pitch と同じ意味。flick→呪文 は発火させない)
     if (levitating) {
-      featherTarget = Math.max(-1, Math.min(1, -gY / gmag));
+      // 瞬時の加速度方向(画面縦軸)で端末ピッチを取る → 重力EMAの遅れを排除し追従を速く
+      featherTarget = Math.max(-1, Math.min(1, -ay / amag));
       return;
     }
 
