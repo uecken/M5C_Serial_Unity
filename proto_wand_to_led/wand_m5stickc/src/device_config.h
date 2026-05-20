@@ -44,7 +44,10 @@
 //   ※ SLEEP_WAKE_BUTTON は ESP32 の RTC GPIO であること (GPIO37 は RTC 対応)
 #define SLEEP_WAKE_BUTTON    37        // wake 用ボタン (ext0, LOW)。Button A と同じ
 
-// --- 加速度 wake-on-motion (実験的、MPU6886 WOM) ---
+// --- 加速度 wake-on-motion (MPU6886 WOM, ESP32 deep sleep) ---
+//   ⚠️ この WOM + deep sleep は M5StickC(ESP32)+MPU6886 専用実装。
+//      他 MCU (ESP32-S3/C3, nRF52840) や 他 IMU (LSM6DS3, BMI270 等) では
+//      sleep/wake API と WOM レジスタが全く違うため別実装が必要 (詳細 design.md)。
 //   1 = deep sleep からの wake を IMU の motion 割込 (GPIO35) で行う
 //       MPU6886 WOM は信頼性が低く誤起動/取りこぼしあり (実験用)。Button wake は無効化
 //   0 = Button A で wake (確実、デフォルト)

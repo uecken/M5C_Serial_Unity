@@ -94,10 +94,23 @@ else                                     → SHAKE (横/斜め)
 - wake 源は 2 通り、platformio.ini の env で切替:
   - **`env:m5stick-c`** (通常): Button A (GPIO37, ext0) で wake
   - **`env:m5stick-c-wom`** (実験→**実機で動作確認済 2026-05-20**): MPU6886 **WOM (wake-on-motion)** で wake。動きで自動復帰
-- **MPU6886 WOM は実機で動作確認済**: INT→GPIO35 配線確定、低閾値 (64mg) の「動いたら起きる」用途では確実に wake。
-  (「MPU6886 WOM 不安定」は高閾値/精密閾値の話。shake-to-wake では実用可)
-- WOM パラメータは `device_config.h`: `IMU_INT_PIN=35`, `IMU_WOM_THRESHOLD_MG=64`
+- **MPU6886 WOM は実機で動作確認済 (2026-05-20)**: INT→GPIO35 配線確定。`womtest` で fires 確認、`dsleep`→振り→`[PM] woke by motion(WOM)` 確認。
+  300mg で微振動は無視・振りで wake。(「MPU6886 WOM 不安定」は高閾値/精密閾値の話。shake-to-wake では実用可)
+- WOM パラメータ: `device_config.h` の `IMU_INT_PIN=35` / `IMU_WOM_THRESHOLD_MG` (default)、runtime は `wom=<mg>` で可変 (NVS)
+- WOM 設定の要点 (回帰注意): `enable_wom` は **「INT_STATUS クリア → 最後に CYCLE 有効化」** の順。逆順 (CYCLE 後にクリア) だと WOM が機能せず wake しない
 - 復帰: 動き (WOM版) / Button A (通常版) / AXP192 電源ボタン長押し / USB 再書き込み
+- 診断 serial: `womtest` (眠らず INT 監視) / `dsleep` (即 deep sleep) / `sleep=0|1` (監視中の自動 sleep 無効化)
+
+> **⚠️ プラットフォーム依存 (重要)**: この deep sleep + wake 実装は **M5StickC = ESP32 + MPU6886 専用**。
+> 他機への移植では以下が**全て変わる**ため別実装が必要:
+> - **MCU 側 sleep/wake API**: ESP32 は `esp_sleep_enable_ext0_wakeup` + `esp_deep_sleep_start`。
+>   ESP32-S3/C3/C6 は ext0/ext1 が無く `esp_deep_sleep_enable_gpio_wakeup` 等になる。
+>   nRF52840 は `sd_power_system_off()` + GPIO SENSE wake で全く別系統。
+> - **IMU の WOM レジスタ**: MPU6886 固有 (0x69 ACCEL_INTEL_CTRL, 0x20-0x22 WOM_THR, 0x37/0x38)。
+>   LSM6DS3 / BMI270 / ICM-20948 は WOM レジスタマップが全く異なる。
+> - **INT ピンの GPIO 番号**: 機体ごとに異なる (M5StickC=GPIO35)。
+> → 移植時は `enable_wom` (IMU 依存) と `pm::enter_deep_sleep` (MCU 依存) を機体別に再実装する。
+> device_config.h の値だけでは吸収できない (レジスタシーケンス・API が違うため)。
 
 ### 強度 (strength)
 `strength = clamp((lmag − flick_threshold_g) × 91, 0, 255)`。payload に載せ、将来 LED 輝度に反映予定。
