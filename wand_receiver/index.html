@@ -333,6 +333,19 @@
 
   scanBtn.addEventListener('click', () => { scan ? stopScan() : startScan(); });
 
+  // リロード/離脱/バックグラウンド化で scan を必ず停止する。
+  //   これを怠ると Android BT スタックに scanner 登録がリークし、start 回数が増え続け、
+  //   Android がスキャンを OPPORTUNISTIC に強制ダウングレード → 受信ゼロになる。
+  window.addEventListener('pagehide', () => { try { scan && scan.stop(); } catch (_) {} });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && scan) { try { scan.stop(); } catch (_) {} scan = null;
+      navigator.bluetooth.removeEventListener('advertisementreceived', onAdv);
+      stateEl.textContent = '⏸ 復帰時に再開';
+      stateEl.className = 'mono text-[11px] px-2 py-1 rounded bg-slate-800 border border-slate-700';
+      scanBtn.textContent = '📡 スキャン開始';
+    }
+  });
+
   // ===== プレゼンモード (魔法の効果=球体だけ全画面) =====
   //   魔法画面 (ステージ) を ダブルタップ / ダブルクリック で 拡大⇄通常 をトグル。
   //   戻るは ダブルタップ / Esc。スキャンは裏で継続。
