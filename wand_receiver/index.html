@@ -64,13 +64,27 @@
       opacity: .28; transition: opacity .25s;
     }
     body.presentation #exitPresent:hover, body.presentation #exitPresent:focus { opacity: 1; }
+
+    /* 戻り方ヒント (プレゼン突入時に数秒だけ表示) */
+    #presentHint { display: none; }
+    body.presentation #presentHint {
+      display: block; position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+      z-index: 50; opacity: 0; transition: opacity .5s; pointer-events: none; white-space: nowrap;
+    }
+    body.presentation #presentHint.hint-show { opacity: .85; }
+
+    /* プレゼン時はステージをダブルタップ操作対象に (テキスト選択/タップ遅延を抑制) */
+    body.presentation .stage { cursor: pointer; touch-action: manipulation; }
   </style>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen">
-  <!-- プレゼンモード解除ボタン (body 直下に置き、プレゼン CSS で隠されないようにする) -->
+  <!-- プレゼンモード関連 (body 直下に置き、プレゼン CSS で隠されないようにする) -->
   <button id="exitPresent" class="px-3 py-1.5 text-sm rounded-lg bg-slate-800/80 hover:bg-slate-700 border border-slate-500 backdrop-blur">
-    ✕ 通常画面へ戻る (Esc)
+    ✕ 戻る
   </button>
+  <div id="presentHint" class="text-xs text-slate-200 bg-slate-900/75 px-4 py-1.5 rounded-full backdrop-blur border border-slate-600">
+    ダブルタップ / Esc で通常画面へ戻る
+  </div>
   <div class="max-w-3xl mx-auto p-4">
 
     <!-- ヘッダー -->
@@ -90,13 +104,8 @@
       <label class="text-[11px] flex items-center gap-1 cursor-pointer select-none px-2 py-1 rounded bg-slate-800 border border-slate-700" title="受信した全 BLE 広告を 0xFFFF 以外も含めてログに出す (切り分け用)">
         <input type="checkbox" id="dbg"> 🐞 全広告ログ
       </label>
-      <button id="presentBtn"
-        class="ml-auto px-3 py-1.5 text-sm rounded-lg bg-slate-700 hover:bg-slate-600 border border-slate-500 font-semibold"
-        title="魔法の効果 (球体) だけを全画面表示。スキャンは継続。Esc で戻る">
-        🔮 ステージのみ
-      </button>
       <button id="scanBtn" disabled
-        class="px-3 py-1.5 text-sm rounded-lg bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-slate-500 font-semibold">
+        class="ml-auto px-3 py-1.5 text-sm rounded-lg bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-slate-500 font-semibold">
         📡 スキャン開始
       </button>
     </div>
@@ -126,7 +135,7 @@
         <div>
           <b class="text-slate-100">③ 上映 (魔法の効果だけ見せる)</b>
           <ul class="list-disc ml-5 mt-1 space-y-0.5">
-            <li><b>「🔮 ステージのみ」</b>で球体だけを全画面表示（スキャンは継続）。<b>Esc</b> または右上ボタンで戻る</li>
+            <li><b>魔法画面（球体）をダブルタップ</b>で 拡大⇄通常 を切替（スキャンは継続）。<b>Esc</b>・右上「✕ 戻る」でも戻れます</li>
             <li>キーボード <span class="mono">L</span>=Lumos / <span class="mono">N</span>=Nox / <span class="mono">I</span>=Incendio / <span class="mono">A</span>=Aguamenti / <span class="mono">S</span>=Shake で手動発火（杖が無くても上映可）</li>
           </ul>
         </div>
@@ -315,23 +324,44 @@
   scanBtn.addEventListener('click', () => { scan ? stopScan() : startScan(); });
 
   // ===== プレゼンモード (魔法の効果=球体だけ全画面) =====
-  const presentBtn     = document.getElementById('presentBtn');
+  //   魔法画面 (ステージ) を ダブルタップ / ダブルクリック で 拡大⇄通常 をトグル。
+  //   戻るは Esc / 右上「✕ 戻る」でも可。スキャンは裏で継続。
   const exitPresentBtn = document.getElementById('exitPresent');
+  const presentHint    = document.getElementById('presentHint');
+  const stageEl        = document.querySelector('.stage');
+  let   hintTimer      = null;
 
-  async function enterPresentation() {
-    // 未スキャンかつ対応環境なら、この操作 (ユーザージェスチャ) でスキャンも開始
-    if (!scan && typeof navigator.bluetooth?.requestLEScan === 'function') {
-      await startScan();
-    }
+  function enterPresentation() {
     document.body.classList.add('presentation');
-    // 真の全画面 (対応端末のみ。iOS Safari 等で失敗しても CSS で擬似全画面)
-    try { await document.documentElement.requestFullscreen(); } catch (_) {}
+    // 真の全画面 (対応端末のみ。iOS Safari 等で失敗しても CSS で擬似全画面にフォールバック)
+    try { const p = document.documentElement.requestFullscreen(); if (p) p.catch(() => {}); } catch (_) {}
+    // 戻り方ヒントを数秒だけ表示
+    presentHint.classList.add('hint-show');
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => presentHint.classList.remove('hint-show'), 2500);
   }
   function exitPresentation() {
     document.body.classList.remove('presentation');
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   }
-  presentBtn.addEventListener('click', enterPresentation);
+
+  let toggleLock = 0;
+  function togglePresentation() {
+    const now = Date.now();
+    if (now - toggleLock < 400) return;             // dblclick/touch の二重発火ガード
+    toggleLock = now;
+    document.body.classList.contains('presentation') ? exitPresentation() : enterPresentation();
+  }
+
+  // デスクトップ: ダブルクリック / モバイル: 2 連続タップ (300ms 以内) を自前検出
+  stageEl.addEventListener('dblclick', togglePresentation);
+  let lastTap = 0;
+  stageEl.addEventListener('touchend', (e) => {
+    const now = Date.now();
+    if (now - lastTap < 300) { e.preventDefault(); togglePresentation(); lastTap = 0; }
+    else lastTap = now;
+  }, { passive: false });
+
   exitPresentBtn.addEventListener('click', exitPresentation);
   // ブラウザ全画面が解除されたら (Esc/ブラウザUI) プレゼンも解除して同期
   document.addEventListener('fullscreenchange', () => {
