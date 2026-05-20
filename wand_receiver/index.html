@@ -368,7 +368,7 @@
   function featherLoop() {
     // 受信が 30-40Hz と十分速いので強い平滑化は不要。係数を上げて追従を速く。
     featherY += 0.55 * (featherTarget - featherY);          // 追従 (大きいほど速い / 1=即時)
-    const maxPx = (stageEl.clientHeight || 320) * 0.34;
+    const maxPx = (stageEl.clientHeight || 320) * 0.45;     // 可動幅: ステージ高さの ±45% (大きく追従)
     feather.style.setProperty('--fy', (-featherY * maxPx).toFixed(1) + 'px');
     if (levitating) levitateRAF = requestAnimationFrame(featherLoop);
   }
