@@ -62,6 +62,7 @@
     <div class="flex items-center gap-2 flex-wrap mb-3">
       <span id="support" class="mono text-[11px] px-2 py-1 rounded bg-slate-800 border border-slate-700">対応判定中…</span>
       <span id="state" class="mono text-[11px] px-2 py-1 rounded bg-slate-800 border border-slate-700">停止中</span>
+      <span id="advCount" class="mono text-[11px] px-2 py-1 rounded bg-slate-800 border border-slate-700" title="スキャン開始後に受信した全 BLE 広告の件数 (杖以外も含む)">受信 0件</span>
       <label class="text-[11px] flex items-center gap-1 cursor-pointer select-none px-2 py-1 rounded bg-slate-800 border border-slate-700" title="受信した全 BLE 広告を 0xFFFF 以外も含めてログに出す (切り分け用)">
         <input type="checkbox" id="dbg"> 🐞 全広告ログ
       </label>
@@ -140,6 +141,7 @@
   const supportEl  = document.getElementById('support');
   const scanBtn    = document.getElementById('scanBtn');
   const dbgEl      = document.getElementById('dbg');
+  const advCountEl = document.getElementById('advCount');
 
   // ===== エフェクト制御 =====
   // baseOn = Lumos で点いた持続状態。pulse/flicker/fade は一時的に上書きし、終了後 base に戻る。
@@ -212,8 +214,11 @@
   let lastSeq = -1;
 
   let advCount = 0;
+  let noAdvTimer = null;
+  function updateCount() { if (advCountEl) advCountEl.textContent = '受信 ' + advCount + '件'; }
   function onAdv(e) {
     advCount++;
+    updateCount();
     // デバッグ: 受信した全広告を出す (杖の 0xFFFF が出るか、そもそも広告が届くかの切り分け)
     if (dbgEl && dbgEl.checked) {
       const keys = [...((e.manufacturerData && e.manufacturerData.keys()) || [])]
@@ -243,12 +248,25 @@
       stateEl.textContent = '🟢 スキャン中';
       stateEl.className = 'mono text-[11px] px-2 py-1 rounded bg-emerald-900 border border-emerald-600 text-emerald-200';
       scanBtn.textContent = '⏹ スキャン停止';
-      log('スキャン開始', 'text-violet-300');
+      log('スキャン開始 (周辺の BLE 広告を待機中…)', 'text-violet-300');
+
+      // 無受信タイマー: 6秒間 1件も来なければ アダプタ/ドライバ/Windows BLE 側の問題と判定
+      advCount = 0; updateCount();
+      clearTimeout(noAdvTimer);
+      noAdvTimer = setTimeout(() => {
+        if (advCount === 0) {
+          log('⚠ 6秒間、広告を1件も受信できていません (杖以外も含めゼロ)。', 'text-rose-300');
+          log('  → Chrome に BLE 広告が全く届いていない状態です。杖ではなく PC 側 (BLE アダプタ/ドライバ/Windows Bluetooth) が原因の可能性大。', 'text-rose-300');
+          log('  → chrome://bluetooth-internals で adapter present/powered と Devices→Start Scan を確認してください。', 'text-rose-300');
+        }
+      }, 6000);
     } catch (err) {
       log('スキャン開始失敗: ' + err.message, 'text-rose-400');
+      log('  → 許可ダイアログをキャンセルした / フラグ未有効 / アダプタ無効 などが原因。', 'text-rose-400');
     }
   }
   function stopScan() {
+    clearTimeout(noAdvTimer);
     try { scan && scan.stop(); } catch (_) {}
     scan = null;
     navigator.bluetooth.removeEventListener('advertisementreceived', onAdv);
