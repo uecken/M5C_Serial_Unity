@@ -35,4 +35,23 @@
 
 // --- 内蔵 LED / ボタン (M5StickC) ---
 #define BUILTIN_LED_PIN      10        // 内蔵赤 LED (active-low)
-#define BUTTON_A_PIN         37        // 前面 A ボタン (active-low, input-only)
+#define BUTTON_A_PIN         37        // 前面 A ボタン (active-low, input-only, RTC 対応) = sleep wake 用
+#define BUTTON_B_PIN         39        // 側面 B ボタン (active-low, input-only) = LED フィードバック toggle 用
+
+// --- 省電力 (ESP32 deep sleep) ---
+//   静止しきい値は shared/wand_common.h の SLEEP_AFTER_SEC (両機共通)。
+//   ここでは「sleep の手段=deep sleep」「wake 源」だけ定義 (プラットフォーム固有)。
+//   ※ SLEEP_WAKE_BUTTON は ESP32 の RTC GPIO であること (GPIO37 は RTC 対応)
+#define SLEEP_WAKE_BUTTON    37        // wake 用ボタン (ext0, LOW)。Button A と同じ
+
+// --- 加速度 wake-on-motion (実験的、MPU6886 WOM) ---
+//   1 = deep sleep からの wake を IMU の motion 割込 (GPIO35) で行う
+//       MPU6886 WOM は信頼性が低く誤起動/取りこぼしあり (実験用)。Button wake は無効化
+//   0 = Button A で wake (確実、デフォルト)
+//   ※ IMU_INT_PIN は要回路図確認 (M5StickC は通常 GPIO35)
+//   platformio.ini の env:m5stick-c-wom が -D ENABLE_IMU_WOM_WAKE=1 で上書き
+#ifndef ENABLE_IMU_WOM_WAKE
+#define ENABLE_IMU_WOM_WAKE  0         // ← 1 で加速度 wake (実験的)。通常 env は 0
+#endif
+#define IMU_INT_PIN          35        // MPU6886 INT → ESP32 GPIO35 (RTC 対応)
+#define IMU_WOM_THRESHOLD_MG 64        // WOM 閾値 [mg]。小さいほど軽い動きで起きる (誤起動増)

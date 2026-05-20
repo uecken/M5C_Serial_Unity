@@ -77,16 +77,27 @@ else                                     → SHAKE (横/斜め)
 ### 調整パラメータ (実行時可変 + ESP32 NVS 保存)
 | パラメータ | デフォルト | コマンド | 意味 |
 |-----------|----------|---------|------|
-| `flick_threshold_g` | 1.2g | `gth=` | フリック強度の下限 (linear accel) |
-| `updown_ratio` | 0.6 | `gratio=` | 上下フリック判定の鉛直比 (0-1) |
+| `flick_threshold_g` | **1.5g** | `gth=` | フリック強度の下限 (linear accel)。シビア化済 |
+| `updown_ratio` | **0.75** | `gratio=` | 上下フリック判定の鉛直比 (0-1)。シビア化済 (鉛直±41°) |
 | `cooldown_ms` | 1000 | `gcool=` | トリガ間の最小間隔 |
 | `grav_alpha` | 0.05 | `galpha=` | 重力 EMA 係数 (大=速い追従) |
 | `still_band` | 0.15g | `gband=` | 静止判定幅 (重力更新ゲート) |
 
-`gshow` 一覧表示 / `gsave` NVS 永続化 / `gdefault` リセット。
+`gshow` 一覧表示 / `gsave` NVS 永続化 / `gdefault` リセット / `sleep=0|1` で deep sleep 有効無効。
 
 ### M5StickC 内蔵 LED フィードバック (GPIO 10)
-A ボタン (GPIO 37) で ON/OFF トグル、**デフォルト OFF**。有効時: 静止=消灯 / 収束中=点滅 / ジェスチャ検出時=75ms フラッシュ。
+**B ボタン (GPIO 39)** で ON/OFF トグル、**デフォルト OFF**。有効時: 静止=消灯 / 収束中=点滅 / ジェスチャ検出時=75ms フラッシュ。
+(A ボタン GPIO 37 は deep sleep からの wake 専用)
+
+### 省電力 (deep sleep + wake)
+- **30 秒静止で ESP32 deep sleep** (しきい値は `shared/wand_common.h` の `SLEEP_AFTER_SEC=30`、両機共通)
+- wake 源は 2 通り、platformio.ini の env で切替:
+  - **`env:m5stick-c`** (通常): Button A (GPIO37, ext0) で wake
+  - **`env:m5stick-c-wom`** (実験→**実機で動作確認済 2026-05-20**): MPU6886 **WOM (wake-on-motion)** で wake。動きで自動復帰
+- **MPU6886 WOM は実機で動作確認済**: INT→GPIO35 配線確定、低閾値 (64mg) の「動いたら起きる」用途では確実に wake。
+  (「MPU6886 WOM 不安定」は高閾値/精密閾値の話。shake-to-wake では実用可)
+- WOM パラメータは `device_config.h`: `IMU_INT_PIN=35`, `IMU_WOM_THRESHOLD_MG=64`
+- 復帰: 動き (WOM版) / Button A (通常版) / AXP192 電源ボタン長押し / USB 再書き込み
 
 ### 強度 (strength)
 `strength = clamp((lmag − flick_threshold_g) × 91, 0, 255)`。payload に載せ、将来 LED 輝度に反映予定。

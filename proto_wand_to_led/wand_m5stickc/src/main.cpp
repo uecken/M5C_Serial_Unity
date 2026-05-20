@@ -6,8 +6,10 @@
 #include <Wire.h>
 #include <NimBLEDevice.h>
 #include <Preferences.h>
+#include <esp_sleep.h>
 #include "device_config.h"
 #include "../../shared/beacon_protocol.h"
+#include "../../shared/wand_common.h"
 
 // ============================================================
 // ジェスチャ判定パラメータ (実行時可変 + NVS 保存)
@@ -18,8 +20,8 @@
 // ============================================================
 namespace gcfg {
 // --- デフォルト値 (#define 相当のチューニング基準) ---
-constexpr float    DEF_FLICK_THRESHOLD_G = 1.2f;  // linear accel 閾値 [g]
-constexpr float    DEF_UPDOWN_RATIO      = 0.6f;  // |鉛直成分|/|動き| の閾値 (0-1)
+constexpr float    DEF_FLICK_THRESHOLD_G = 1.5f;  // linear accel 閾値 [g] (シビア化: 1.2→1.5)
+constexpr float    DEF_UPDOWN_RATIO      = 0.75f; // |鉛直成分|/|動き| の閾値 (シビア化: 0.6→0.75)
 constexpr uint32_t DEF_COOLDOWN_MS       = 1000;  // トリガ間隔 [ms]
 constexpr float    DEF_GRAV_ALPHA        = 0.02f; // 重力推定 EMA 係数 (小=ゆっくり)
 constexpr float    DEF_STILL_BAND        = 0.15f; // 静止判定: ||accel|-1g| がこれ未満なら静止 [g]
@@ -132,6 +134,29 @@ bool read_accel_g(float& ax_g, float& ay_g, float& az_g) {
   az_g = az * ACC_LSB_TO_G;
   return true;
 }
+
+#if ENABLE_IMU_WOM_WAKE
+// MPU6886 を Wake-on-Motion (WOM) モードに設定する (deep sleep 前に呼ぶ)
+//   INT は active-low + latch で出力 → ESP32 ext0 level=0 で wake
+//   threshold_mg: 動き検出閾値 [mg] (1 LSB ≈ 3.9mg)
+void enable_wom(int threshold_mg) {
+  uint8_t thr = (uint8_t)(threshold_mg / 3.9f);   // mg → LSB
+  if (thr < 1) thr = 1;
+
+  write_reg(0x6B, 0x00);   // PWR_MGMT_1: sleep 解除, 内部クロック
+  delay(10);
+  write_reg(0x6C, 0x07);   // PWR_MGMT_2: gyro 無効, accel 有効
+  write_reg(0x1D, 0x01);   // ACCEL_CONFIG2: accel DLPF 有効
+  write_reg(0x20, thr);    // ACCEL_WOM_X_THR
+  write_reg(0x21, thr);    // ACCEL_WOM_Y_THR
+  write_reg(0x22, thr);    // ACCEL_WOM_Z_THR
+  write_reg(0x69, 0xC0);   // ACCEL_INTEL_CTRL: EN=1, MODE=1(前サンプル比較), OR
+  write_reg(0x38, 0xE0);   // INT_ENABLE: WOM_X/Y/Z_INT_EN
+  write_reg(0x37, 0xA0);   // INT_PIN_CFG: active-low + latch
+  (void)read_reg(0x3A);    // INT_STATUS をクリア (誤即起動防止)
+  write_reg(0x6B, 0x20);   // PWR_MGMT_1: CYCLE=1 (低電力 accel cycle)
+}
+#endif
 }  // namespace imu
 
 // ============================================================
@@ -203,8 +228,9 @@ float grav_x = 0.0f, grav_y = 0.0f, grav_z = 1.0f;
 // 静止ゲート + ready 状態
 //   |accel| が 1g 付近 = 静止 → この時だけ重力更新 (フリック混入を防ぐ)
 //   静止が一定数続いたら ready=true (= 振ってよい合図、LED 点灯)
-int  still_count = 0;
-bool ready       = false;
+int      still_count    = 0;
+bool     ready          = false;
+uint32_t last_motion_ms = 0;                  // 最後に「静止でない」状態だった時刻 (sleep 判定用)
 constexpr int   READY_STILL_SAMPLES = 25;     // 約 0.25s (100Hz)
 // 静止判定幅 gcfg::still_band を使用 (NVS 可変)
 
@@ -217,8 +243,17 @@ void update_gravity(float ax, float ay, float az) {
     grav_z += gcfg::grav_alpha * (az - grav_z);
     if (still_count < READY_STILL_SAMPLES) still_count++;
     if (still_count >= READY_STILL_SAMPLES) ready = true;
+  } else {
+    // 動き中 (フリック等) → 重力は凍結。ready は維持。動き時刻を記録 (sleep 防止)
+    last_motion_ms = millis();
   }
-  // 動き中 (フリック等) → 重力は凍結。ready は維持
+}
+
+// 符号付き軸コード (1=+X,2=+Y,3=+Z, 負で反転) で linear[3] を射影
+inline float project_axis(float lx, float ly, float lz, int axis_code) {
+  int   idx = abs(axis_code) - 1;          // 0,1,2
+  float v   = (idx == 0) ? lx : (idx == 1) ? ly : lz;
+  return (axis_code > 0) ? v : -v;
 }
 
 void check(float ax, float ay, float az) {
@@ -233,40 +268,46 @@ void check(float ax, float ay, float az) {
   float lx = ax - grav_x, ly = ay - grav_y, lz = az - grav_z;
   float lmag = sqrtf(lx*lx + ly*ly + lz*lz);
 
-  // linear を上方向に投影 (正=上振り, 負=下振り)
-  float up_proj = lx*ux + ly*uy + lz*uz;
-
   if (lmag < gcfg::flick_threshold_g || (now - last_trigger_ms) <= gcfg::cooldown_ms) {
     return;  // 動きが弱い or クールダウン中
   }
 
-  // strength: linear accel の強さを 0-255 にマップ (閾値→0, +2.8g→255)
+  // 各方向への射影
+  float up_proj   = lx*ux + ly*uy + lz*uz;                       // 鉛直 (重力フレーム)
+  float fwd_proj  = project_axis(lx, ly, lz, WAND_FORWARD);      // 前後 (機体軸)
+  float ratio_up  = fabsf(up_proj)  / lmag;                      // 鉛直成分の割合
+  float ratio_fwd = fabsf(fwd_proj) / lmag;                      // 前後成分の割合
+
+  // strength: linear accel の強さを 0-255 にマップ
   int s = (int)((lmag - gcfg::flick_threshold_g) * 91.0f);
   if (s < 0) s = 0; if (s > 255) s = 255;
 
-  float ratio = fabsf(up_proj) / lmag;  // 上下成分の割合
+  // 判定優先: 上下 (重力) > 前突き (機体前) > SHAKE
   uint8_t trig;
   const char* name;
-  if (ratio >= gcfg::updown_ratio && up_proj > 0) {
-    trig = wand_beacon::TRIG_LUMOS; name = "LUMOS (up)";
-  } else if (ratio >= gcfg::updown_ratio && up_proj < 0) {
-    trig = wand_beacon::TRIG_NOX;   name = "NOX (down)";
+  if (ratio_up >= gcfg::updown_ratio && up_proj > 0) {
+    trig = wand_beacon::TRIG_LUMOS;    name = "LUMOS (up)";
+  } else if (ratio_up >= gcfg::updown_ratio && up_proj < 0) {
+    trig = wand_beacon::TRIG_NOX;      name = "NOX (down)";
+  } else if (ratio_fwd >= gcfg::updown_ratio && fwd_proj > 0) {
+    trig = wand_beacon::TRIG_INCENDIO; name = "INCENDIO (thrust)";
   } else {
-    trig = wand_beacon::TRIG_SHAKE; name = "SHAKE (other)";
+    trig = wand_beacon::TRIG_SHAKE;    name = "SHAKE (other)";
   }
 
   // 物理ジェスチャは全機宛て (TARGET_ALL)
   ble::emit_beacon(trig, (uint8_t)s, wand_beacon::TARGET_ALL);
   last_trigger_ms = now;
   wled::flash();  // 内蔵 LED を一瞬光らせて検出をフィードバック
-  Serial.printf("*** %s  lmag=%.2fg up_proj=%.2f ratio=%.2f strength=%d ***\n",
-                name, lmag, up_proj, ratio, s);
+  Serial.printf("*** %s  lmag=%.2fg up=%.2f(%.2f) fwd=%.2f(%.2f) s=%d ***\n",
+                name, lmag, up_proj, ratio_up, fwd_proj, ratio_fwd, s);
 }
 }  // namespace detector
 
 // ============================================================
 // M5StickC 内蔵赤 LED (GPIO 10, active-low) で状態表示
-//   A ボタン (GPIO 37) で LED フィードバックの ON/OFF をトグル。デフォルト OFF。
+//   B ボタン (GPIO 39) で LED フィードバックの ON/OFF をトグル。デフォルト OFF。
+//   (A ボタンは deep sleep からの wake 専用)
 //   有効時:
 //     静止 (ready)        → 消灯
 //     収束中 (起動/動作中) → 点滅
@@ -275,7 +316,7 @@ void check(float ax, float ay, float az) {
 // ============================================================
 namespace wled {
 constexpr int      PIN      = BUILTIN_LED_PIN;  // 内蔵赤 LED (active-low)
-constexpr int      BTN_A    = BUTTON_A_PIN;     // 前面 A ボタン (active-low)
+constexpr int      BTN_B    = BUTTON_B_PIN;     // 側面 B ボタン (active-low)
 constexpr uint32_t FLASH_MS = 75;
 
 bool     enabled        = false;    // デフォルト OFF (起動時は光らない)
@@ -286,14 +327,14 @@ uint32_t last_btn_ms    = 0;
 void init() {
   pinMode(PIN, OUTPUT);
   digitalWrite(PIN, HIGH);          // OFF
-  pinMode(BTN_A, INPUT);            // GPIO37 は input-only、M5StickC 外部プルアップ
+  pinMode(BTN_B, INPUT);            // GPIO39 は input-only、M5StickC 外部プルアップ
 }
 
 void flash() { if (enabled) flash_until_ms = millis() + FLASH_MS; }  // 検出時に呼ぶ
 
-// A ボタン押下 (立下りエッジ + デバウンス) で enabled トグル
+// B ボタン押下 (立下りエッジ + デバウンス) で enabled トグル
 void poll_button() {
-  bool b = (digitalRead(BTN_A) != 0);
+  bool b = (digitalRead(BTN_B) != 0);
   uint32_t now = millis();
   if (last_btn && !b && (now - last_btn_ms) > 250) {  // HIGH→LOW = 押下
     enabled = !enabled;
@@ -317,6 +358,44 @@ void update(bool ready) {
   }
 }
 }  // namespace wled
+
+// ============================================================
+// 省電力 (ESP32 deep sleep)
+//   静止が SLEEP_AFTER_SEC (共通 30s) 続いたら deep sleep。
+//   wake = Button A (ext0, LOW)。wake は実質リブート → setup() から再開。
+// ============================================================
+namespace pm {
+bool enabled = true;   // sleep 有効 (テスト中は serial "sleep=0" で無効化可)
+
+void enter_deep_sleep() {
+  digitalWrite(wled::PIN, HIGH);             // LED 消灯
+  ble::adv->stop();                          // adv 停止
+#if ENABLE_IMU_WOM_WAKE
+  // 実験的: MPU6886 WOM で wake (IMU INT → GPIO35, active-low)
+  Serial.printf("[PM] %lus 静止 → deep sleep. wake=motion(WOM, GPIO%d)\n",
+                (unsigned long)wand_common::SLEEP_AFTER_SEC, IMU_INT_PIN);
+  Serial.flush();
+  imu::enable_wom(IMU_WOM_THRESHOLD_MG);
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)IMU_INT_PIN, 0);  // INT active-low → level 0
+#else
+  // 確実: Button A (GPIO37, active-low) で wake
+  Serial.printf("[PM] %lus 静止 → deep sleep. wake=Button A\n",
+                (unsigned long)wand_common::SLEEP_AFTER_SEC);
+  Serial.flush();
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)SLEEP_WAKE_BUTTON, 0);
+#endif
+  esp_deep_sleep_start();                    // 復帰しない (次回 wake = リセット)
+}
+
+void poll() {
+  if (!enabled) return;
+  // 起動直後やトリガ直後は last_motion_ms が新しいので即 sleep しない
+  uint32_t idle = millis() - detector::last_motion_ms;
+  if (idle > wand_common::SLEEP_AFTER_SEC * 1000UL) {
+    enter_deep_sleep();
+  }
+}
+}  // namespace pm
 
 // ============================================================
 // Serial コマンド (行単位パーサ)
@@ -345,6 +424,7 @@ void handle_line(char* line) {
   if (strncmp(line, "gcool=", 6) == 0)  { gcfg::cooldown_ms = (uint32_t)atol(line+6); gcfg::print(); return; }
   if (strncmp(line, "galpha=", 7) == 0) { gcfg::grav_alpha = atof(line+7); gcfg::print(); return; }
   if (strncmp(line, "gband=", 6) == 0)  { gcfg::still_band = atof(line+6); gcfg::print(); return; }
+  if (strncmp(line, "sleep=", 6) == 0)  { pm::enabled = (atoi(line+6) != 0); Serial.printf("[PM] sleep %s\n", pm::enabled ? "ON" : "OFF"); return; }
 
   // --- トリガコマンド ("<id> <cmd>" or "<cmd>") ---
   uint16_t target = wand_beacon::TARGET_ALL;
@@ -415,6 +495,16 @@ void setup() {
 
   ble::begin();
   Serial.println("[BLE] init OK, waiting for gesture...");
+
+  // sleep タイマ起点を現在に (起動直後に即 sleep しないように)
+  detector::last_motion_ms = millis();
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
+#if ENABLE_IMU_WOM_WAKE
+    Serial.println("[PM] woke by motion (WOM)");
+#else
+    Serial.println("[PM] woke by Button A");
+#endif
+  }
 }
 
 void loop() {
@@ -431,6 +521,7 @@ void loop() {
   ble::poll_stop();
   wled::poll_button();            // A ボタンで LED フィードバック ON/OFF
   wled::update(detector::ready);
+  pm::poll();                     // 30s 静止で deep sleep (wake=Button A)
 
   // Serial コマンド処理 (行単位)
   //   トリガ:   t/l/n/i/a (全機宛て)、宛先指定は "<id> <cmd>" 例 "2 l"
