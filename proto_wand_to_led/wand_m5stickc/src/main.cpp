@@ -25,6 +25,7 @@ constexpr float    DEF_UPDOWN_RATIO      = 0.75f; // |鉛直成分|/|動き| の
 constexpr uint32_t DEF_COOLDOWN_MS       = 1000;  // トリガ間隔 [ms]
 constexpr float    DEF_GRAV_ALPHA        = 0.02f; // 重力推定 EMA 係数 (小=ゆっくり)
 constexpr float    DEF_STILL_BAND        = 0.15f; // 静止判定: ||accel|-1g| がこれ未満なら静止 [g]
+constexpr uint32_t DEF_WOM_THR_MG        = IMU_WOM_THRESHOLD_MG; // device_config.h を一元ソースに
 
 // --- 実行時変数 (これを書き換えて挙動を変える) ---
 float    flick_threshold_g = DEF_FLICK_THRESHOLD_G;
@@ -32,6 +33,7 @@ float    updown_ratio      = DEF_UPDOWN_RATIO;
 uint32_t cooldown_ms       = DEF_COOLDOWN_MS;
 float    grav_alpha        = DEF_GRAV_ALPHA;
 float    still_band        = DEF_STILL_BAND;
+uint32_t wom_thr_mg        = DEF_WOM_THR_MG;       // WOM wake 閾値 (deep sleep 時に適用)
 
 Preferences prefs;
 constexpr const char* NS = "wandg";  // NVS 名前空間
@@ -42,6 +44,7 @@ void set_defaults() {
   cooldown_ms       = DEF_COOLDOWN_MS;
   grav_alpha        = DEF_GRAV_ALPHA;
   still_band        = DEF_STILL_BAND;
+  wom_thr_mg        = DEF_WOM_THR_MG;
 }
 
 void load() {
@@ -51,6 +54,7 @@ void load() {
   cooldown_ms       = prefs.getULong("cool",  DEF_COOLDOWN_MS);
   grav_alpha        = prefs.getFloat("alpha", DEF_GRAV_ALPHA);
   still_band        = prefs.getFloat("band",  DEF_STILL_BAND);
+  wom_thr_mg        = prefs.getULong("womthr",DEF_WOM_THR_MG);
   prefs.end();
 }
 
@@ -61,13 +65,15 @@ void save() {
   prefs.putULong("cool",  cooldown_ms);
   prefs.putFloat("alpha", grav_alpha);
   prefs.putFloat("band",  still_band);
+  prefs.putULong("womthr",wom_thr_mg);
   prefs.end();
 }
 
 void print() {
-  Serial.printf("[GCFG] th=%.2fg ratio=%.2f cool=%lums alpha=%.3f band=%.2fg\n",
+  Serial.printf("[GCFG] th=%.2fg ratio=%.2f cool=%lums alpha=%.3f band=%.2fg womthr=%lumg\n",
                 flick_threshold_g, updown_ratio,
-                (unsigned long)cooldown_ms, grav_alpha, still_band);
+                (unsigned long)cooldown_ms, grav_alpha, still_band,
+                (unsigned long)wom_thr_mg);
 }
 }  // namespace gcfg
 
@@ -153,8 +159,15 @@ void enable_wom(int threshold_mg) {
   write_reg(0x69, 0xC0);   // ACCEL_INTEL_CTRL: EN=1, MODE=1(前サンプル比較), OR
   write_reg(0x38, 0xE0);   // INT_ENABLE: WOM_X/Y/Z_INT_EN
   write_reg(0x37, 0xA0);   // INT_PIN_CFG: active-low + latch
-  (void)read_reg(0x3A);    // INT_STATUS をクリア (誤即起動防止)
   write_reg(0x6B, 0x20);   // PWR_MGMT_1: CYCLE=1 (低電力 accel cycle)
+
+  // 重要: WOM 有効化直後は「前サンプル比較」の初回が誤発火し INT が latch される。
+  //   cycle mode で数サンプル安定させてから INT_STATUS をクリアし、INT を de-assert。
+  //   これをやらないと deep sleep 直後に ext0 が即トリガし、即 wake ループになる。
+  delay(150);
+  (void)read_reg(0x3A);    // 起動時の誤 WOM 割込をクリア → INT が HIGH (idle) に戻る
+  delay(20);
+  (void)read_reg(0x3A);    // 念のため再クリア
 }
 #endif
 }  // namespace imu
@@ -375,7 +388,7 @@ void enter_deep_sleep() {
   Serial.printf("[PM] %lus 静止 → deep sleep. wake=motion(WOM, GPIO%d)\n",
                 (unsigned long)wand_common::SLEEP_AFTER_SEC, IMU_INT_PIN);
   Serial.flush();
-  imu::enable_wom(IMU_WOM_THRESHOLD_MG);
+  imu::enable_wom((int)gcfg::wom_thr_mg);   // NVS 可変の WOM 閾値を適用
   esp_sleep_enable_ext0_wakeup((gpio_num_t)IMU_INT_PIN, 0);  // INT active-low → level 0
 #else
   // 確実: Button A (GPIO37, active-low) で wake
@@ -424,6 +437,7 @@ void handle_line(char* line) {
   if (strncmp(line, "gcool=", 6) == 0)  { gcfg::cooldown_ms = (uint32_t)atol(line+6); gcfg::print(); return; }
   if (strncmp(line, "galpha=", 7) == 0) { gcfg::grav_alpha = atof(line+7); gcfg::print(); return; }
   if (strncmp(line, "gband=", 6) == 0)  { gcfg::still_band = atof(line+6); gcfg::print(); return; }
+  if (strncmp(line, "wom=", 4) == 0)    { gcfg::wom_thr_mg = (uint32_t)atol(line+4); gcfg::print(); return; }
   if (strncmp(line, "sleep=", 6) == 0)  { pm::enabled = (atoi(line+6) != 0); Serial.printf("[PM] sleep %s\n", pm::enabled ? "ON" : "OFF"); return; }
 
   // --- トリガコマンド ("<id> <cmd>" or "<cmd>") ---

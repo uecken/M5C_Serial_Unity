@@ -54,4 +54,4 @@
 #define ENABLE_IMU_WOM_WAKE  0         // ← 1 で加速度 wake (実験的)。通常 env は 0
 #endif
 #define IMU_INT_PIN          35        // MPU6886 INT → ESP32 GPIO35 (RTC 対応)
-#define IMU_WOM_THRESHOLD_MG 64        // WOM 閾値 [mg]。小さいほど軽い動きで起きる (誤起動増)
+#define IMU_WOM_THRESHOLD_MG 128       // WOM 閾値 [mg]。小さいほど軽い動きで起きる (誤起動増)。128=ノイズ無視+振りで起きる
