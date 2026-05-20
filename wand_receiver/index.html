@@ -380,7 +380,13 @@
     if (dbgEl && dbgEl.checked) {
       const keys = [...((e.manufacturerData && e.manufacturerData.keys()) || [])]
         .map(k => '0x' + Number(k).toString(16).padStart(4, '0'));
-      log(`· adv#${advCount} name="${e.device?.name || ''}" rssi=${e.rssi ?? '?'} mfg=[${keys.join(',')}]`, 'text-slate-500');
+      // 杖(0xFFFF)パケットなら trigger_id / strength もデコード表示 (0x22 が来ているか確認用)
+      let dec = '';
+      const wm = e.manufacturerData && e.manufacturerData.get(COMPANY_ID);
+      if (wm && wm.byteLength >= 2) {
+        dec = ` ⟶ trig=0x${wm.getUint8(1).toString(16).padStart(2, '0')} str=${wm.byteLength > 2 ? wm.getUint8(2) : '?'}`;
+      }
+      log(`· adv#${advCount} name="${e.device?.name || ''}" rssi=${e.rssi ?? '?'} mfg=[${keys.join(',')}]${dec}`, 'text-slate-500');
     }
     const md = e.manufacturerData && e.manufacturerData.get(COMPANY_ID);
     if (!md || md.byteLength < 2) return;            // 杖以外の adv は無視
