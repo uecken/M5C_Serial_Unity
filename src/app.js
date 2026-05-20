@@ -4,13 +4,13 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import htm from 'htm';
-import { SerialClient } from './lib/SerialClient.js?v=20260514-220447';
-import { BleClient }    from './lib/BleClient.js?v=20260514-220447';
-import { IMUViewer }    from './lib/IMUViewer.js?v=20260514-220447';
-import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260514-220447';
-import { RelativeTrajectoryGrid } from './lib/RelativeTrajectoryGrid.js?v=20260514-220447';
-import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260514-220447';
-import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260514-220447';
+import { SerialClient } from './lib/SerialClient.js?v=20260520-112047';
+import { BleClient }    from './lib/BleClient.js?v=20260520-112047';
+import { IMUViewer }    from './lib/IMUViewer.js?v=20260520-112047';
+import { RelativeIMUViewer } from './lib/RelativeIMUViewer.js?v=20260520-112047';
+import { RelativeTrajectoryGrid } from './lib/RelativeTrajectoryGrid.js?v=20260520-112047';
+import { PitchRollGrid } from './lib/PitchRollGrid.js?v=20260520-112047';
+import { TimeSeriesChart } from './lib/TimeSeriesChart.js?v=20260520-112047';
 
 const html = htm.bind(h);
 
@@ -1771,6 +1771,7 @@ function App() {
       <div>
         <h1 class="text-2xl font-bold">🎮 Burst Motion — 設定アプリ</h1>
         <p class="text-sm text-slate-500">Web Serial (USB) / Web Bluetooth (BLE NUS) 両対応 — Phase 2</p>
+        <a href="./wand_receiver/" class="text-xs text-violet-600 hover:text-violet-700 hover:underline">🪄 杖 BLE 受信デモ (Lumos / Nox) →</a>
       </div>
       <div class="flex items-center gap-3 flex-wrap">
         <!-- 大型ボタン状態インジケータ (常時表示、Stream ON/OFF 不問) -->
