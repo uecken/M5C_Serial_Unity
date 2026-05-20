@@ -161,16 +161,15 @@ void enable_wom(int threshold_mg) {
   write_reg(0x69, 0xC0);   // ACCEL_INTEL_CTRL: EN=1, MODE=1(前サンプル比較), OR
   write_reg(0x38, 0xE0);   // INT_ENABLE: WOM_X/Y/Z_INT_EN
   write_reg(0x37, 0xA0);   // INT_PIN_CFG: active-low + latch
-  // ★ CYCLE モードは使わない: accel を通常モードで連続動作させ、毎サンプル比較で
-  //    WOM 判定する。CYCLE の間欠サンプリングだと速い振りを取りこぼす (womtest で確認)。
-  //    代償: 連続 accel で ~0.5mA (CYCLE ~10μA より大) だが、振りで確実に wake する。
-  //    PWR_MGMT_1 は 0x00 (通常モード) のまま。
-  // 初回の誤 WOM (前サンプル無し) をクリアして INT を idle(HIGH) に戻す
+  // ※ SMPLRT_DIV(0x19) で ODR を落とすと WOM 振り検出が効かなくなった (fires 4→1) ため
+  //    デフォルト ODR のまま使う (fires=4 で振り検出が動いていた構成)
+  // 初回の誤 WOM (前サンプル無し) をクリアして INT を idle(HIGH) に戻す (CYCLE 前)
   delay(100);
   (void)read_reg(0x3A);
   delay(20);
   (void)read_reg(0x3A);
-  Serial.printf("[WOM] cfg done thr=%dmg(%dLSB) normal-mode, INT(GPIO%d)=%d (1=idle/0=asserted)\n",
+  write_reg(0x6B, 0x20);   // PWR_MGMT_1: CYCLE=1 (低電力 accel cycle) を最後に
+  Serial.printf("[WOM] cfg done thr=%dmg(%dLSB), INT(GPIO%d)=%d (1=idle/0=asserted)\n",
                 threshold_mg, thr, IMU_INT_PIN, digitalRead(IMU_INT_PIN));
 }
 #endif
@@ -299,7 +298,9 @@ void check(float ax, float ay, float az) {
   int s = (int)((lmag - gcfg::flick_threshold_g) * 91.0f);
   if (s < 0) s = 0; if (s > 255) s = 255;
 
-  // 判定優先: 上下 (重力) > 前突き (機体前) > SHAKE
+  // 判定優先: 上下 (重力) > 前突き (機体前) > SHAKE。
+  //   明確な呪文に当てはまらない曖昧な振り → SHAKE = 「魔法失敗」リアクション
+  //   (受信側で一瞬だけ点灯。呪文成功は 5秒点灯/全点灯と区別される)
   uint8_t trig;
   const char* name;
   if (ratio_up >= gcfg::updown_ratio && up_proj > 0) {
@@ -309,7 +310,7 @@ void check(float ax, float ay, float az) {
   } else if (ratio_fwd >= gcfg::updown_ratio && fwd_proj > 0) {
     trig = wand_beacon::TRIG_INCENDIO; name = "INCENDIO (thrust)";
   } else {
-    trig = wand_beacon::TRIG_SHAKE;    name = "SHAKE (other)";
+    trig = wand_beacon::TRIG_SHAKE;    name = "SHAKE (失敗→一瞬点灯)";
   }
 
   // 物理ジェスチャは全機宛て (TARGET_ALL)
@@ -345,6 +346,14 @@ void init() {
   pinMode(PIN, OUTPUT);
   digitalWrite(PIN, HIGH);          // OFF
   pinMode(BTN_B, INPUT);            // GPIO39 は input-only、M5StickC 外部プルアップ
+}
+
+// 起動表示: enabled に関係なく 2 回点滅 (「起動した」だけを示す。魔法=beacon は出さない)
+void boot_blink() {
+  for (int i = 0; i < 2; i++) {
+    digitalWrite(PIN, LOW);  delay(80);   // 点灯
+    digitalWrite(PIN, HIGH); delay(120);  // 消灯
+  }
 }
 
 void flash() { if (enabled) flash_until_ms = millis() + FLASH_MS; }  // 検出時に呼ぶ
@@ -393,6 +402,22 @@ void enter_deep_sleep() {
                 (unsigned long)wand_common::SLEEP_AFTER_SEC, IMU_INT_PIN);
   Serial.flush();
   imu::enable_wom((int)gcfg::wom_thr_mg);   // NVS 可変の WOM 閾値を適用
+  // WOM の「初回サンプル誤発火」(前サンプル0 vs 現在1g で閾値超え) を消化:
+  //   INT が安定して idle(HIGH) になるまでクリア。これをしないと sleep 直後に
+  //   ext0 が即トリガして即 wake してしまう。
+  {
+    uint32_t t0 = millis(), stableSince = millis();
+    while (millis() - t0 < 1500) {                 // 最大 1.5s
+      if (digitalRead(IMU_INT_PIN) == 0) {          // 誤発火 (INT LOW)
+        (void)imu::read_reg(0x3A);                  // クリア → INT idle へ
+        stableSince = millis();
+      }
+      if (millis() - stableSince > 250) break;      // 250ms 連続 idle → 安定
+      delay(10);
+    }
+    Serial.printf("[PM] WOM settled, INT=%d, sleeping\n", digitalRead(IMU_INT_PIN));
+    Serial.flush();
+  }
   esp_sleep_enable_ext0_wakeup((gpio_num_t)IMU_INT_PIN, 0);  // INT active-low → level 0
 #else
   // 確実: Button A (GPIO37, active-low) で wake
@@ -513,7 +538,8 @@ void setup() {
   Serial.println("Up-flick=LUMOS / Down-flick=NOX / Other-strong=SHAKE");
   Serial.println("Adv burst: 500ms, Cooldown: 1s");
 
-  wled::init();   // M5StickC 内蔵 LED (ready 表示用)
+  wled::init();        // M5StickC 内蔵 LED (ready 表示用)
+  wled::boot_blink();  // 起動表示 (2 回点滅、魔法は出さない)
 
   if (!imu::begin()) {
     Serial.println("[FATAL] MPU6886 init failed");

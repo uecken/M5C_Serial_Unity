@@ -32,10 +32,10 @@ constexpr uint8_t TRIG_AGUAMENTI = 0x21;  // Phase 2 下流し → 青 fade
 // 0x22-0x2F は将来拡張用予約
 
 // LED 点灯時間 (受信側で trigger_id ごとに分岐)
-constexpr uint32_t LED_DURATION_SHAKE_MS     = 5000;
-constexpr uint32_t LED_DURATION_LUMOS_MS     = 5000;
-constexpr uint32_t LED_DURATION_INCENDIO_MS  = 3000;
-constexpr uint32_t LED_DURATION_AGUAMENTI_MS = 5000;
-// NOX は持続時間ではなく即時消灯 (タイマ無効化)
+constexpr uint32_t LED_DURATION_SHAKE_MS     = 250;   // SHAKE=魔法失敗 → 一瞬だけ点灯
+constexpr uint32_t LED_DURATION_INCENDIO_MS  = 3000;  // 前突き → オレンジ風 3 秒
+constexpr uint32_t LED_DURATION_AGUAMENTI_MS = 5000;  // 下流し → 青風 5 秒
+// LUMOS は時限ではなく all_on() で永続点灯 (NOX まで)。NOX は all_off() で即時消灯。
+// → LED_DURATION_LUMOS_MS は不要 (受信側で時限制御しないため定義しない)
 
 }  // namespace wand_beacon

@@ -12,6 +12,6 @@ namespace wand_common {
 // 一定時間静止が続いたら sleep に入る (両機共通のしきい値)
 //   M5StickC      : ESP32 deep sleep, wake = Button A (ext0)
 //   XIAO nRF52840 : System OFF,       wake = LSM6DS3 wake-on-motion (INT)
-constexpr uint32_t SLEEP_AFTER_SEC = 30;
+constexpr uint32_t SLEEP_AFTER_SEC = 15;
 
 }  // namespace wand_common
