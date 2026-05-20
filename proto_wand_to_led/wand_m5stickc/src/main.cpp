@@ -323,6 +323,78 @@ void check(float ax, float ay, float az) {
   Serial.printf("*** %s  lmag=%.2fg up=%.2f(%.2f) fwd=%.2f(%.2f) s=%d ***\n",
                 name, lmag, up_proj, ratio_up, fwd_proj, ratio_fwd, s);
 }
+
+// ============================================================
+// Wingardium Leviosa (浮遊、連続制御)
+//   活性化: 杖を上向きに保持 (pitch 高 + 静止) を WINGARDIUM_HOLD_MS 継続
+//   浮遊モード: ピッチ(上下の傾き)を strength に載せ ~100ms 間隔で連続送信
+//   LUMOS は「動的な上フリック」、Wingardium は「静止して上向き保持」で区別 (競合せず)
+// ============================================================
+constexpr float    WINGARDIUM_PITCH_SIN   = 0.70f;  // 先端が上 ~45° 以上で活性化候補
+constexpr float    WINGARDIUM_STILL_LMAG  = 0.30f;  // 動き成分がこれ未満 = 静止
+constexpr uint32_t WINGARDIUM_HOLD_MS     = 800;    // 上向き保持の活性化時間
+constexpr uint32_t LEVITATION_MS          = 8000;   // 浮遊モード持続 (活性化/送信で延長)
+constexpr uint32_t LEVIT_SEND_INTERVAL_MS = 100;    // ピッチ送信間隔
+
+uint32_t up_hold_since   = 0;   // 上向き保持の開始時刻 (0=保持なし)
+uint32_t levitation_until = 0;  // 浮遊モード終了時刻 (0=非浮遊)
+uint32_t levit_next_send = 0;
+
+inline bool is_levitating() { return levitation_until != 0; }
+
+// 浮遊モードを強制開始 (シリアル 'w' のベンチテスト用。物理的な上向き保持を省略)
+void force_levitation() {
+  levitation_until = millis() + LEVITATION_MS;
+  levit_next_send  = millis();
+  up_hold_since    = 0;
+  last_trigger_ms  = millis();
+  Serial.println("[WINGARDIUM] force levitation (serial 'w')");
+}
+
+// 毎ループ呼ぶ: 上向き保持で活性化 → 浮遊モード中はピッチを連続送信
+void poll_wingardium(float ax, float ay, float az) {
+  uint32_t now = millis();
+  float gmag = sqrtf(grav_x*grav_x + grav_y*grav_y + grav_z*grav_z);
+  if (gmag < 0.1f) gmag = 0.1f;
+  float ux = grav_x/gmag, uy = grav_y/gmag, uz = grav_z/gmag;
+
+  // ピッチ: 先端(WAND_FORWARD)が上方向にどれだけ向いているか (-1..+1)
+  float pitch_sin = project_axis(ux, uy, uz, WAND_FORWARD);
+  // 動き成分 (静止判定用)
+  float lx = ax-grav_x, ly = ay-grav_y, lz = az-grav_z;
+  float lmag = sqrtf(lx*lx + ly*ly + lz*lz);
+
+  // --- 浮遊モード中: ピッチを連続送信 ---
+  if (levitation_until != 0) {
+    if ((int32_t)(now - levitation_until) >= 0) {
+      levitation_until = 0;            // タイムアウト → 浮遊終了
+      Serial.println("[WINGARDIUM] levitation end");
+      return;
+    }
+    if ((int32_t)(now - levit_next_send) >= 0) {
+      int b = (int)((pitch_sin + 1.0f) * 127.5f);   // -1..+1 → 0..255
+      if (b < 0) b = 0; if (b > 255) b = 255;
+      ble::emit_beacon(wand_beacon::TRIG_WINGARDIUM, (uint8_t)b, wand_beacon::TARGET_ALL);
+      levit_next_send = now + LEVIT_SEND_INTERVAL_MS;
+      last_motion_ms  = now;           // sleep 防止
+    }
+    return;  // 浮遊中は活性化判定しない
+  }
+
+  // --- 活性化判定: 上向き + 静止を継続 ---
+  if (pitch_sin > WINGARDIUM_PITCH_SIN && lmag < WINGARDIUM_STILL_LMAG) {
+    if (up_hold_since == 0) up_hold_since = now;
+    if (now - up_hold_since >= WINGARDIUM_HOLD_MS) {
+      levitation_until = now + LEVITATION_MS;   // 浮遊モード開始
+      levit_next_send  = now;
+      up_hold_since    = 0;
+      last_trigger_ms  = now;                   // 他ジェスチャのクールダウンと共有
+      Serial.println("[WINGARDIUM] activate → levitation");
+    }
+  } else {
+    up_hold_since = 0;  // 条件を外れたらリセット
+  }
+}
 }  // namespace detector
 
 // ============================================================
@@ -511,8 +583,9 @@ void handle_line(char* line) {
     case 'n': emit_named(wand_beacon::TRIG_NOX, target);       break;
     case 'i': emit_named(wand_beacon::TRIG_INCENDIO, target);  break;
     case 'a': emit_named(wand_beacon::TRIG_AGUAMENTI, target); break;
+    case 'w': detector::force_levitation(); break;  // Wingardium 浮遊モードを強制開始 (8s ピッチ連続送信)
     default:
-      Serial.println("[CMD] t/l/n/i/a | <id> <cmd> | gshow/gth=/gratio=/gcool=/galpha=/gsave/gdefault");
+      Serial.println("[CMD] t/l/n/i/a/w | <id> <cmd> | gshow/gth=/gratio=/gcool=/galpha=/gsave/gdefault");
       break;
   }
 }
@@ -538,7 +611,8 @@ void setup() {
   delay(500);
   Serial.println();
   Serial.println("=== Wand Beacon (gesture) ===");
-  Serial.println("Up-flick=LUMOS / Down-flick=NOX / Other-strong=SHAKE");
+  Serial.println("Up-flick=LUMOS / Down-flick=NOX / Thrust=INCENDIO");
+  Serial.println("Hold-up(0.8s)=WINGARDIUM levitation (pitch stream)");
   Serial.println("Adv burst: 500ms, Cooldown: 1s");
 
   wled::init();        // M5StickC 内蔵 LED (ready 表示用)
@@ -552,7 +626,7 @@ void setup() {
 
   gcfg::load();   // NVS からジェスチャ閾値を読み込み (無ければデフォルト)
   gcfg::print();
-  Serial.println("[CMD] t/l/n/i/a | <id> <cmd> | gshow/gth=/gratio=/gcool=/galpha=/gsave");
+  Serial.println("[CMD] t/l/n/i/a/w | <id> <cmd> | gshow/gth=/gratio=/gcool=/galpha=/gsave");
 
   // 重力推定を初期化 (起動直後の静止姿勢で 1 回読む)
   {
@@ -586,7 +660,9 @@ void loop() {
   float a = sqrtf(ax*ax + ay*ay + az*az);
 
   detector::update_gravity(ax, ay, az);
-  detector::check(ax, ay, az);
+  // 浮遊モード中は通常ジェスチャ判定を止める (上下の浮遊操作で LUMOS/NOX が誤発火しないよう)
+  if (!detector::is_levitating()) detector::check(ax, ay, az);
+  detector::poll_wingardium(ax, ay, az);  // 上向き保持で浮遊モード → ピッチ連続送信
   ble::poll_stop();
   wled::poll_button();            // A ボタンで LED フィードバック ON/OFF
   wled::update(detector::ready);

@@ -44,7 +44,9 @@ HP 杖プロトタイプ Phase 0: 振り検出 → BLE Advertising Beacon → LE
 proto_wand_to_led/
 ├── README.md            (このファイル)
 ├── docs/
-│   └── design.md        (詳細設計)
+│   ├── design.md        (詳細設計)
+│   ├── roadmap.md       (ロードマップ)
+│   └── phone_web_constraints.md  (杖→スマホ Web アプリの制約と現実的な構成)
 ├── shared/
 │   └── beacon_protocol.h  (ManufacturerData フォーマット共通定義)
 ├── wand_m5stickc/       (杖: M5StickC、PlatformIO プロジェクト)

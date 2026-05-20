@@ -29,7 +29,23 @@ constexpr uint8_t TRIG_LUMOS     = 0x10;  // Phase 1 上振り → 点灯
 constexpr uint8_t TRIG_NOX       = 0x11;  // Phase 1 下振り → 消灯
 constexpr uint8_t TRIG_INCENDIO  = 0x20;  // Phase 2 前突き → オレンジ flicker
 constexpr uint8_t TRIG_AGUAMENTI = 0x21;  // Phase 2 下流し → 青 fade
-// 0x22-0x2F は将来拡張用予約
+constexpr uint8_t TRIG_WINGARDIUM = 0x22; // Wingardium Leviosa 浮遊 (連続制御)
+// 0x23-0x2F は将来拡張用予約
+
+// --- Wingardium Leviosa (浮遊、連続制御) のプロトコル ---
+//   活性化: 杖を上向きに保持 (pitch 高 + 静止) を一定時間継続
+//   活性化後「浮遊モード」中、杖は trigger_id=TRIG_WINGARDIUM の adv を ~100ms 間隔で連続送信。
+//   その strength バイトに「ピッチ(上下の傾き)」を載せる:
+//     strength = 0   → 杖を真下向き (羽を最下部へ)
+//     strength = 128 → 水平        (羽を中央へ)
+//     strength = 255 → 真上向き    (羽を最上部へ)
+//   受信側 (スマホ等) の扱い:
+//     - TRIG_WINGARDIUM 受信で羽を表示し浮遊モードに入る
+//     - 後続パケットの strength を羽の Y 位置にマップ。**seq の重複排除はせず毎パケット反映**
+//       (連続制御のため。他の単発呪文は seq dedup する)
+//     - スロー・イージング (y += (target-y)*0.05 等) でゆっくり浮遊させる
+//     - ~1 秒 TRIG_WINGARDIUM が来なければ浮遊モード終了 (羽フェードアウト)
+constexpr uint8_t WINGARDIUM_PITCH_MID = 128;  // 水平に対応する strength 値
 
 // LED 点灯時間 (受信側で trigger_id ごとに分岐)
 constexpr uint32_t LED_DURATION_SHAKE_MS     = 250;   // SHAKE=魔法失敗 → 一瞬だけ点灯
