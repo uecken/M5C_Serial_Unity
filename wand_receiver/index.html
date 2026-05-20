@@ -62,6 +62,9 @@
     <div class="flex items-center gap-2 flex-wrap mb-3">
       <span id="support" class="mono text-[11px] px-2 py-1 rounded bg-slate-800 border border-slate-700">対応判定中…</span>
       <span id="state" class="mono text-[11px] px-2 py-1 rounded bg-slate-800 border border-slate-700">停止中</span>
+      <label class="text-[11px] flex items-center gap-1 cursor-pointer select-none px-2 py-1 rounded bg-slate-800 border border-slate-700" title="受信した全 BLE 広告を 0xFFFF 以外も含めてログに出す (切り分け用)">
+        <input type="checkbox" id="dbg"> 🐞 全広告ログ
+      </label>
       <button id="scanBtn" disabled
         class="ml-auto px-3 py-1.5 text-sm rounded-lg bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-slate-500 font-semibold">
         📡 スキャン開始
@@ -136,6 +139,7 @@
   const stateEl    = document.getElementById('state');
   const supportEl  = document.getElementById('support');
   const scanBtn    = document.getElementById('scanBtn');
+  const dbgEl      = document.getElementById('dbg');
 
   // ===== エフェクト制御 =====
   // baseOn = Lumos で点いた持続状態。pulse/flicker/fade は一時的に上書きし、終了後 base に戻る。
@@ -207,7 +211,15 @@
   let scan = null;
   let lastSeq = -1;
 
+  let advCount = 0;
   function onAdv(e) {
+    advCount++;
+    // デバッグ: 受信した全広告を出す (杖の 0xFFFF が出るか、そもそも広告が届くかの切り分け)
+    if (dbgEl && dbgEl.checked) {
+      const keys = [...((e.manufacturerData && e.manufacturerData.keys()) || [])]
+        .map(k => '0x' + Number(k).toString(16).padStart(4, '0'));
+      log(`· adv#${advCount} name="${e.device?.name || ''}" rssi=${e.rssi ?? '?'} mfg=[${keys.join(',')}]`, 'text-slate-500');
+    }
     const md = e.manufacturerData && e.manufacturerData.get(COMPANY_ID);
     if (!md || md.byteLength < 2) return;            // 杖以外の adv は無視
     const seq      = md.getUint8(0);
