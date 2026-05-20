@@ -50,6 +50,28 @@
     .stage.levitate .orb { opacity: .12; filter: blur(2px); }   /* 球体は控えめに */
     @keyframes featherSway { 0%,100% { rotate: -7deg } 50% { rotate: 7deg } }
 
+    /* ===== エクスペクト・パトローナム (守護霊) ===== */
+    #patronus { display: none; }
+    .stage.patronus #patronus {
+      display: flex; position: absolute; inset: 0; z-index: 8;
+      align-items: center; justify-content: center; pointer-events: none;
+      background: radial-gradient(circle at 50% 50%,
+                  rgba(186,230,253,.40) 0%, rgba(125,211,252,.14) 38%, transparent 70%);
+      animation: patronusBloom 6s ease-out forwards;
+    }
+    #patronus .pat-animal {
+      font-size: clamp(96px, 32vmin, 300px); line-height: 1;
+      filter: drop-shadow(0 0 28px rgba(224,242,254,.95)) drop-shadow(0 0 64px rgba(125,211,252,.75));
+      animation: patronusFloat 3s ease-in-out infinite;
+    }
+    @keyframes patronusBloom {
+      0%   { opacity: 0; transform: scale(.55); }
+      12%  { opacity: 1; transform: scale(1.06); }
+      85%  { opacity: 1; transform: scale(1); }
+      100% { opacity: 0; transform: scale(1.12); }
+    }
+    @keyframes patronusFloat { 0%,100% { translate: 0 -10px } 50% { translate: 0 10px } }
+
     .orb {
       --i: 0;
       --c: #fff7d6;
@@ -151,7 +173,8 @@
           <ul class="list-disc ml-5 mt-1 space-y-0.5">
             <li>杖を<b>上に振る</b> → 🔆 Lumos（光球が点灯・持続）</li>
             <li>杖を<b>下に振る</b> → 🌑 Nox（消灯）</li>
-            <li>杖を<b>前に突く</b> → 🔥 Incendio（オレンジ flicker）</li>
+            <li>杖を<b>横に振る</b> → 🔥 Incendio（オレンジ flicker）</li>
+            <li>杖を<b>前に突く</b> → 🦌 Expecto Patronum（守護霊が銀青の光と共に出現・6秒）</li>
             <li>※ Aguamenti は杖シリアルコマンド <span class="mono">a</span> で送信</li>
           </ul>
         </div>
@@ -167,7 +190,7 @@
           <b class="text-slate-100">③ 上映 (魔法の効果だけ見せる)</b>
           <ul class="list-disc ml-5 mt-1 space-y-0.5">
             <li><b>魔法画面（球体）をダブルタップ</b>で 拡大⇄通常 を切替（スキャンは継続）。PC は <b>Esc</b> でも戻れます</li>
-            <li>キーボード <span class="mono">L</span>=Lumos / <span class="mono">N</span>=Nox / <span class="mono">I</span>=Incendio / <span class="mono">A</span>=Aguamenti / <span class="mono">W</span>=Wingardium(浮遊) で手動発火（杖が無くても上映可）</li>
+            <li>キーボード <span class="mono">L</span>=Lumos / <span class="mono">N</span>=Nox / <span class="mono">I</span>=Incendio / <span class="mono">A</span>=Aguamenti / <span class="mono">W</span>=Wingardium(浮遊) / <span class="mono">P</span>=Patronum で手動発火（杖が無くても上映可）</li>
           </ul>
         </div>
         <div>
@@ -187,6 +210,8 @@
     <div class="stage rounded-2xl border border-slate-700 flex flex-col items-center justify-center py-10 mb-3 select-none">
       <div id="orb" class="orb"></div>
       <div id="feather">🪶</div>
+      <!-- Expecto Patronum: 守護霊 (発動中のみ表示) -->
+      <div id="patronus"><div class="pat-animal">🦌</div></div>
       <div id="spellLabel" class="mt-7 text-sm text-slate-400 min-h-[1.5rem]">呪文を待っています…</div>
       <!-- 魔力切れオーバーレイ (受信が途絶える=スキャン制限などで表示。全画面でも出る) -->
       <div id="manaMsg">
@@ -224,6 +249,7 @@
     0x20: { name: 'INCENDIO',  label: '🔥 インセンディオ',  color: '#ff7a18', mode: 'flicker', ms: 3000 },
     0x21: { name: 'AGUAMENTI', label: '💧 アグアメンティ',  color: '#38bdf8', mode: 'fade',    ms: 5000 },
     0x22: { name: 'WINGARDIUM', label: '🪶 ウィンガーディアム レヴィオーサ', color: '#dbeafe', mode: 'levitate', ms: 0 },
+    0x23: { name: 'EXPECTO_PATRONUM', label: '🦌 エクスペクト・パトローナム', color: '#bae6fd', mode: 'patronus', ms: 6000 },
   };
 
   const orb        = document.getElementById('orb');
@@ -280,6 +306,20 @@
 
     if (s.mode === 'on')  { baseOn = true;  baseColor = s.color; renderBase(); return; }
     if (s.mode === 'off') { baseOn = false; renderBase(); return; }
+
+    if (s.mode === 'patronus') {
+      // Expecto Patronum: 守護霊 (🦌) が銀青の光と共に出現し ms 後にフェード
+      setOrb(s.color, 1);                       // orb も銀青に強発光 (補助光)
+      stageEl.classList.remove('patronus');
+      void stageEl.offsetWidth;                 // reflow でアニメを毎回 頭から再生
+      stageEl.classList.add('patronus');
+      tempTimer = setTimeout(() => {
+        stageEl.classList.remove('patronus');
+        renderBase();
+        spellLabel.textContent = baseOn ? '🔆 点灯中' : '呪文を待っています…';
+      }, s.ms);
+      return;
+    }
 
     // strength(0-255) を明るさに反映
     const intensity = Math.max(0.55, Math.min(1, (Number(strength) || 200) / 255 + 0.25));
@@ -531,7 +571,7 @@
 
   // ===== キーボード操作 =====
   //   Esc: プレゼン解除 / l n i a s: 各呪文を手動発火 (杖が無くてもプレゼン可)
-  const KEY_SPELL = { l: 0x10, n: 0x11, i: 0x20, a: 0x21, w: 0x22 };
+  const KEY_SPELL = { l: 0x10, n: 0x11, i: 0x20, a: 0x21, w: 0x22, p: 0x23 };
 
   // 羽をタップ/クリックで浮遊を解除 (全画面でも戻れる)
   feather.addEventListener('click', (e) => { e.stopPropagation(); if (levitating) stopLevitate(); });
