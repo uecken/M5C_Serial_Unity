@@ -104,6 +104,16 @@
       </button>
     </div>
 
+    <!-- スマホモーション 調整パネル (「📱 スマホで魔法」ON 時のみ表示) -->
+    <div id="motionPanel" class="hidden items-center gap-3 flex-wrap mb-3 text-[11px] bg-sky-950/40 border border-sky-800 rounded-lg px-3 py-2">
+      <span id="motionHud" class="mono text-sky-200">|動き| --.--g</span>
+      <label class="flex items-center gap-2">感度(閾値)
+        <input type="range" id="flickRange" min="0.6" max="3.0" step="0.1" value="1.5" class="w-40 accent-sky-400">
+        <span id="flickVal" class="mono text-sky-200">1.5g</span>
+      </label>
+      <span class="text-slate-400">← 小さいほど敏感（弱い振りでも発動）</span>
+    </div>
+
     <!-- 使い方 (共有先の誰でも分かるように) -->
     <details class="mb-3 text-xs bg-slate-800/60 border border-slate-700 rounded-lg">
       <summary class="cursor-pointer px-3 py-2 font-semibold text-slate-200 select-none">▸ 使い方</summary>
@@ -385,7 +395,11 @@
   //   チェック ON 時のみ DeviceMotion を取得。静止中に重力を EMA 推定し、そこからの
   //   linear accel フリックを 上=Lumos / 下=Nox / その他=Shake に判定 (FW と同アルゴリズム)。
   //   重力基準なので持つ向きは自由。iOS/Android の accel 符号差にも up_proj は不変。
-  const motionEl = document.getElementById('motion');
+  const motionEl    = document.getElementById('motion');
+  const motionPanel = document.getElementById('motionPanel');
+  const motionHud   = document.getElementById('motionHud');
+  const flickRange  = document.getElementById('flickRange');
+  const flickVal    = document.getElementById('flickVal');
   const G = 9.80665;                    // 1g [m/s^2]
   const MCFG = {
     flickTh:     1.5,    // linear accel 閾値 [g]            (FW: DEF_FLICK_THRESHOLD_G)
@@ -396,10 +410,12 @@
   };
   let gX = 0, gY = 0, gZ = 1, gravReady = false;   // 重力推定 [g]
   let lastFlickMs = 0;
+  let peakLin = 0, lastHudMs = 0, motionEvt = 0, noMotionTimer = null;
 
   function onMotion(ev) {
     const a = ev.accelerationIncludingGravity;
     if (!a || a.x == null) return;
+    motionEvt++;
     const ax = a.x / G, ay = a.y / G, az = a.z / G;          // m/s^2 → g
     const amag = Math.hypot(ax, ay, az);
     if (!gravReady) { gX = ax; gY = ay; gZ = az; gravReady = true; return; }
@@ -415,6 +431,17 @@
     const lx = ax - gX, ly = ay - gY, lz = az - gZ;          // linear = 生 − 重力
     const lmag = Math.hypot(lx, ly, lz);
     const now = Date.now();
+
+    // ライブ表示: 閾値の前に毎回更新 (モーションが読めているか/どれだけ振れているかを可視化)
+    if (lmag > peakLin) peakLin = lmag;
+    if (now - lastHudMs >= 120) {
+      lastHudMs = now;
+      const over = peakLin >= MCFG.flickTh;
+      motionHud.textContent = `|動き|ピーク ${peakLin.toFixed(2)}g / 閾 ${MCFG.flickTh.toFixed(1)}g`;
+      motionHud.className = 'mono ' + (over ? 'text-emerald-300 font-bold' : 'text-sky-200');
+      peakLin = 0;
+    }
+
     if (lmag < MCFG.flickTh || (now - lastFlickMs) <= MCFG.cooldownMs) return;
 
     const upProj  = lx * ux + ly * uy + lz * uz;             // 鉛直成分 (符号付き)
@@ -448,14 +475,33 @@
       }
     }
     gravReady = false;
+    peakLin = 0; motionEvt = 0;
     window.addEventListener('devicemotion', onMotion);
+    motionPanel.classList.remove('hidden'); motionPanel.classList.add('flex');
     log('📱 スマホモーション ON — 少し静止 → 上/下に素早く振って (Lumos/Nox)', 'text-sky-300');
+    // 無イベント検出: 2.5秒で1件も来なければ PC/権限/非対応を疑う
+    clearTimeout(noMotionTimer);
+    noMotionTimer = setTimeout(() => {
+      if (motionEvt === 0) {
+        log('⚠ モーションイベントが届きません。PC では出ません/権限拒否/端末がセンサ非対応の可能性。', 'text-rose-300');
+        motionHud.textContent = '|動き| イベント無し';
+        motionHud.className = 'mono text-rose-300';
+      }
+    }, 2500);
   }
   function disableMotion() {
     window.removeEventListener('devicemotion', onMotion);
+    clearTimeout(noMotionTimer);
+    motionPanel.classList.add('hidden'); motionPanel.classList.remove('flex');
+    motionHud.textContent = '|動き| --.--g';
+    motionHud.className = 'mono text-sky-200';
     log('📱 スマホモーション OFF', 'text-slate-400');
   }
   motionEl.addEventListener('change', () => { motionEl.checked ? enableMotion() : disableMotion(); });
+  if (flickRange) flickRange.addEventListener('input', () => {
+    MCFG.flickTh = parseFloat(flickRange.value);
+    flickVal.textContent = MCFG.flickTh.toFixed(1) + 'g';
+  });
 
   // ===== 手動テストボタン (BLE 無しでも全端末でエフェクト確認) =====
   const simRow = document.getElementById('simRow');
