@@ -1,0 +1,7 @@
+# PlatformIO build artifacts
+.pio/
+*.pio/
+# PlatformIO local config
+.pioenvs/
+.piolibdeps/
+.vscode/
