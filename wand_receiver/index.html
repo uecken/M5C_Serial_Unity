@@ -120,6 +120,8 @@
     /* プレゼン時はステージをダブルタップ操作対象に (テキスト選択/タップ遅延を抑制) */
     body.presentation .stage { cursor: pointer; touch-action: manipulation; }
   </style>
+  <!-- esp-web-tools: ブラウザ(Web Serial)から ESP32 へ FW 書き込み -->
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen">
   <!-- プレゼン突入時の戻り方ヒント (body 直下に置き、プレゼン CSS で隠されないようにする) -->
@@ -136,6 +138,19 @@
       </div>
       <a href="../" class="text-xs text-violet-300 hover:text-violet-200 hover:underline whitespace-nowrap">← 設定アプリへ戻る</a>
     </header>
+
+    <!-- 杖ファーム書き込み (Web Serial / esp-web-tools)。COM ポート番号不要。PC版 Chrome / Edge のみ -->
+    <details class="mb-3 text-xs bg-amber-950/40 border border-amber-800 rounded-lg">
+      <summary class="cursor-pointer px-3 py-2 font-semibold text-amber-200 select-none">🔧 杖ファームを書き込む（M5StickC・WOM版／Web Serial）</summary>
+      <div class="px-3 pb-3 pt-1 flex items-center gap-3 flex-wrap text-slate-300">
+        <esp-web-install-button manifest="./firmware/wand/manifest.json">
+          <button slot="activate" class="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 font-semibold text-white">⚡ 書き込む</button>
+          <span slot="unsupported" class="text-rose-300">このブラウザは Web Serial 非対応（PC版 Chrome / Edge を使用）</span>
+          <span slot="not-allowed" class="text-rose-300">HTTPS でのみ動作します</span>
+        </esp-web-install-button>
+        <span class="text-slate-400 text-[11px]">M5StickC を USB 接続 → ⚡書き込む → 表示されたポートを選択。<b class="text-amber-200">COM 番号は不要</b>。スリープ中は <b>Button A</b> か振って起こしてから。</span>
+      </div>
+    </details>
 
     <!-- 対応状況 + スキャン制御 -->
     <div class="flex items-center gap-2 flex-wrap mb-3">
