@@ -467,35 +467,36 @@
       return;
     }
     try {
-      scan = await navigator.bluetooth.requestLEScan({
-        acceptAllAdvertisements: true,   // company_id は JS 側でフィルタ (ambient 広告を魔力ハートビートに利用)
-        keepRepeatedDevices: true,       // 杖は再送するので毎パケット拾う
-      });
+      // 杖(0xFFFF)だけをメーカーフィルタで受信 → 他機の広告を拾わず負荷減・スキャン制限も受けにくい。
+      // 非対応環境(古い Chrome 等)は acceptAll にフォールバック。
+      try {
+        scan = await navigator.bluetooth.requestLEScan({
+          filters: [{ manufacturerData: [{ companyIdentifier: COMPANY_ID }] }],
+          keepRepeatedDevices: true,     // 杖は連続送信するので毎パケット拾う
+        });
+        log('スキャン開始 (杖 0xFFFF のみフィルタ受信)', 'text-violet-300');
+      } catch (eFilter) {
+        scan = await navigator.bluetooth.requestLEScan({
+          acceptAllAdvertisements: true, keepRepeatedDevices: true,
+        });
+        log('スキャン開始 (フィルタ非対応 → 全広告受信にフォールバック)', 'text-amber-300');
+      }
       lastScanStartMs = Date.now();
       navigator.bluetooth.addEventListener('advertisementreceived', onAdv);
       stateEl.textContent = '🟢 スキャン中';
       stateEl.className = 'mono text-[11px] px-2 py-1 rounded bg-emerald-900 border border-emerald-600 text-emerald-200';
       scanBtn.textContent = '⏹ スキャン停止';
-      log('スキャン開始 (周辺の BLE 広告を待機中…)', 'text-violet-300');
 
       advCount = 0; updateCount();
       clearMana();
       lastAdvMs = Date.now();
-      // 魔力ウォッチドッグ: WATCHDOG_MS 秒 広告が途絶えたら「魔力切れ」表示
-      //   (acceptAll なので通常は周辺機器の広告が常時届く → 無音=スキャン制限/アダプタ異常)
-      clearInterval(watchdog);
-      watchdog = setInterval(() => {
-        if (!scan) return;
-        if (Date.now() - lastAdvMs > WATCHDOG_MS) {
-          setMana(true, advCount === 0
-            ? `スキャン開始後 ${WATCHDOG_MS / 1000}秒、広告を1件も受信できません`
-            : `受信が ${WATCHDOG_MS / 1000}秒以上 途絶えました`);
-        }
-      }, 2000);
+      // フィルタ時は「無音 = 杖が呪文を出していない待機中」が正常なので、
+      // 無音による自動「魔力切れ」は廃止。魔力切れはスキャン開始失敗時のみ表示する。
+      clearInterval(watchdog); watchdog = null;
     } catch (err) {
       log('スキャン開始失敗: ' + err.message, 'text-rose-400');
-      log('  → 許可ダイアログをキャンセルした / フラグ未有効 / アダプタ無効 などが原因。', 'text-rose-400');
-      setMana(true, 'スキャンを開始できませんでした');
+      log('  → 許可をキャンセル / フラグ未有効 / アダプタ無効 / BT OFF などが原因。', 'text-rose-400');
+      setMana(true, 'スキャンを開始できませんでした (Bluetooth ON・許可を確認)');
     }
   }
   function stopScan() {
