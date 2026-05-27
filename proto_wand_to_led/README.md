@@ -59,7 +59,11 @@ proto_wand_to_led/
 │   ├── README.md
 │   ├── platformio.ini
 │   └── src/{main.cpp, device_config.h}
-└── led_xiao_nrf52840/   (LED 受信: XIAO nRF52840、Bluefruit scan。PlatformIO プロジェクト)
+├── led_xiao_nrf52840/   (LED 受信: XIAO nRF52840、Bluefruit scan。ケース内・電池・単色LED)
+│   ├── platformio.ini
+│   └── src/main.cpp
+└── led_xiao_esp32c3_ws2812b/  (LED 受信: XIAO ESP32-C3 + WS2812B。ケース外・外部5V・空中演出)
+    ├── README.md
     ├── platformio.ini
     └── src/main.cpp
 ```
