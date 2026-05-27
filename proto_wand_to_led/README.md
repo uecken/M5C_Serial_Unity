@@ -46,16 +46,29 @@ proto_wand_to_led/
 ├── docs/
 │   ├── design.md        (詳細設計)
 │   ├── roadmap.md       (ロードマップ)
-│   └── phone_web_constraints.md  (杖→スマホ Web アプリの制約と現実的な構成)
+│   ├── phone_web_constraints.md  (杖→スマホ Web アプリの制約と現実的な構成)
+│   └── patent_landscape.md       (杖デバイスの特許調査: FTO 見立て / 自社出願余地)
 ├── shared/
-│   └── beacon_protocol.h  (ManufacturerData フォーマット共通定義)
-├── wand_m5stickc/       (杖: M5StickC、PlatformIO プロジェクト)
+│   ├── beacon_protocol.h  (ManufacturerData フォーマット共通定義)
+│   ├── wand_common.h      (杖共通定数: SLEEP_AFTER_SEC 等)
+│   └── wand_gesture.h     (★ジェスチャ判定コア: 重力基準フリック + Wingardium。M5/XIAO で共用)
+├── wand_m5stickc/       (杖: M5StickC + MPU6886、NimBLE。PlatformIO プロジェクト)
 │   ├── platformio.ini
-│   └── src/main.cpp
-└── led_xiao_nrf52840/   (LED: XIAO nRF52840、PlatformIO プロジェクト)
+│   └── src/{main.cpp, device_config.h}
+├── wand_xiao_nrf52840/  (杖: XIAO nRF52840 Sense + LSM6DS3TR-C、Bluefruit。★移植中→README 参照)
+│   ├── README.md
+│   ├── platformio.ini
+│   └── src/{main.cpp, device_config.h}
+└── led_xiao_nrf52840/   (LED 受信: XIAO nRF52840、Bluefruit scan。PlatformIO プロジェクト)
     ├── platformio.ini
     └── src/main.cpp
 ```
+
+**ジェスチャ判定の共通化**: `wand_m5stickc` と `wand_xiao_nrf52840` は判定ロジックを
+`shared/wand_gesture.h` の `wand_gesture::Detector` として共有する。各機の main.cpp は
+プラットフォーム依存部 (BLE 送信 / IMU 読み / LED / ボタン / 設定永続化) のみを実装し、
+`Detector` に BLE 送信関数と LED フラッシュ関数を**関数ポインタで注入**する。
+軸マウント (`WAND_FORWARD/RIGHT`) と閾値は `device_config.h` / `det.cfg` で機体ごとに設定。
 
 ## ビルド・書き込み手順
 
@@ -138,6 +151,25 @@ Phase 0 立ち上げで詰まったポイント。同じ HW を使う際は必�
 | **XIAO nRF52840** | **`$true`** | **`$true`** | USB CDC が host 接続 (DTR) を検出して初めて出力する |
 
 `pio device monitor` は ESP32 のリセットシーケンスを正しく扱うので、手動 SerialPort より楽。
+
+### 5. nRF52 ハードウェア I2C (TWIM) はタイムアウトが無くハングする ★XIAO 杖移植で判明
+
+- Adafruit nRF52 core の `Wire`/`Wire1` (`Wire_nRF52.cpp`) は `while(!_p_twim->EVENTS_STOPPED);` 等
+  **タイムアウト無しの待ちループ**を持つ。I2C スレーブが ACK を返さない/バスが不安定だと**無限ループでハング**する。
+- 症状: `setup()` 内の最初の I2C 読み (WHO_AM_I 等) で停止 → `loop()` に到達せず**シリアルに何も出ない**。
+  USB CDC は別 FreeRTOS タスクで生き続けるので**ポートは見えたまま**=「動いてるのに無言」で紛らわしい。
+- 切り分け: `setup()` 各所に `Serial.println("step..."); Serial.flush();` を仕込み、最後に出た行の直後が原因。
+- **対策: 該当 I2C を bit-bang(ソフト I2C) に切替**。クロックを自前で刻むのでハングしない
+  (実装例: `wand_xiao_nrf52840/src/main.cpp` の `imu::bb` 名前空間)。
+- 補足: `Wire` コンストラクタは `g_ADigitalPinMap[]` で Arduino ピン→絶対 GPIO 変換するので、
+  Wire1 のピン指定自体は正しい。ハングは純粋に TWIM のタイムアウト欠如が原因。
+
+### 6. ハングした FW は 1200bps タッチ DFU に応答しない → RESET 2 連打が確実
+
+- 通常は `pio run -t upload` が 1200bps タッチで自動 DFU 入場するが、**チップ上の FW が
+  ハングしていると応答せず**、`adafruit-nrfutil` が "No data received... Not in DFU mode" で失敗する。
+- **確実: RESET 2 連打 → `XIAO-SENSE` ドライブ → `firmware.uf2` をコピー**。
+  hex→uf2: `python <framework-arduinoadafruitnrf52>/tools/uf2conv/uf2conv.py firmware.hex -c -f 0xADA52840 -o firmware.uf2`
 
 ## 次のステップ (Phase 1+)
 

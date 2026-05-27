@@ -1771,6 +1771,7 @@ function App() {
       <div>
         <h1 class="text-2xl font-bold">🎮 Burst Motion — 設定アプリ</h1>
         <p class="text-sm text-slate-500">Web Serial (USB) / Web Bluetooth (BLE NUS) 両対応 — Phase 2</p>
+        <a href="./wand_receiver/" class="text-xs text-violet-600 hover:text-violet-700 hover:underline">🪄 杖 BLE 受信デモ (Lumos / Nox) →</a>
       </div>
       <div class="flex items-center gap-3 flex-wrap">
         <!-- 大型ボタン状態インジケータ (常時表示、Stream ON/OFF 不問) -->

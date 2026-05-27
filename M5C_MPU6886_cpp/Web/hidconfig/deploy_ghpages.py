@@ -110,6 +110,21 @@ def main():
             except Exception as e:
                 print(f'[FW] manifest update warning: {e}')
 
+    # 杖 FW (proto_wand_to_led/wand_m5stickc, env=m5stick-c-wom) を
+    # wand_receiver/firmware/wand/ にコピー (wand_receiver ページの esp-web-tools フラッシャ用)。
+    # boot_app0.bin は静的なので再コピー不要。
+    wand_build = SRC_DIR.parents[2] / 'proto_wand_to_led' / 'wand_m5stickc' / '.pio' / 'build' / 'm5stick-c-wom'
+    wand_target = SRC_DIR / 'wand_receiver' / 'firmware' / 'wand'
+    if wand_build.is_dir() and wand_target.is_dir():
+        wcopied = []
+        for fname in ['firmware.bin', 'bootloader.bin', 'partitions.bin']:
+            src = wand_build / fname
+            if src.is_file():
+                shutil.copy2(src, wand_target / fname)
+                wcopied.append(fname)
+        if wcopied:
+            print(f'[FW] wand copied to wand_receiver/firmware/wand/: {", ".join(wcopied)}')
+
     print(f'[1/3] Syncing {SRC_DIR} -> {GH_DIR}')
 
     # gh-pages 側にあって、source 側に無いファイルを削除 (但し EXCLUDE と GHPAGES_README.md は維持)

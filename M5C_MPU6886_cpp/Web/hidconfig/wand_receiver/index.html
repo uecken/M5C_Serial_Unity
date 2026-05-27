@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- ブラウザキャッシュ無効化 (本体 deploy_ghpages.py のサブディレクトリなので __BUILD_VERSION__ 置換は効かない) -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>🪄 杖 BLE 受信デモ — Lumos / Nox</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* --i: 発光強度 0..1、--c: 発光色。@property 登録で transition / animation 可能にする */
+    @property --i { syntax: '<number>'; inherits: false; initial-value: 0; }
+
+    body { font-family: 'Hiragino Sans', 'Meiryo', system-ui, sans-serif; }
+    .mono { font-family: 'Cascadia Code', 'Consolas', monospace; }
+
+    .stage {
+      background: radial-gradient(circle at 50% 40%, #131a2e 0%, #070a14 70%, #03050b 100%);
+      cursor: pointer;
+      touch-action: manipulation;   /* 通常時もダブルタップズーム抑止 + タップ遅延除去 */
+      position: relative;           /* 魔力切れオーバーレイの基準 */
+    }
+
+    /* ===== 魔力切れ (受信途絶/スキャン制限) ===== */
+    #manaMsg { display: none; }
+    .stage.mana #manaMsg {
+      display: flex; position: absolute; inset: 0; z-index: 10;
+      flex-direction: column; align-items: center; justify-content: center; text-align: center;
+      background: rgba(3,5,11,0.6); backdrop-filter: blur(1px); border-radius: inherit;
+      animation: manaPulse 1.6s ease-in-out infinite;
+    }
+    .stage.mana .orb { filter: grayscale(1) brightness(.35); }   /* 球体を魔力切れ表現 */
+    @keyframes manaPulse { 0%,100% { opacity: .82 } 50% { opacity: 1 } }
+
+    /* ===== ウィンガーディアム・レヴィオーサ (浮遊する羽) ===== */
+    #feather { display: none; }
+    .stage.levitate #feather {
+      display: block;
+      position: absolute; left: 50%; top: 50%;
+      /* 中央寄せ + JS が --fy(縦オフセット px) を設定。rotate は別プロパティで揺れ演出 */
+      transform: translate(-50%, calc(-50% + var(--fy, 0px)));
+      transition: transform .03s linear;     /* rAF の追従が主体。CSS 側はほぼ遅延なし */
+      font-size: clamp(72px, 26vmin, 220px); line-height: 1;
+      filter: drop-shadow(0 0 18px rgba(219,234,254,.6));
+      cursor: pointer; z-index: 6; will-change: transform, rotate;
+      animation: featherSway 3.6s ease-in-out infinite;
+    }
+    .stage.levitate .orb { opacity: .12; filter: blur(2px); }   /* 球体は控えめに */
+    @keyframes featherSway { 0%,100% { rotate: -7deg } 50% { rotate: 7deg } }
+
+    /* ===== エクスペクト・パトローナム (守護霊) ===== */
+    #patronus { display: none; }
+    .stage.patronus #patronus {
+      display: flex; position: absolute; inset: 0; z-index: 8;
+      align-items: center; justify-content: center; pointer-events: none;
+      background: radial-gradient(circle at 50% 50%,
+                  rgba(186,230,253,.40) 0%, rgba(125,211,252,.14) 38%, transparent 70%);
+      animation: patronusBloom 6s ease-out forwards;
+    }
+    #patronus .pat-animal {
+      font-size: clamp(96px, 32vmin, 300px); line-height: 1;
+      filter: drop-shadow(0 0 28px rgba(224,242,254,.95)) drop-shadow(0 0 64px rgba(125,211,252,.75));
+      animation: patronusFloat 3s ease-in-out infinite;
+    }
+    @keyframes patronusBloom {
+      0%   { opacity: 0; transform: scale(.55); }
+      12%  { opacity: 1; transform: scale(1.06); }
+      85%  { opacity: 1; transform: scale(1); }
+      100% { opacity: 0; transform: scale(1.12); }
+    }
+    @keyframes patronusFloat { 0%,100% { translate: 0 -10px } 50% { translate: 0 10px } }
+
+    .orb {
+      --i: 0;
+      --c: #fff7d6;
+      width: clamp(160px, 48vw, 240px);
+      aspect-ratio: 1;
+      border-radius: 50%;
+      background: radial-gradient(circle at 36% 30%,
+          rgba(255,255,255, calc(var(--i) * 0.95)) 0%,
+          color-mix(in srgb, var(--c) calc(var(--i) * 100%), #0c1120) 55%,
+          #0c1120 100%);
+      box-shadow:
+        0 0 calc(var(--i) * 130px) calc(var(--i) * 34px) color-mix(in srgb, var(--c) 75%, transparent),
+        inset 0 0 40px rgba(0,0,0,0.55);
+      transition: --i .55s ease, box-shadow .55s ease, background .55s ease;
+    }
+    .orb.flicker { animation: flick .16s infinite; }
+    .orb.pulse   { animation: pulse 1.1s ease-in-out infinite; }
+
+    @keyframes flick {
+      0%,100% { --i: .9 }  22% { --i: .35 } 48% { --i: 1 } 66% { --i: .5 } 84% { --i: .8 }
+    }
+    @keyframes pulse {
+      0%,100% { --i: .35 } 50% { --i: 1 }
+    }
+
+    /* ===== プレゼンモード (魔法の効果=球体だけを全画面表示) ===== */
+    body.presentation { overflow: hidden; background: #03050b; }
+    body.presentation .max-w-3xl { max-width: none; margin: 0; padding: 0; }
+    /* コンテナ直下の子のうち、ステージ以外を全て隠す (ヘッダ/制御/ログ等) */
+    body.presentation .max-w-3xl > *:not(.stage) { display: none !important; }
+    body.presentation #spellLabel { display: none; }
+    body.presentation .stage {
+      position: fixed; inset: 0; min-height: 100vh; min-height: 100dvh;
+      margin: 0; border: none; border-radius: 0;
+    }
+    body.presentation .orb { width: clamp(240px, 62vmin, 640px); }
+
+    /* 戻り方ヒント (プレゼン突入時に数秒だけ表示) */
+    #presentHint { display: none; }
+    body.presentation #presentHint {
+      display: block; position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+      z-index: 50; opacity: 0; transition: opacity .5s; pointer-events: none; white-space: nowrap;
+    }
+    body.presentation #presentHint.hint-show { opacity: .85; }
+
+    /* プレゼン時はステージをダブルタップ操作対象に (テキスト選択/タップ遅延を抑制) */
+    body.presentation .stage { cursor: pointer; touch-action: manipulation; }
+  </style>
+  <!-- esp-web-tools: ブラウザ(Web Serial)から ESP32 へ FW 書き込み -->
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+  <!-- プレゼン突入時の戻り方ヒント (body 直下に置き、プレゼン CSS で隠されないようにする) -->
+  <div id="presentHint" class="text-xs text-slate-200 bg-slate-900/75 px-4 py-1.5 rounded-full backdrop-blur border border-slate-600">
+    ダブルタップで通常画面へ戻る（PC は Esc も可）
+  </div>
+  <div class="max-w-3xl mx-auto p-4">
+
+    <!-- ヘッダー -->
+    <header class="flex items-center justify-between gap-3 flex-wrap mb-3">
+      <div>
+        <h1 class="text-xl font-bold">🪄 杖 BLE 受信デモ</h1>
+        <p class="text-xs text-slate-400">BLE Advertising (Manufacturer Data 0xFFFF) を受信して魔法エフェクトを再生 — Lumos / Nox / Incendio / Aguamenti</p>
+      </div>
+      <a href="../" class="text-xs text-violet-300 hover:text-violet-200 hover:underline whitespace-nowrap">← 設定アプリへ戻る</a>
+    </header>
+
+    <!-- 杖ファーム書き込み (Web Serial / esp-web-tools)。COM ポート番号不要。PC版 Chrome / Edge のみ -->
+    <details class="mb-3 text-xs bg-amber-950/40 border border-amber-800 rounded-lg">
+      <summary class="cursor-pointer px-3 py-2 font-semibold text-amber-200 select-none">🔧 杖ファームを書き込む（M5StickC・WOM版／Web Serial）</summary>
+      <div class="px-3 pb-3 pt-1 flex items-center gap-3 flex-wrap text-slate-300">
+        <esp-web-install-button manifest="./firmware/wand/manifest.json">
+          <button slot="activate" class="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 font-semibold text-white">⚡ 書き込む</button>
+          <span slot="unsupported" class="text-rose-300">このブラウザは Web Serial 非対応（PC版 Chrome / Edge を使用）</span>
+          <span slot="not-allowed" class="text-rose-300">HTTPS でのみ動作します</span>
+        </esp-web-install-button>
+        <span class="text-slate-400 text-[11px]">M5StickC を USB 接続 → ⚡書き込む → 表示されたポートを選択。<b class="text-amber-200">COM 番号は不要</b>。スリープ中は <b>Button A</b> か振って起こしてから。</span>
+      </div>
+    </details>
+
+    <!-- 対応状況 + スキャン制御 -->
+    <div class="flex items-center gap-2 flex-wrap mb-3">
+      <span id="support" class="mono text-[11px] px-2 py-1 rounded bg-slate-800 border border-slate-700">対応判定中…</span>
+      <span id="state" class="mono text-[11px] px-2 py-1 rounded bg-slate-800 border border-slate-700">停止中</span>
+      <span id="advCount" class="mono text-[11px] px-2 py-1 rounded bg-slate-800 border border-slate-700" title="スキャン開始後に受信した全 BLE 広告の件数 (杖以外も含む)">受信 0件</span>
+      <label class="text-[11px] flex items-center gap-1 cursor-pointer select-none px-2 py-1 rounded bg-slate-800 border border-slate-700" title="受信した全 BLE 広告を 0xFFFF 以外も含めてログに出す (切り分け用)">
+        <input type="checkbox" id="dbg"> 🐞 全広告ログ
+      </label>
+      <label class="text-[11px] flex items-center gap-1 cursor-pointer select-none px-2 py-1 rounded bg-sky-900 border border-sky-700" title="スマホ本体を振って魔法を発動 (重力基準フリック検出)。BLE 不要・iPhone でも可。静止→上/下フリックで Lumos/Nox">
+        <input type="checkbox" id="motion"> 📱 スマホで魔法
+      </label>
+      <button id="scanBtn" disabled
+        class="ml-auto px-3 py-1.5 text-sm rounded-lg bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-slate-500 font-semibold">
+        📡 スキャン開始
+      </button>
+    </div>
+
+    <!-- スマホモーション 調整パネル (「📱 スマホで魔法」ON 時のみ表示) -->
+    <div id="motionPanel" class="hidden items-center gap-3 flex-wrap mb-3 text-[11px] bg-sky-950/40 border border-sky-800 rounded-lg px-3 py-2">
+      <span id="motionHud" class="mono text-sky-200">|動き| --.--g</span>
+      <label class="flex items-center gap-2">感度(閾値)
+        <input type="range" id="flickRange" min="0.6" max="3.0" step="0.1" value="1.5" class="w-40 accent-sky-400">
+        <span id="flickVal" class="mono text-sky-200">1.5g</span>
+      </label>
+      <span class="text-slate-400">← 小さいほど敏感（弱い振りでも発動）</span>
+    </div>
+
+    <!-- 使い方 (共有先の誰でも分かるように) -->
+    <details class="mb-3 text-xs bg-slate-800/60 border border-slate-700 rounded-lg">
+      <summary class="cursor-pointer px-3 py-2 font-semibold text-slate-200 select-none">▸ 使い方</summary>
+      <div class="px-3 pb-3 space-y-2 text-slate-300">
+        <div>
+          <b class="text-slate-100">① 杖の操作 → 画面が反応</b>
+          <ul class="list-disc ml-5 mt-1 space-y-0.5">
+            <li>杖を<b>上に振る</b> → 🔆 Lumos（光球が点灯・持続）</li>
+            <li>杖を<b>下に振る</b> → 🌑 Nox（消灯）</li>
+            <li>杖を<b>横に振る</b> → 🔥 Incendio（オレンジ flicker）</li>
+            <li>杖を<b>前に突く</b> → 🦌 Expecto Patronum（守護霊が銀青の光と共に出現・6秒）</li>
+            <li>※ Aguamenti は杖シリアルコマンド <span class="mono">a</span> で送信</li>
+          </ul>
+        </div>
+        <div>
+          <b class="text-slate-100">② このページ側</b>
+          <ol class="list-decimal ml-5 mt-1 space-y-0.5">
+            <li>Android Chrome / PC Chrome・Edge で開く（iPhone 不可）</li>
+            <li>初回のみ <span class="mono">chrome://flags/#enable-experimental-web-platform-features</span> を有効化して再起動</li>
+            <li>上の「📡 スキャン開始」を押し、Bluetooth スキャンを許可</li>
+          </ol>
+        </div>
+        <div>
+          <b class="text-slate-100">③ 上映 (魔法の効果だけ見せる)</b>
+          <ul class="list-disc ml-5 mt-1 space-y-0.5">
+            <li><b>魔法画面（球体）をダブルタップ</b>で 拡大⇄通常 を切替（スキャンは継続）。PC は <b>Esc</b> でも戻れます</li>
+            <li>キーボード <span class="mono">L</span>=Lumos / <span class="mono">N</span>=Nox / <span class="mono">I</span>=Incendio / <span class="mono">A</span>=Aguamenti / <span class="mono">W</span>=Wingardium(浮遊) / <span class="mono">P</span>=Patronum で手動発火（杖が無くても上映可）</li>
+          </ul>
+        </div>
+        <div>
+          <b class="text-slate-100">④ スマホ自体を杖にする (BLE 不要・iPhone でも可)</b>
+          <ul class="list-disc ml-5 mt-1 space-y-0.5">
+            <li><b>「📱 スマホで魔法」</b>にチェック（iPhone はモーション権限の許可が出る → 許可）</li>
+            <li>スマホを<b>少し静止</b>させてから <b>上に素早く振る → Lumos</b> / <b>下に振る → Nox</b>（上下が不明瞭な振りは無反応）</li>
+            <li>重力基準フリック検出なので持つ向きは自由。ダブルタップで全画面にして振ると映えます</li>
+            <li>🪶 <b>ウィンガーディアム・レヴィオーサ</b>：<b>上フリックを2連</b>（スマホ）/ キー <span class="mono">W</span> / 手動ボタン / 杖 BLE で起動 → 羽が出現。<b>スマホを上に傾けると羽が上、下げると下へ浮遊</b>。羽をタップで解除</li>
+          </ul>
+        </div>
+        <p class="text-slate-400">BLE が使えない端末でも、「📱 スマホで魔法」や下の「手動テスト」ボタン・キーボードでエフェクトを出せます。</p>
+      </div>
+    </details>
+
+    <!-- ステージ (光球) -->
+    <div class="stage rounded-2xl border border-slate-700 flex flex-col items-center justify-center py-10 mb-3 select-none">
+      <div id="orb" class="orb"></div>
+      <div id="feather">🪶</div>
+      <!-- Expecto Patronum: 守護霊 (発動中のみ表示) -->
+      <div id="patronus"><div class="pat-animal">🦌</div></div>
+      <div id="spellLabel" class="mt-7 text-sm text-slate-400 min-h-[1.5rem]">呪文を待っています…</div>
+      <!-- 魔力切れオーバーレイ (受信が途絶える=スキャン制限などで表示。全画面でも出る) -->
+      <div id="manaMsg">
+        <div class="text-4xl font-bold text-rose-300">🪫 魔力切れ</div>
+        <div class="mana-sub text-xs text-rose-200/80 mt-1">魔力（BLE 広告）が途絶えました</div>
+        <div class="text-[11px] text-slate-300 mt-2">Bluetooth を OFF→ON して「スキャン開始」で魔力を回復</div>
+      </div>
+    </div>
+
+    <!-- 手動テスト (BLE 無しでも、どの端末でも見た目を確認できる) -->
+    <div class="mb-3">
+      <p class="text-[11px] text-slate-400 mb-1">手動テスト（BLE 不要・iPhone でも見た目だけ確認可）</p>
+      <div class="flex gap-2 flex-wrap" id="simRow"></div>
+    </div>
+
+    <!-- 受信ログ -->
+    <div class="bg-slate-950 border border-slate-800 rounded-lg p-2 h-44 overflow-y-auto mono text-[11px] leading-relaxed" id="log">
+      <div class="text-slate-600">受信ログ…</div>
+    </div>
+
+    <!-- 注意書き -->
+    <div class="mt-3 text-[11px] text-slate-500 space-y-1">
+      <p>⚠ BLE 受信は <b>Android Chrome / PC Chrome・Edge</b> のみ。<b>iPhone・iPad は Web Bluetooth 非対応</b>（手動テストの見た目だけ動作）。</p>
+      <p>⚠ Chrome では <span class="mono text-slate-400">chrome://flags/#enable-experimental-web-platform-features</span> を有効化し再起動が必要（Advertising スキャン API は実験機能）。</p>
+      <p>⚠ HTTPS 必須・スキャン開始はボタン操作が起点・画面を表示している間だけ受信（バックグラウンド常駐不可）。</p>
+    </div>
+  </div>
+
+  <script>
+  // ===== 杖プロトコル (shared/beacon_protocol.h と一致) =====
+  const COMPANY_ID = 0xFFFF;
+  const SPELLS = {
+    0x10: { name: 'LUMOS',     label: '🔆 ルーモス (点灯)', color: '#fff3c4', mode: 'on',      ms: 0 },
+    0x11: { name: 'NOX',       label: '🌑 ノックス (消灯)', color: '#000000', mode: 'off',     ms: 0 },
+    0x20: { name: 'INCENDIO',  label: '🔥 インセンディオ',  color: '#ff7a18', mode: 'flicker', ms: 3000 },
+    0x21: { name: 'AGUAMENTI', label: '💧 アグアメンティ',  color: '#38bdf8', mode: 'fade',    ms: 5000 },
+    0x22: { name: 'WINGARDIUM', label: '🪶 ウィンガーディアム レヴィオーサ', color: '#dbeafe', mode: 'levitate', ms: 0 },
+    0x23: { name: 'EXPECTO_PATRONUM', label: '🦌 エクスペクト・パトローナム', color: '#bae6fd', mode: 'patronus', ms: 6000 },
+  };
+
+  const orb        = document.getElementById('orb');
+  const spellLabel = document.getElementById('spellLabel');
+  const logEl      = document.getElementById('log');
+  const stateEl    = document.getElementById('state');
+  const supportEl  = document.getElementById('support');
+  const scanBtn    = document.getElementById('scanBtn');
+  const dbgEl      = document.getElementById('dbg');
+  const advCountEl = document.getElementById('advCount');
+  const manaMsg    = document.getElementById('manaMsg');
+  const feather    = document.getElementById('feather');
+  const stageEl    = document.querySelector('.stage');
+
+  // ===== エフェクト制御 =====
+  // baseOn = Lumos で点いた持続状態。pulse/flicker/fade は一時的に上書きし、終了後 base に戻る。
+  let baseOn = false;
+  let baseColor = '#fff3c4';
+  let tempTimer = null;
+  // レヴィオーサ(浮遊): featherY 現在位置 / featherTarget 目標 (-1=最下, 0=中央, +1=最上)
+  let levitating = false, featherY = 0, featherTarget = 0, levitateSource = 'manual';
+  let levitateRAF = null, bleWingTimer = null;
+
+  function setOrb(color, intensity) {
+    orb.style.setProperty('--c', color || '#fff3c4');
+    orb.style.setProperty('--i', String(Math.max(0, Math.min(1, intensity))));
+  }
+  function renderBase() {
+    orb.classList.remove('flicker', 'pulse');
+    setOrb(baseColor, baseOn ? 1 : 0);
+  }
+
+  function endTemp() {
+    orb.style.transition = '';              // fade 用に変えた transition を既定 (.55s) へ戻す
+    renderBase();
+    spellLabel.textContent = baseOn ? '🔆 点灯中' : '呪文を待っています…';
+  }
+
+  function showSpell(trigId, strength) {
+    const s = SPELLS[trigId];
+    if (!s) return;
+
+    // レヴィオーサ: 浮遊モードのトグル (手動ボタン/キー W/単発呼び出し用)
+    if (s.mode === 'levitate') {
+      levitating ? stopLevitate() : startLevitate('manual');
+      return;
+    }
+    if (levitating) stopLevitate();   // 他の呪文を出すときは浮遊を解除
+
+    clearTimeout(tempTimer);
+    orb.classList.remove('flicker', 'pulse');
+    orb.style.transition = '';              // 直前の fade で伸ばした transition をリセット
+    spellLabel.textContent = s.label;
+
+    if (s.mode === 'on')  { baseOn = true;  baseColor = s.color; renderBase(); return; }
+    if (s.mode === 'off') { baseOn = false; renderBase(); return; }
+
+    if (s.mode === 'patronus') {
+      // Expecto Patronum: 守護霊 (🦌) が銀青の光と共に出現し ms 後にフェード
+      setOrb(s.color, 1);                       // orb も銀青に強発光 (補助光)
+      stageEl.classList.remove('patronus');
+      void stageEl.offsetWidth;                 // reflow でアニメを毎回 頭から再生
+      stageEl.classList.add('patronus');
+      tempTimer = setTimeout(() => {
+        stageEl.classList.remove('patronus');
+        renderBase();
+        spellLabel.textContent = baseOn ? '🔆 点灯中' : '呪文を待っています…';
+      }, s.ms);
+      return;
+    }
+
+    // strength(0-255) を明るさに反映
+    const intensity = Math.max(0.55, Math.min(1, (Number(strength) || 200) / 255 + 0.25));
+
+    if (s.mode === 'fade') {
+      // Aguamenti: 一旦点灯 → ms かけて base 状態へ実フェード
+      setOrb(s.color, intensity);
+      requestAnimationFrame(() => {
+        orb.style.transition = `--i ${s.ms}ms linear, box-shadow ${s.ms}ms linear, background ${s.ms}ms linear`;
+        setOrb(s.color, baseOn ? 1 : 0);
+      });
+      tempTimer = setTimeout(endTemp, s.ms);
+      return;
+    }
+
+    setOrb(s.color, intensity);
+    if (s.mode === 'flicker') orb.classList.add('flicker');
+    if (s.mode === 'pulse')   orb.classList.add('pulse');
+    tempTimer = setTimeout(endTemp, s.ms);
+  }
+
+  // ===== ウィンガーディアム・レヴィオーサ (浮遊する羽) =====
+  //   featherTarget は BLE(strength=pitch) か スマホの傾き が設定。
+  //   rAF ループで featherY を target へゆっくり寄せて「浮遊」感を出す。
+  function startLevitate(source) {
+    levitateSource = source || 'manual';
+    featherTarget = 0;
+    if (levitating) return;
+    levitating = true;
+    stageEl.classList.add('levitate');
+    spellLabel.textContent = '🪶 ウィンガーディアム レヴィオーサ';
+    log('🪶 ウィンガーディアム・レヴィオーサ — 羽が浮遊。杖/スマホの上下に合わせて羽が上下。羽をタップで解除', 'text-sky-200');
+    if (!levitateRAF) levitateRAF = requestAnimationFrame(featherLoop);
+  }
+  function stopLevitate() {
+    if (!levitating) return;
+    levitating = false;
+    clearTimeout(bleWingTimer);
+    if (levitateRAF) { cancelAnimationFrame(levitateRAF); levitateRAF = null; }
+    stageEl.classList.remove('levitate');
+    feather.style.removeProperty('--fy');
+    if (spellLabel.textContent.includes('レヴィオーサ'))
+      spellLabel.textContent = baseOn ? '🔆 点灯中' : '呪文を待っています…';
+    log('🪶 レヴィオーサ 解除', 'text-slate-400');
+  }
+  function featherLoop() {
+    // 受信が 30-40Hz と十分速いので強い平滑化は不要。係数を上げて追従を速く。
+    featherY += 0.55 * (featherTarget - featherY);          // 追従 (大きいほど速い / 1=即時)
+    const maxPx = (stageEl.clientHeight || 320) * 0.45;     // 可動幅: ステージ高さの ±45% (大きく追従)
+    feather.style.setProperty('--fy', (-featherY * maxPx).toFixed(1) + 'px');
+    if (levitating) levitateRAF = requestAnimationFrame(featherLoop);
+  }
+
+  // ===== ログ =====
+  function log(msg, cls) {
+    const t = new Date().toLocaleTimeString('ja-JP', { hour12: false });
+    const div = document.createElement('div');
+    div.className = cls || 'text-slate-300';
+    div.textContent = `[${t}] ${msg}`;
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
+    while (logEl.children.length > 200) logEl.removeChild(logEl.firstChild);
+  }
+  function spellName(trig) {
+    return (SPELLS[trig]?.name) || `0x${trig.toString(16).padStart(2,'0')}`;
+  }
+
+  // ===== BLE Advertising 受信 =====
+  let scan = null;
+  let lastSeq = -1;
+
+  let advCount = 0;
+  let lastAdvMs = 0, watchdog = null, manaOn = false, lastScanStartMs = 0;
+  const WATCHDOG_MS = 8000;        // この秒数 広告が来なければ「魔力切れ」
+  let wingRxCount = 0, wingHzT0 = 0;  // WINGARDIUM 受信レート(Hz) 実測用 (1秒窓)
+  function updateCount() { if (advCountEl) advCountEl.textContent = '受信 ' + advCount + '件'; }
+
+  // 魔力切れ表示 (魔法画面オーバーレイ + ログ)。受信途絶/スキャン制限/開始失敗で on。
+  function setMana(on, reason) {
+    if (on === manaOn) return;
+    manaOn = on;
+    manaMsg.parentElement.classList.toggle('mana', on);   // .stage に .mana を付与
+    if (on) {
+      manaMsg.querySelector('.mana-sub').textContent = reason || '魔力（BLE 広告）が途絶えました';
+      log('🪫 魔力切れ — ' + (reason || 'BLE 広告が途絶えました'), 'text-rose-300');
+      log('  → Android のスキャン制限(OPPORTUNISTIC 落ち)等の可能性。Bluetooth を OFF→ON で回復します。', 'text-rose-300');
+    } else {
+      log('✨ 魔力回復 — 受信を再開しました', 'text-emerald-300');
+    }
+  }
+  function clearMana() { manaOn = false; manaMsg.parentElement.classList.remove('mana'); }
+
+  function onAdv(e) {
+    advCount++;
+    lastAdvMs = Date.now();
+    if (manaOn) setMana(false);          // 受信が戻ったら魔力回復
+    updateCount();
+    // デバッグ: 受信した全広告を出す (杖の 0xFFFF が出るか、そもそも広告が届くかの切り分け)
+    if (dbgEl && dbgEl.checked) {
+      const keys = [...((e.manufacturerData && e.manufacturerData.keys()) || [])]
+        .map(k => '0x' + Number(k).toString(16).padStart(4, '0'));
+      // 杖(0xFFFF)パケットなら trigger_id / strength もデコード表示 (0x22 が来ているか確認用)
+      let dec = '';
+      const wm = e.manufacturerData && e.manufacturerData.get(COMPANY_ID);
+      if (wm && wm.byteLength >= 2) {
+        dec = ` ⟶ trig=0x${wm.getUint8(1).toString(16).padStart(2, '0')} str=${wm.byteLength > 2 ? wm.getUint8(2) : '?'}`;
+      }
+      log(`· adv#${advCount} name="${e.device?.name || ''}" rssi=${e.rssi ?? '?'} mfg=[${keys.join(',')}]${dec}`, 'text-slate-500');
+    }
+    const md = e.manufacturerData && e.manufacturerData.get(COMPANY_ID);
+    if (!md || md.byteLength < 2) return;            // 杖以外の adv は無視
+    const seq      = md.getUint8(0);
+    const trig     = md.getUint8(1);
+    const strength = md.byteLength > 2 ? md.getUint8(2) : 0;
+    const target   = md.byteLength >= 5 ? md.getUint16(3, true) : 0xFFFF;
+
+    // WINGARDIUM(0x22) は連続制御 (strength=pitch 0..255)。seq dedup を通さず毎回 羽を更新
+    if (trig === 0x22) {
+      if (!levitating) startLevitate('ble');
+      featherTarget = Math.max(-1, Math.min(1, (strength - 128) / 127));
+      clearTimeout(bleWingTimer);
+      bleWingTimer = setTimeout(() => { if (levitating && levitateSource === 'ble') stopLevitate(); }, 1500);
+      // 受信レート(Hz)を1秒窓で実測 → ボトルネックが杖(送信側)か Android(受信側)かの判断材料
+      wingRxCount++;
+      const tnow = Date.now();
+      if (tnow - wingHzT0 >= 1000) {
+        log(`🪶 BLE受信レート ${wingRxCount} Hz (杖→Android→Chrome 実測)`, 'text-sky-300');
+        wingRxCount = 0; wingHzT0 = tnow;
+      }
+      return;
+    }
+
+    if (seq === lastSeq) return;                     // 同一振りの再送を抑止 (seq で重複排除)
+    lastSeq = seq;
+    showSpell(trig, strength);
+    log(`📡 ${spellName(trig)}  seq=${seq} str=${strength} tgt=0x${target.toString(16)} rssi=${e.rssi ?? '?'}dBm`,
+        'text-emerald-300');
+  }
+
+  async function startScan() {
+    // 連続スキャン抑止: Android は 5回/30秒 を超えるとスキャンを制限する。churn を防ぐ。
+    const since = Date.now() - lastScanStartMs;
+    if (lastScanStartMs && since < 2500) {
+      log(`⏳ 連続スキャンは Android に制限されます。あと ${Math.ceil((2500 - since) / 1000)} 秒待って再開してください。`, 'text-amber-300');
+      return;
+    }
+    try {
+      // 杖(0xFFFF)だけをメーカーフィルタで受信 → 他機の広告を拾わず負荷減・スキャン制限も受けにくい。
+      // 非対応環境(古い Chrome 等)は acceptAll にフォールバック。
+      try {
+        scan = await navigator.bluetooth.requestLEScan({
+          filters: [{ manufacturerData: [{ companyIdentifier: COMPANY_ID }] }],
+          keepRepeatedDevices: true,     // 杖は連続送信するので毎パケット拾う
+        });
+        log('スキャン開始 (杖 0xFFFF のみフィルタ受信)', 'text-violet-300');
+      } catch (eFilter) {
+        scan = await navigator.bluetooth.requestLEScan({
+          acceptAllAdvertisements: true, keepRepeatedDevices: true,
+        });
+        log('スキャン開始 (フィルタ非対応 → 全広告受信にフォールバック)', 'text-amber-300');
+      }
+      lastScanStartMs = Date.now();
+      navigator.bluetooth.addEventListener('advertisementreceived', onAdv);
+      stateEl.textContent = '🟢 スキャン中';
+      stateEl.className = 'mono text-[11px] px-2 py-1 rounded bg-emerald-900 border border-emerald-600 text-emerald-200';
+      scanBtn.textContent = '⏹ スキャン停止';
+
+      advCount = 0; updateCount();
+      clearMana();
+      lastAdvMs = Date.now();
+      // フィルタ時は「無音 = 杖が呪文を出していない待機中」が正常なので、
+      // 無音による自動「魔力切れ」は廃止。魔力切れはスキャン開始失敗時のみ表示する。
+      clearInterval(watchdog); watchdog = null;
+    } catch (err) {
+      log('スキャン開始失敗: ' + err.message, 'text-rose-400');
+      log('  → 許可をキャンセル / フラグ未有効 / アダプタ無効 / BT OFF などが原因。', 'text-rose-400');
+      setMana(true, 'スキャンを開始できませんでした (Bluetooth ON・許可を確認)');
+    }
+  }
+  function stopScan() {
+    clearInterval(watchdog);
+    try { scan && scan.stop(); } catch (_) {}
+    scan = null;
+    navigator.bluetooth.removeEventListener('advertisementreceived', onAdv);
+    clearMana();
+    stateEl.textContent = '停止中';
+    stateEl.className = 'mono text-[11px] px-2 py-1 rounded bg-slate-800 border border-slate-700';
+    scanBtn.textContent = '📡 スキャン開始';
+    log('スキャン停止', 'text-slate-400');
+  }
+
+  scanBtn.addEventListener('click', () => { scan ? stopScan() : startScan(); });
+
+  // リロード/離脱/バックグラウンド化で scan を必ず停止する。
+  //   これを怠ると Android BT スタックに scanner 登録がリークし、start 回数が増え続け、
+  //   Android がスキャンを OPPORTUNISTIC に強制ダウングレード → 受信ゼロになる。
+  window.addEventListener('pagehide', () => { try { scan && scan.stop(); } catch (_) {} });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && scan) {
+      clearInterval(watchdog);
+      try { scan.stop(); } catch (_) {} scan = null;
+      navigator.bluetooth.removeEventListener('advertisementreceived', onAdv);
+      clearMana();
+      stateEl.textContent = '⏸ 復帰時に再開';
+      stateEl.className = 'mono text-[11px] px-2 py-1 rounded bg-slate-800 border border-slate-700';
+      scanBtn.textContent = '📡 スキャン開始';
+    }
+  });
+
+  // ===== プレゼンモード (魔法の効果=球体だけ全画面) =====
+  //   魔法画面 (ステージ) を ダブルタップ / ダブルクリック で 拡大⇄通常 をトグル。
+  //   戻るは ダブルタップ / Esc。スキャンは裏で継続。
+  const presentHint    = document.getElementById('presentHint');
+  let   hintTimer      = null;
+
+  function enterPresentation() {
+    document.body.classList.add('presentation');
+    // 真の全画面 (対応端末のみ。iOS Safari 等で失敗しても CSS で擬似全画面にフォールバック)
+    try { const p = document.documentElement.requestFullscreen(); if (p) p.catch(() => {}); } catch (_) {}
+    // 戻り方ヒントを数秒だけ表示
+    presentHint.classList.add('hint-show');
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => presentHint.classList.remove('hint-show'), 2500);
+  }
+  function exitPresentation() {
+    document.body.classList.remove('presentation');
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  }
+
+  let toggleLock = 0;
+  function togglePresentation() {
+    const now = Date.now();
+    if (now - toggleLock < 400) return;             // dblclick/touch の二重発火ガード
+    toggleLock = now;
+    document.body.classList.contains('presentation') ? exitPresentation() : enterPresentation();
+  }
+
+  // デスクトップ: ダブルクリック / モバイル: 2 連続タップ (300ms 以内) を自前検出
+  stageEl.addEventListener('dblclick', togglePresentation);
+  let lastTap = 0;
+  stageEl.addEventListener('touchend', (e) => {
+    const now = Date.now();
+    if (now - lastTap < 300) { e.preventDefault(); togglePresentation(); lastTap = 0; }
+    else lastTap = now;
+  }, { passive: false });
+
+  // ブラウザ全画面が解除されたら (Esc/ブラウザUI) プレゼンも解除して同期
+  document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement) document.body.classList.remove('presentation');
+  });
+
+  // ===== キーボード操作 =====
+  //   Esc: プレゼン解除 / l n i a s: 各呪文を手動発火 (杖が無くてもプレゼン可)
+  const KEY_SPELL = { l: 0x10, n: 0x11, i: 0x20, a: 0x21, w: 0x22, p: 0x23 };
+
+  // 羽をタップ/クリックで浮遊を解除 (全画面でも戻れる)
+  feather.addEventListener('click', (e) => { e.stopPropagation(); if (levitating) stopLevitate(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { exitPresentation(); return; }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const trig = KEY_SPELL[e.key.toLowerCase()];
+    if (trig != null) {
+      showSpell(trig, 220);
+      log(`⌨ (キー) ${spellName(trig)}`, 'text-amber-300');
+    }
+  });
+
+  // ===== スマホ本体モーションで魔法 (重力基準フリック検出: 杖FW main.cpp detector の移植) =====
+  //   チェック ON 時のみ DeviceMotion を取得。静止中に重力を EMA 推定し、そこからの
+  //   linear accel フリックを 上=Lumos / 下=Nox / その他=Shake に判定 (FW と同アルゴリズム)。
+  //   重力基準なので持つ向きは自由。iOS/Android の accel 符号差にも up_proj は不変。
+  const motionEl    = document.getElementById('motion');
+  const motionPanel = document.getElementById('motionPanel');
+  const motionHud   = document.getElementById('motionHud');
+  const flickRange  = document.getElementById('flickRange');
+  const flickVal    = document.getElementById('flickVal');
+  const G = 9.80665;                    // 1g [m/s^2]
+  const MCFG = {
+    flickTh:     1.5,    // linear accel 閾値 [g]            (FW: DEF_FLICK_THRESHOLD_G)
+    updownRatio: 0.75,   // |鉛直成分|/|動き| の閾値          (FW: DEF_UPDOWN_RATIO)
+    cooldownMs:  1000,   // トリガ間隔 [ms]                  (FW: DEF_COOLDOWN_MS)
+    gravAlpha:   0.05,   // 重力 EMA 係数 (FW 0.02@100Hz→60Hz向けにやや大)
+    stillBand:   0.15,   // 静止判定幅 [g]                   (FW: DEF_STILL_BAND)
+  };
+  let gX = 0, gY = 0, gZ = 1, gravReady = false;   // 重力推定 [g]
+  let lastFlickMs = 0;
+  let lastUpFlickMs = 0;                              // 上フリック2連 (Wingardium 起動) 検出用
+  let peakLin = 0, lastHudMs = 0, motionEvt = 0, noMotionTimer = null;
+
+  function onMotion(ev) {
+    const a = ev.accelerationIncludingGravity;
+    if (!a || a.x == null) return;
+    motionEvt++;
+    const ax = a.x / G, ay = a.y / G, az = a.z / G;          // m/s^2 → g
+    const amag = Math.hypot(ax, ay, az);
+    if (!gravReady) { gX = ax; gY = ay; gZ = az; gravReady = true; return; }
+
+    // 静止ゲート: ほぼ1g のときだけ重力を更新 (フリック混入を防ぐ)
+    if (Math.abs(amag - 1) < MCFG.stillBand) {
+      gX += MCFG.gravAlpha * (ax - gX);
+      gY += MCFG.gravAlpha * (ay - gY);
+      gZ += MCFG.gravAlpha * (az - gZ);
+    }
+    const gmag = Math.max(0.1, Math.hypot(gX, gY, gZ));
+    const ux = gX / gmag, uy = gY / gmag, uz = gZ / gmag;    // 「上」単位ベクトル
+    const lx = ax - gX, ly = ay - gY, lz = az - gZ;          // linear = 生 − 重力
+    const lmag = Math.hypot(lx, ly, lz);
+    const now = Date.now();
+
+    // レヴィオーサ中: 端末のピッチ(上下の傾き)を羽の目標位置に。上向き=+1 / 水平=0 / 下向き=-1。
+    //   (杖 BLE の strength=pitch と同じ意味。flick→呪文 は発火させない)
+    if (levitating) {
+      // 瞬時の加速度方向(画面縦軸)で端末ピッチを取る → 重力EMAの遅れを排除し追従を速く
+      featherTarget = Math.max(-1, Math.min(1, -ay / amag));
+      return;
+    }
+
+    // ライブ表示: 閾値の前に毎回更新 (モーションが読めているか/どれだけ振れているかを可視化)
+    if (lmag > peakLin) peakLin = lmag;
+    if (now - lastHudMs >= 120) {
+      lastHudMs = now;
+      const over = peakLin >= MCFG.flickTh;
+      motionHud.textContent = `|動き|ピーク ${peakLin.toFixed(2)}g / 閾 ${MCFG.flickTh.toFixed(1)}g`;
+      motionHud.className = 'mono ' + (over ? 'text-emerald-300 font-bold' : 'text-sky-200');
+      peakLin = 0;
+    }
+
+    if (lmag < MCFG.flickTh || (now - lastFlickMs) <= MCFG.cooldownMs) return;
+
+    const upProj  = lx * ux + ly * uy + lz * uz;             // 鉛直成分 (符号付き)
+    const ratioUp = Math.abs(upProj) / lmag;
+    let strength  = Math.round((lmag - MCFG.flickTh) * 91);
+    strength = Math.max(0, Math.min(255, strength));
+
+    let trig;
+    if      (ratioUp >= MCFG.updownRatio && upProj > 0) trig = 0x10;  // 上 → LUMOS
+    else if (ratioUp >= MCFG.updownRatio && upProj < 0) trig = 0x11;  // 下 → NOX
+    else return;                                                      // 上下が不明瞭な振りは無視 (Shake 廃止)
+    lastFlickMs = now;
+    // 上フリック2連 (2秒以内) → ウィンガーディアム起動 (スマホ簡易活性化)。以後は傾きで羽を上下
+    if (trig === 0x10 && !levitating) {
+      if (now - lastUpFlickMs < 2000) {
+        lastUpFlickMs = 0;
+        startLevitate('motion');
+        log('📱🪶 上フリック2連 → ウィンガーディアム起動 (スマホを上下に傾けて羽を操作)', 'text-sky-200');
+        return;
+      }
+      lastUpFlickMs = now;
+    }
+    showSpell(trig, strength);
+    const r = ev.rotationRate || {};
+    const gyro = Math.hypot(r.alpha || 0, r.beta || 0, r.gamma || 0);
+    log(`📱 ${spellName(trig)}  lmag=${lmag.toFixed(2)}g up=${upProj.toFixed(2)}(${ratioUp.toFixed(2)}) gyro=${gyro.toFixed(0)}°/s s=${strength}`, 'text-sky-300');
+  }
+
+  async function enableMotion() {
+    if (typeof DeviceMotionEvent === 'undefined') {
+      log('この端末は DeviceMotion 非対応 (PC など)。スマホで開いてください。', 'text-rose-400');
+      motionEl.checked = false; return;
+    }
+    // iOS 13+ は明示許可が必要 (このチェック操作=ユーザージェスチャ内で要求)
+    if (typeof DeviceMotionEvent.requestPermission === 'function') {
+      try {
+        const res = await DeviceMotionEvent.requestPermission();
+        if (res !== 'granted') { log('モーション権限が許可されませんでした。', 'text-rose-400'); motionEl.checked = false; return; }
+      } catch (err) {
+        log('モーション権限の要求に失敗: ' + err.message, 'text-rose-400'); motionEl.checked = false; return;
+      }
+    }
+    gravReady = false;
+    peakLin = 0; motionEvt = 0;
+    window.addEventListener('devicemotion', onMotion);
+    motionPanel.classList.remove('hidden'); motionPanel.classList.add('flex');
+    log('📱 スマホモーション ON — 少し静止 → 上/下に素早く振って (Lumos/Nox)', 'text-sky-300');
+    // 無イベント検出: 2.5秒で1件も来なければ PC/権限/非対応を疑う
+    clearTimeout(noMotionTimer);
+    noMotionTimer = setTimeout(() => {
+      if (motionEvt === 0) {
+        log('⚠ モーションイベントが届きません。PC では出ません/権限拒否/端末がセンサ非対応の可能性。', 'text-rose-300');
+        motionHud.textContent = '|動き| イベント無し';
+        motionHud.className = 'mono text-rose-300';
+      }
+    }, 2500);
+  }
+  function disableMotion() {
+    window.removeEventListener('devicemotion', onMotion);
+    clearTimeout(noMotionTimer);
+    motionPanel.classList.add('hidden'); motionPanel.classList.remove('flex');
+    motionHud.textContent = '|動き| --.--g';
+    motionHud.className = 'mono text-sky-200';
+    log('📱 スマホモーション OFF', 'text-slate-400');
+  }
+  motionEl.addEventListener('change', () => { motionEl.checked ? enableMotion() : disableMotion(); });
+  if (flickRange) flickRange.addEventListener('input', () => {
+    MCFG.flickTh = parseFloat(flickRange.value);
+    flickVal.textContent = MCFG.flickTh.toFixed(1) + 'g';
+  });
+
+  // ===== 手動テストボタン (BLE 無しでも全端末でエフェクト確認) =====
+  const simRow = document.getElementById('simRow');
+  let simSeq = 0;
+  for (const [id, s] of Object.entries(SPELLS)) {
+    const b = document.createElement('button');
+    b.className = 'px-2.5 py-1.5 text-xs rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600';
+    b.textContent = s.label;
+    b.addEventListener('click', () => {
+      const trig = Number(id);
+      showSpell(trig, 220);
+      log(`🖐 (手動) ${spellName(trig)}  seq=${++simSeq}`, 'text-amber-300');
+    });
+    simRow.appendChild(b);
+  }
+
+  // ===== 対応判定 =====
+  (function detectSupport() {
+    if (!navigator.bluetooth) {
+      supportEl.textContent = '❌ Web Bluetooth 非対応 (iPhone/iPad 等)';
+      supportEl.className = 'mono text-[11px] px-2 py-1 rounded bg-rose-900 border border-rose-600 text-rose-200';
+      log('このブラウザは Web Bluetooth 非対応。手動テストのみ利用できます。', 'text-rose-400');
+    } else if (typeof navigator.bluetooth.requestLEScan !== 'function') {
+      supportEl.textContent = '⚠ requestLEScan 無効 (フラグ要有効化)';
+      supportEl.className = 'mono text-[11px] px-2 py-1 rounded bg-amber-900 border border-amber-600 text-amber-200';
+      log('Advertising スキャン API が無効。chrome://flags/#enable-experimental-web-platform-features を有効化してください。', 'text-amber-300');
+    } else {
+      supportEl.textContent = '✅ BLE スキャン対応';
+      supportEl.className = 'mono text-[11px] px-2 py-1 rounded bg-emerald-900 border border-emerald-600 text-emerald-200';
+      scanBtn.disabled = false;
+    }
+  })();
+  </script>
+</body>
+</html>

@@ -10,6 +10,12 @@
 #include "device_config.h"
 #include "../../shared/beacon_protocol.h"
 #include "../../shared/wand_common.h"
+#include "../../shared/wand_gesture.h"
+
+// ジェスチャ判定コア (重力基準フリック検出 + Wingardium) は shared/wand_gesture.h に集約し
+// M5StickC / XIAO nRF52840 Sense で共用する。BLE 送信(ble::emit_beacon) と LED フラッシュ
+// (wled::flash) は setup() で関数ポインタ注入。閾値は gcfg が det.cfg を読み書きして永続化。
+wand_gesture::Detector det;
 
 // ============================================================
 // ジェスチャ判定パラメータ (実行時可変 + NVS 保存)
@@ -27,52 +33,47 @@ constexpr float    DEF_GRAV_ALPHA        = 0.02f; // 重力推定 EMA 係数 (�
 constexpr float    DEF_STILL_BAND        = 0.15f; // 静止判定: ||accel|-1g| がこれ未満なら静止 [g]
 constexpr uint32_t DEF_WOM_THR_MG        = IMU_WOM_THRESHOLD_MG; // device_config.h を一元ソースに
 
-// --- 実行時変数 (これを書き換えて挙動を変える) ---
-float    flick_threshold_g = DEF_FLICK_THRESHOLD_G;
-float    updown_ratio      = DEF_UPDOWN_RATIO;
-uint32_t cooldown_ms       = DEF_COOLDOWN_MS;
-float    grav_alpha        = DEF_GRAV_ALPHA;
-float    still_band        = DEF_STILL_BAND;
-uint32_t wom_thr_mg        = DEF_WOM_THR_MG;       // WOM wake 閾値 (deep sleep 時に適用)
+// --- 実行時変数。ジェスチャ閾値は共通コアの det.cfg を直接読み書きする ---
+uint32_t wom_thr_mg = DEF_WOM_THR_MG;  // WOM wake 閾値 (M5 固有、Config 外。deep sleep 時に適用)
 
 Preferences prefs;
 constexpr const char* NS = "wandg";  // NVS 名前空間
 
 void set_defaults() {
-  flick_threshold_g = DEF_FLICK_THRESHOLD_G;
-  updown_ratio      = DEF_UPDOWN_RATIO;
-  cooldown_ms       = DEF_COOLDOWN_MS;
-  grav_alpha        = DEF_GRAV_ALPHA;
-  still_band        = DEF_STILL_BAND;
-  wom_thr_mg        = DEF_WOM_THR_MG;
+  det.cfg.flick_threshold_g = DEF_FLICK_THRESHOLD_G;
+  det.cfg.updown_ratio      = DEF_UPDOWN_RATIO;
+  det.cfg.cooldown_ms       = DEF_COOLDOWN_MS;
+  det.cfg.grav_alpha        = DEF_GRAV_ALPHA;
+  det.cfg.still_band        = DEF_STILL_BAND;
+  wom_thr_mg                = DEF_WOM_THR_MG;
 }
 
 void load() {
   prefs.begin(NS, true);  // read-only
-  flick_threshold_g = prefs.getFloat("th",    DEF_FLICK_THRESHOLD_G);
-  updown_ratio      = prefs.getFloat("ratio", DEF_UPDOWN_RATIO);
-  cooldown_ms       = prefs.getULong("cool",  DEF_COOLDOWN_MS);
-  grav_alpha        = prefs.getFloat("alpha", DEF_GRAV_ALPHA);
-  still_band        = prefs.getFloat("band",  DEF_STILL_BAND);
-  wom_thr_mg        = prefs.getULong("womthr",DEF_WOM_THR_MG);
+  det.cfg.flick_threshold_g = prefs.getFloat("th",    DEF_FLICK_THRESHOLD_G);
+  det.cfg.updown_ratio      = prefs.getFloat("ratio", DEF_UPDOWN_RATIO);
+  det.cfg.cooldown_ms       = prefs.getULong("cool",  DEF_COOLDOWN_MS);
+  det.cfg.grav_alpha        = prefs.getFloat("alpha", DEF_GRAV_ALPHA);
+  det.cfg.still_band        = prefs.getFloat("band",  DEF_STILL_BAND);
+  wom_thr_mg                = prefs.getULong("womthr",DEF_WOM_THR_MG);
   prefs.end();
 }
 
 void save() {
   prefs.begin(NS, false);  // read-write
-  prefs.putFloat("th",    flick_threshold_g);
-  prefs.putFloat("ratio", updown_ratio);
-  prefs.putULong("cool",  cooldown_ms);
-  prefs.putFloat("alpha", grav_alpha);
-  prefs.putFloat("band",  still_band);
+  prefs.putFloat("th",    det.cfg.flick_threshold_g);
+  prefs.putFloat("ratio", det.cfg.updown_ratio);
+  prefs.putULong("cool",  det.cfg.cooldown_ms);
+  prefs.putFloat("alpha", det.cfg.grav_alpha);
+  prefs.putFloat("band",  det.cfg.still_band);
   prefs.putULong("womthr",wom_thr_mg);
   prefs.end();
 }
 
 void print() {
   Serial.printf("[GCFG] th=%.2fg ratio=%.2f cool=%lums alpha=%.3f band=%.2fg womthr=%lumg\n",
-                flick_threshold_g, updown_ratio,
-                (unsigned long)cooldown_ms, grav_alpha, still_band,
+                det.cfg.flick_threshold_g, det.cfg.updown_ratio,
+                (unsigned long)det.cfg.cooldown_ms, det.cfg.grav_alpha, det.cfg.still_band,
                 (unsigned long)wom_thr_mg);
 }
 }  // namespace gcfg
@@ -228,185 +229,8 @@ void poll_stop() {
 }  // namespace ble
 
 // ============================================================
-// ジェスチャ検出
-//   重力ベクトルを「上」基準として、振り上げ/振り下げを判定:
-//   - 上振り (linear accel が上向き) → LUMOS
-//   - 下振り (linear accel が下向き) → NOX
-//   - 上下成分が小さい強い振り       → SHAKE
-// ============================================================
-namespace wled { void flash(); }  // 前方宣言 (検出時フラッシュ用)
-
-namespace detector {
-uint32_t last_trigger_ms = 0;
-// 重力推定 (低域フィルタ EMA)。初期値は汎用に z=+1g
-float grav_x = 0.0f, grav_y = 0.0f, grav_z = 1.0f;
-
-// 静止ゲート + ready 状態
-//   |accel| が 1g 付近 = 静止 → この時だけ重力更新 (フリック混入を防ぐ)
-//   静止が一定数続いたら ready=true (= 振ってよい合図、LED 点灯)
-int      still_count    = 0;
-bool     ready          = false;
-uint32_t last_motion_ms = 0;                  // 最後に「静止でない」状態だった時刻 (sleep 判定用)
-constexpr int   READY_STILL_SAMPLES = 25;     // 約 0.25s (100Hz)
-// 静止判定幅 gcfg::still_band を使用 (NVS 可変)
-
-void update_gravity(float ax, float ay, float az) {
-  float a_mag = sqrtf(ax*ax + ay*ay + az*az);
-  if (fabsf(a_mag - 1.0f) < gcfg::still_band) {
-    // ほぼ静止 → 重力を更新 (クリーンな重力が取れる)
-    grav_x += gcfg::grav_alpha * (ax - grav_x);
-    grav_y += gcfg::grav_alpha * (ay - grav_y);
-    grav_z += gcfg::grav_alpha * (az - grav_z);
-    if (still_count < READY_STILL_SAMPLES) still_count++;
-    if (still_count >= READY_STILL_SAMPLES) ready = true;
-  } else {
-    // 動き中 (フリック等) → 重力は凍結。ready は維持。動き時刻を記録 (sleep 防止)
-    last_motion_ms = millis();
-  }
-}
-
-// 符号付き軸コード (1=+X,2=+Y,3=+Z, 負で反転) で linear[3] を射影
-inline float project_axis(float lx, float ly, float lz, int axis_code) {
-  int   idx = abs(axis_code) - 1;          // 0,1,2
-  float v   = (idx == 0) ? lx : (idx == 1) ? ly : lz;
-  return (axis_code > 0) ? v : -v;
-}
-
-void check(float ax, float ay, float az) {
-  uint32_t now = millis();
-
-  // 重力方向 (= 上方向の単位ベクトル)。加速度計は静止時、上向き軸が +1g
-  float gmag = sqrtf(grav_x*grav_x + grav_y*grav_y + grav_z*grav_z);
-  if (gmag < 0.1f) gmag = 0.1f;
-  float ux = grav_x / gmag, uy = grav_y / gmag, uz = grav_z / gmag;
-
-  // linear accel = 生 − 重力
-  float lx = ax - grav_x, ly = ay - grav_y, lz = az - grav_z;
-  float lmag = sqrtf(lx*lx + ly*ly + lz*lz);
-
-  if (lmag < gcfg::flick_threshold_g || (now - last_trigger_ms) <= gcfg::cooldown_ms) {
-    return;  // 動きが弱い or クールダウン中
-  }
-
-  // 各方向への射影
-  float up_proj    = lx*ux + ly*uy + lz*uz;                      // 鉛直 (重力フレーム)
-  float fwd_proj   = project_axis(lx, ly, lz, WAND_FORWARD);     // 前後 (機体軸)
-  float right_proj = project_axis(lx, ly, lz, WAND_RIGHT);       // 左右 (機体軸)
-  float ratio_up    = fabsf(up_proj)    / lmag;                  // 鉛直成分の割合
-  float ratio_fwd   = fabsf(fwd_proj)   / lmag;                  // 前後成分の割合
-  float ratio_right = fabsf(right_proj) / lmag;                  // 左右成分の割合
-
-  // strength: linear accel の強さを 0-255 にマップ
-  int s = (int)((lmag - gcfg::flick_threshold_g) * 91.0f);
-  if (s < 0) s = 0; if (s > 255) s = 255;
-
-  // 判定優先: 上下 (重力) > 前突き (機体前 +Y) > 横振り (機体左右 ±X)。
-  //   明確な呪文 (LUMOS/NOX/EXPECTO/INCENDIO) に当てはまらない曖昧な振りは「何もしない」
-  //   (beacon を出さず無視。受信側 LED も反応しない)
-  uint8_t trig;
-  const char* name;
-  if (ratio_up >= gcfg::updown_ratio && up_proj > 0) {
-    trig = wand_beacon::TRIG_LUMOS;            name = "LUMOS (up)";
-  } else if (ratio_up >= gcfg::updown_ratio && up_proj < 0) {
-    trig = wand_beacon::TRIG_NOX;              name = "NOX (down)";
-  } else if (ratio_fwd >= gcfg::updown_ratio && fwd_proj > 0) {
-    trig = wand_beacon::TRIG_EXPECTO_PATRONUM; name = "EXPECTO PATRONUM (thrust +Y)";
-  } else if (ratio_right >= gcfg::updown_ratio) {
-    trig = wand_beacon::TRIG_INCENDIO;         name = "INCENDIO (side-swing)";
-  } else {
-    // 曖昧な振り → 何もしない (魔法発動せず・beacon なし・LED フラッシュなし)
-    Serial.printf("--- ignored (ambiguous) lmag=%.2fg up=%.2f(%.2f) fwd=%.2f(%.2f) rt=%.2f(%.2f) ---\n",
-                  lmag, up_proj, ratio_up, fwd_proj, ratio_fwd, right_proj, ratio_right);
-    return;
-  }
-
-  // 物理ジェスチャは全機宛て (TARGET_ALL)
-  ble::emit_beacon(trig, (uint8_t)s, wand_beacon::TARGET_ALL);
-  last_trigger_ms = now;
-  wled::flash();  // 内蔵 LED を一瞬光らせて検出をフィードバック
-  Serial.printf("*** %s  lmag=%.2fg up=%.2f(%.2f) fwd=%.2f(%.2f) rt=%.2f(%.2f) s=%d ***\n",
-                name, lmag, up_proj, ratio_up, fwd_proj, ratio_fwd, right_proj, ratio_right, s);
-}
-
-// ============================================================
-// Wingardium Leviosa (浮遊、連続制御)
-//   活性化: 杖を上向きに保持 (pitch 高 + 静止) を WINGARDIUM_HOLD_MS 継続
-//   浮遊モード: ピッチ(上下の傾き)を strength に載せ ~100ms 間隔で連続送信
-//   LUMOS は「動的な上フリック」、Wingardium は「静止して上向き保持」で区別 (競合せず)
-// ============================================================
-constexpr float    WINGARDIUM_PITCH_SIN   = 0.70f;  // 先端が上 ~45° 以上で活性化候補
-constexpr float    WINGARDIUM_STILL_LMAG  = 0.30f;  // 動き成分がこれ未満 = 静止
-constexpr uint32_t WINGARDIUM_HOLD_MS     = 800;    // 上向き保持の活性化時間
-constexpr uint32_t LEVITATION_MS          = 8000;   // 浮遊モード持続 (活性化/送信で延長)
-constexpr uint32_t LEVIT_SEND_INTERVAL_MS = 50;     // ピッチ送信間隔 = 20Hz。
-                                                    // adv interval(20ms)が物理下限なので、これ以上速めても
-                                                    // 1 値あたり adv パケットが 1 発未満になり取りこぼし時に飛ぶ。
-                                                    // 50ms なら 1 値につき adv 2〜3 発出て確実 + スマホ反映 ~20Hz
-
-uint32_t up_hold_since   = 0;   // 上向き保持の開始時刻 (0=保持なし)
-uint32_t levitation_until = 0;  // 浮遊モード終了時刻 (0=非浮遊)
-uint32_t levit_next_send = 0;
-
-inline bool is_levitating() { return levitation_until != 0; }
-
-// 浮遊モードを強制開始 (シリアル 'w' のベンチテスト用。物理的な上向き保持を省略)
-void force_levitation() {
-  levitation_until = millis() + LEVITATION_MS;
-  levit_next_send  = millis();
-  up_hold_since    = 0;
-  last_trigger_ms  = millis();
-  Serial.println("[WINGARDIUM] force levitation (serial 'w')");
-}
-
-// 毎ループ呼ぶ: 上向き保持で活性化 → 浮遊モード中はピッチを連続送信
-void poll_wingardium(float ax, float ay, float az) {
-  uint32_t now = millis();
-  float gmag = sqrtf(grav_x*grav_x + grav_y*grav_y + grav_z*grav_z);
-  if (gmag < 0.1f) gmag = 0.1f;
-  float ux = grav_x/gmag, uy = grav_y/gmag, uz = grav_z/gmag;
-
-  // ピッチ: 先端(WAND_FORWARD)が上方向にどれだけ向いているか (-1..+1)
-  float pitch_sin = project_axis(ux, uy, uz, WAND_FORWARD);
-  // 動き成分 (静止判定用)
-  float lx = ax-grav_x, ly = ay-grav_y, lz = az-grav_z;
-  float lmag = sqrtf(lx*lx + ly*ly + lz*lz);
-
-  // --- 浮遊モード中: ピッチを連続送信 ---
-  if (levitation_until != 0) {
-    if ((int32_t)(now - levitation_until) >= 0) {
-      levitation_until = 0;            // タイムアウト → 浮遊終了
-      Serial.println("[WINGARDIUM] levitation end");
-      return;
-    }
-    if ((int32_t)(now - levit_next_send) >= 0) {
-      int b = (int)((pitch_sin + 1.0f) * 127.5f);   // -1..+1 → 0..255
-      if (b < 0) b = 0; if (b > 255) b = 255;
-      ble::emit_beacon(wand_beacon::TRIG_WINGARDIUM, (uint8_t)b, wand_beacon::TARGET_ALL);
-      levit_next_send = now + LEVIT_SEND_INTERVAL_MS;
-      last_motion_ms  = now;           // sleep 防止
-    }
-    return;  // 浮遊中は活性化判定しない
-  }
-
-  // --- 活性化判定: 上向き + 静止を継続 ---
-  if (pitch_sin > WINGARDIUM_PITCH_SIN && lmag < WINGARDIUM_STILL_LMAG) {
-    if (up_hold_since == 0) up_hold_since = now;
-    if (now - up_hold_since >= WINGARDIUM_HOLD_MS) {
-      levitation_until = now + LEVITATION_MS;   // 浮遊モード開始
-      levit_next_send  = now;
-      up_hold_since    = 0;
-      last_trigger_ms  = now;                   // 他ジェスチャのクールダウンと共有
-      Serial.println("[WINGARDIUM] activate → levitation");
-    }
-  } else {
-    up_hold_since = 0;  // 条件を外れたらリセット
-  }
-}
-}  // namespace detector
-
-// ============================================================
 // M5StickC 内蔵赤 LED (GPIO 10, active-low) で状態表示
-//   B ボタン (GPIO 39) で LED フィードバックの ON/OFF をトグル。デフォルト OFF。
+//   フィードバック表示の ON/OFF は ctrl 名前空間 (B ボタン) が管理。デフォルト OFF。
 //   (A ボタンは deep sleep からの wake 専用)
 //   有効時:
 //     静止 (ready)        → 消灯
@@ -416,18 +240,14 @@ void poll_wingardium(float ax, float ay, float az) {
 // ============================================================
 namespace wled {
 constexpr int      PIN      = BUILTIN_LED_PIN;  // 内蔵赤 LED (active-low)
-constexpr int      BTN_B    = BUTTON_B_PIN;     // 側面 B ボタン (active-low)
 constexpr uint32_t FLASH_MS = 75;
 
 bool     enabled        = false;    // デフォルト OFF (起動時は光らない)
 uint32_t flash_until_ms = 0;
-bool     last_btn       = true;     // HIGH = 非押下
-uint32_t last_btn_ms    = 0;
 
 void init() {
   pinMode(PIN, OUTPUT);
   digitalWrite(PIN, HIGH);          // OFF
-  pinMode(BTN_B, INPUT);            // GPIO39 は input-only、M5StickC 外部プルアップ
 }
 
 // 起動表示: enabled に関係なく 2 回点滅 (「起動した」だけを示す。魔法=beacon は出さない)
@@ -439,19 +259,6 @@ void boot_blink() {
 }
 
 void flash() { if (enabled) flash_until_ms = millis() + FLASH_MS; }  // 検出時に呼ぶ
-
-// B ボタン押下 (立下りエッジ + デバウンス) で enabled トグル
-void poll_button() {
-  bool b = (digitalRead(BTN_B) != 0);
-  uint32_t now = millis();
-  if (last_btn && !b && (now - last_btn_ms) > 250) {  // HIGH→LOW = 押下
-    enabled = !enabled;
-    last_btn_ms = now;
-    Serial.printf("[LED] feedback %s\n", enabled ? "ON" : "OFF");
-    if (!enabled) digitalWrite(PIN, HIGH);  // 無効化したら即消灯
-  }
-  last_btn = b;
-}
 
 void update(bool ready) {
   if (!enabled) { digitalWrite(PIN, HIGH); return; }  // 無効時は常時消灯
@@ -468,6 +275,120 @@ void update(bool ready) {
 }  // namespace wled
 
 // ============================================================
+// 操作モード制御 (B ボタン: GPIO39, active-low, input-only)
+//   B 長押し (>=1s)  → 手動操作モード / モーションモード をトグル
+//                      切替確認に赤 LED 点滅 (モーション=2回 / 手動=3回)
+//   B 一瞬押し:
+//     モーションモード → 内蔵 LED フィードバック表示 ON/OFF (従来機能)
+//     手動操作モード   → LUMOS / NOX を交互に beacon 送信
+//   手動操作モード中はジェスチャ判定 (check / wingardium) を停止する。
+// ============================================================
+namespace ctrl {
+constexpr int      BTN_B         = BUTTON_B_PIN;
+constexpr uint32_t LONG_PRESS_MS = 1000;   // これ以上の押下で長押し = モード切替
+constexpr uint32_t DEBOUNCE_MS   = 30;     // 一瞬押しの最小時間 (チャタリング除去)
+
+bool     manual_mode   = false;  // false=モーションモード(既定) / true=手動操作モード
+bool     next_is_lumos = true;   // 手動モードで次に送るのが LUMOS か (一瞬押しごとに反転)
+
+bool     btn_down    = false;    // 押下中か
+uint32_t press_start = 0;        // 押下開始時刻
+bool     long_fired  = false;    // 今回の押下で長押しが既に発火したか
+
+// deep sleep を跨いでモードを保持する RTC メモリ (電源 OFF/リセットでは失われる)。
+//   wake cause で deep sleep 復帰か再起動かを判定するため、この値は
+//   「deep sleep 復帰時のみ」採用する (再起動時はモーションモードに固定)。
+RTC_DATA_ATTR bool rtc_manual_mode = false;
+
+void init() {
+  pinMode(BTN_B, INPUT);   // GPIO39 は input-only、M5StickC 外部プルアップ
+  // deep sleep から Button B で wake した場合、その押下が起動時にまだ続いていることがある。
+  // これを「一瞬押し」として誤検出すると LED フィードバックが勝手に ON になり、以後 Motion で
+  // 光ってしまう。起動時に既に押されていれば消化済み(long_fired)扱いにして、離しても何も起こさない。
+  if (digitalRead(BTN_B) == 0) {   // LOW = 押下中 (= wake 押下の継続)
+    btn_down    = true;
+    press_start = millis();
+    long_fired  = true;            // 短押し/長押しのどちらも発火させない
+  }
+}
+
+// deep sleep に入る直前に呼ぶ: 現在のモードを RTC メモリへ退避
+void save_mode_for_sleep() { rtc_manual_mode = manual_mode; }
+
+// 起動時に呼ぶ: deep sleep 復帰なら退避モードを復元、それ以外(再起動)はモーションモード
+void restore_mode(bool from_deep_sleep) {
+  manual_mode = from_deep_sleep ? rtc_manual_mode : false;
+  if (manual_mode) next_is_lumos = true;   // 手動復帰時は次の一瞬押しを LUMOS から
+  Serial.printf("[MODE] boot in %s (%s)\n",
+                manual_mode ? "MANUAL" : "MOTION",
+                from_deep_sleep ? "restored from deep sleep" : "reboot/power-on default");
+}
+
+// モード切替の確認点滅 (enabled に関係なく必ず光らせて操作受付を伝える)
+//   モーションモード = 2 回 / 手動操作モード = 3 回
+void blink_mode(bool to_manual) {
+  int n = to_manual ? 3 : 2;
+  for (int i = 0; i < n; i++) {
+    digitalWrite(wled::PIN, LOW);  delay(120);   // 点灯
+    digitalWrite(wled::PIN, HIGH); delay(150);   // 消灯
+  }
+}
+
+void on_long_press() {   // モード切替
+  manual_mode = !manual_mode;
+  Serial.printf("[MODE] %s\n", manual_mode ? "MANUAL (B short = LUMOS/NOX)"
+                                           : "MOTION (gesture)");
+  if (manual_mode) {
+    next_is_lumos = true;                // 手動モードに入ったら次は LUMOS から
+    det.levitation_until = 0;      // 浮遊モードが残っていれば解除
+  }
+  blink_mode(manual_mode);
+}
+
+void on_short_press() {
+  if (manual_mode) {
+    // 手動操作: LUMOS / NOX を交互送信 (全機宛て)
+    uint8_t trig = next_is_lumos ? wand_beacon::TRIG_LUMOS : wand_beacon::TRIG_NOX;
+    ble::emit_beacon(trig, 200, wand_beacon::TARGET_ALL);
+    det.last_trigger_ms = millis();
+    Serial.printf("[MANUAL] %s\n", next_is_lumos ? "LUMOS" : "NOX");
+    next_is_lumos = !next_is_lumos;
+    wled::flash();                       // 手元ランプが有効なら一瞬光らせる
+  } else {
+    // モーションモード: 従来どおり手元 LED フィードバック ON/OFF
+    wled::enabled = !wled::enabled;
+    Serial.printf("[LED] feedback %s\n", wled::enabled ? "ON" : "OFF");
+    if (!wled::enabled) digitalWrite(wled::PIN, HIGH);  // 無効化したら即消灯
+  }
+}
+
+// 毎ループ呼ぶ: 押下を計測して長押し/一瞬押しを振り分ける
+void poll() {
+  bool     pressed = (digitalRead(BTN_B) == 0);   // active-low: LOW=押下
+  uint32_t now     = millis();
+
+  if (pressed && !btn_down) {                 // 立下り = 押下開始
+    btn_down    = true;
+    press_start = now;
+    long_fired  = false;
+    det.last_motion_ms = now;           // ボタン操作中は sleep させない
+  } else if (pressed && btn_down) {           // 押下継続
+    if (!long_fired && (now - press_start) >= LONG_PRESS_MS) {
+      long_fired = true;                      // 離す前に長押し成立 → モード切替
+      on_long_press();
+      det.last_motion_ms = millis();    // blink の delay 分を補正
+    }
+  } else if (!pressed && btn_down) {          // 立上り = 離した
+    btn_down = false;
+    uint32_t dur = now - press_start;
+    if (!long_fired && dur >= DEBOUNCE_MS) {  // 長押し未発火 & チャタリングでない
+      on_short_press();
+    }
+  }
+}
+}  // namespace ctrl
+
+// ============================================================
 // 省電力 (ESP32 deep sleep)
 //   静止が SLEEP_AFTER_SEC (共通 30s) 続いたら deep sleep。
 //   wake = Button A (ext0, LOW)。wake は実質リブート → setup() から再開。
@@ -476,12 +397,13 @@ namespace pm {
 bool enabled = true;   // sleep 有効 (テスト中は serial "sleep=0" で無効化可)
 
 void enter_deep_sleep() {
+  ctrl::save_mode_for_sleep();               // 現在のモードを RTC メモリへ退避 (wake 時に復元)
   digitalWrite(wled::PIN, HIGH);             // LED 消灯
   ble::adv->stop();                          // adv 停止
 #if ENABLE_IMU_WOM_WAKE
-  // 実験的: MPU6886 WOM で wake (IMU INT → GPIO35, active-low)
-  Serial.printf("[PM] %lus 静止 → deep sleep. wake=motion(WOM, GPIO%d)\n",
-                (unsigned long)wand_common::SLEEP_AFTER_SEC, IMU_INT_PIN);
+  // 実験的: MPU6886 WOM で wake (IMU INT → GPIO35, active-low) + Button A fallback
+  Serial.printf("[PM] %lus 静止 → deep sleep. wake=motion(WOM GPIO%d) or Button A(GPIO%d)\n",
+                (unsigned long)wand_common::SLEEP_AFTER_SEC, IMU_INT_PIN, SLEEP_WAKE_BUTTON);
   Serial.flush();
   imu::enable_wom((int)gcfg::wom_thr_mg);   // NVS 可変の WOM 閾値を適用
   // WOM の「初回サンプル誤発火」(前サンプル0 vs 現在1g で閾値超え) を消化:
@@ -500,13 +422,20 @@ void enter_deep_sleep() {
     Serial.printf("[PM] WOM settled, INT=%d, sleeping\n", digitalRead(IMU_INT_PIN));
     Serial.flush();
   }
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)IMU_INT_PIN, 0);  // INT active-low → level 0
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)IMU_INT_PIN, 0);  // ext0: WOM INT (motion) active-low
+  // + Button A を fallback wake に (WOM 取りこぼし対策)。
+  //   ※ ESP32(PICO-D4) は active-low の独立 level wake が ext0+ext1 の計 2 本まで
+  //     (ext1 は ALL_LOW/ANY_HIGH のみで active-low の OR 不可)。WOM(ext0)+Button A(ext1) で
+  //     2 本使用済 → Button B は WOM build では wake 不可。両ボタン wake が要るなら
+  //     WOM 無効の env:m5stick-c を使う (そちらは Button A+B 両対応)。
+  esp_sleep_enable_ext1_wakeup(1ULL << SLEEP_WAKE_BUTTON, ESP_EXT1_WAKEUP_ALL_LOW);
 #else
-  // 確実: Button A (GPIO37, active-low) で wake
-  Serial.printf("[PM] %lus 静止 → deep sleep. wake=Button A\n",
-                (unsigned long)wand_common::SLEEP_AFTER_SEC);
+  // 確実: Button A (ext0) + Button B (ext1) のどちらでも wake
+  Serial.printf("[PM] %lus 静止 → deep sleep. wake=Button A(GPIO%d) or Button B(GPIO%d)\n",
+                (unsigned long)wand_common::SLEEP_AFTER_SEC, BUTTON_A_PIN, BUTTON_B_PIN);
   Serial.flush();
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)SLEEP_WAKE_BUTTON, 0);
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)BUTTON_A_PIN, 0);                    // ext0: Button A
+  esp_sleep_enable_ext1_wakeup(1ULL << BUTTON_B_PIN, ESP_EXT1_WAKEUP_ALL_LOW);  // ext1: Button B
 #endif
   esp_deep_sleep_start();                    // 復帰しない (次回 wake = リセット)
 }
@@ -514,7 +443,7 @@ void enter_deep_sleep() {
 void poll() {
   if (!enabled) return;
   // 起動直後やトリガ直後は last_motion_ms が新しいので即 sleep しない
-  uint32_t idle = millis() - detector::last_motion_ms;
+  uint32_t idle = millis() - det.last_motion_ms;
   if (idle > wand_common::SLEEP_AFTER_SEC * 1000UL) {
     enter_deep_sleep();
   }
@@ -529,7 +458,7 @@ void poll() {
 void emit_named(uint8_t trig, uint16_t target) {
   Serial.printf("[SERIAL_CMD] trigger 0x%02X target=%u\n", trig, (unsigned)target);
   ble::emit_beacon(trig, 200, target);
-  detector::last_trigger_ms = millis();
+  det.last_trigger_ms = millis();
 }
 
 void handle_line(char* line) {
@@ -543,11 +472,11 @@ void handle_line(char* line) {
   if (strcmp(line, "gshow") == 0)       { gcfg::print(); return; }
   if (strcmp(line, "gsave") == 0)       { gcfg::save(); Serial.println("[GCFG] saved"); return; }
   if (strcmp(line, "gdefault") == 0)    { gcfg::set_defaults(); Serial.println("[GCFG] defaults (gsave で永続化)"); gcfg::print(); return; }
-  if (strncmp(line, "gth=", 4) == 0)    { gcfg::flick_threshold_g = atof(line+4); gcfg::print(); return; }
-  if (strncmp(line, "gratio=", 7) == 0) { gcfg::updown_ratio = atof(line+7); gcfg::print(); return; }
-  if (strncmp(line, "gcool=", 6) == 0)  { gcfg::cooldown_ms = (uint32_t)atol(line+6); gcfg::print(); return; }
-  if (strncmp(line, "galpha=", 7) == 0) { gcfg::grav_alpha = atof(line+7); gcfg::print(); return; }
-  if (strncmp(line, "gband=", 6) == 0)  { gcfg::still_band = atof(line+6); gcfg::print(); return; }
+  if (strncmp(line, "gth=", 4) == 0)    { det.cfg.flick_threshold_g = atof(line+4); gcfg::print(); return; }
+  if (strncmp(line, "gratio=", 7) == 0) { det.cfg.updown_ratio = atof(line+7); gcfg::print(); return; }
+  if (strncmp(line, "gcool=", 6) == 0)  { det.cfg.cooldown_ms = (uint32_t)atol(line+6); gcfg::print(); return; }
+  if (strncmp(line, "galpha=", 7) == 0) { det.cfg.grav_alpha = atof(line+7); gcfg::print(); return; }
+  if (strncmp(line, "gband=", 6) == 0)  { det.cfg.still_band = atof(line+6); gcfg::print(); return; }
   if (strncmp(line, "wom=", 4) == 0)    { gcfg::wom_thr_mg = (uint32_t)atol(line+4); gcfg::print(); return; }
   if (strncmp(line, "sleep=", 6) == 0)  { pm::enabled = (atoi(line+6) != 0); Serial.printf("[PM] sleep %s\n", pm::enabled ? "ON" : "OFF"); return; }
   if (strcmp(line, "dsleep") == 0)      { Serial.println("[PM] forced deep sleep (test)"); pm::enter_deep_sleep(); return; }  // 即 deep sleep (WOM テスト用)
@@ -591,7 +520,7 @@ void handle_line(char* line) {
     case 'i': emit_named(wand_beacon::TRIG_INCENDIO, target);  break;  // 横振り
     case 'a': emit_named(wand_beacon::TRIG_AGUAMENTI, target); break;
     case 'e': emit_named(wand_beacon::TRIG_EXPECTO_PATRONUM, target); break;  // 前突き = 守護霊
-    case 'w': detector::force_levitation(); break;  // Wingardium 浮遊モードを強制開始 (8s ピッチ連続送信)
+    case 'w': det.force_levitation(); break;  // Wingardium 浮遊モードを強制開始 (8s ピッチ連続送信)
     default:
       Serial.println("[CMD] t/l/n/i/a/e/w | <id> <cmd> | gshow/gth=/gratio=/gcool=/galpha=/gsave/gdefault");
       break;
@@ -621,10 +550,16 @@ void setup() {
   Serial.println("=== Wand Beacon (gesture) ===");
   Serial.println("Up-flick=LUMOS / Down-flick=NOX / Thrust+Y=EXPECTO / Side-swing=INCENDIO");
   Serial.println("Hold-up(0.8s)=WINGARDIUM levitation (pitch stream)");
+  Serial.println("Btn B long(>=1s)=MOTION<->MANUAL toggle (blink x2/x3) / short: MANUAL=LUMOS/NOX, MOTION=LED");
   Serial.println("Adv burst: 500ms, Cooldown: 1s");
 
+  // wake 要因を先に判定 (deep sleep 復帰では起動点滅しない = wake/Motion で光らせない)
+  esp_sleep_wakeup_cause_t wake_cause = esp_sleep_get_wakeup_cause();
+  bool from_deep_sleep = (wake_cause != ESP_SLEEP_WAKEUP_UNDEFINED);
+
   wled::init();        // M5StickC 内蔵 LED (ready 表示用)
-  wled::boot_blink();  // 起動表示 (2 回点滅、魔法は出さない)
+  ctrl::init();        // B ボタン (モード切替 + 手動 LUMOS/NOX)
+  if (!from_deep_sleep) wled::boot_blink();  // 起動点滅は電源 ON/リセット時のみ (wake 時は無点灯)
 
   if (!imu::begin()) {
     Serial.println("[FATAL] MPU6886 init failed");
@@ -632,7 +567,12 @@ void setup() {
   }
   Serial.println("[IMU] MPU6886 OK");
 
-  gcfg::load();   // NVS からジェスチャ閾値を読み込み (無ければデフォルト)
+  // ジェスチャ検出器に BLE 送信 / LED フラッシュを注入し、軸マウントを設定 (共通コア)
+  det.begin(&ble::emit_beacon, &wled::flash);
+  det.cfg.forward_axis = WAND_FORWARD;
+  det.cfg.right_axis   = WAND_RIGHT;
+
+  gcfg::load();   // NVS からジェスチャ閾値を det.cfg に読み込み (無ければデフォルト)
   gcfg::print();
   Serial.println("[CMD] t/l/n/i/a/e/w | <id> <cmd> | gshow/gth=/gratio=/gcool=/galpha=/gsave");
 
@@ -640,7 +580,7 @@ void setup() {
   {
     float ax, ay, az;
     if (imu::read_accel_g(ax, ay, az)) {
-      detector::grav_x = ax; detector::grav_y = ay; detector::grav_z = az;
+      det.grav_x = ax; det.grav_y = ay; det.grav_z = az;
     }
   }
 
@@ -648,13 +588,17 @@ void setup() {
   Serial.println("[BLE] init OK, waiting for gesture...");
 
   // sleep タイマ起点を現在に (起動直後に即 sleep しないように)
-  detector::last_motion_ms = millis();
-  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
+  det.last_motion_ms = millis();
+  {
 #if ENABLE_IMU_WOM_WAKE
-    Serial.println("[PM] woke by motion (WOM)");
+    if      (wake_cause == ESP_SLEEP_WAKEUP_EXT0) Serial.println("[PM] woke by motion (WOM)");
+    else if (wake_cause == ESP_SLEEP_WAKEUP_EXT1) Serial.println("[PM] woke by Button A (WOM fallback)");
 #else
-    Serial.println("[PM] woke by Button A");
+    if      (wake_cause == ESP_SLEEP_WAKEUP_EXT0) Serial.println("[PM] woke by Button A");
+    else if (wake_cause == ESP_SLEEP_WAKEUP_EXT1) Serial.println("[PM] woke by Button B");
 #endif
+    // deep sleep 復帰なら直前のモードを復元、通常の再起動/電源 ON はモーションモードから起動。
+    ctrl::restore_mode(from_deep_sleep);
   }
 }
 
@@ -667,13 +611,16 @@ void loop() {
   }
   float a = sqrtf(ax*ax + ay*ay + az*az);
 
-  detector::update_gravity(ax, ay, az);
-  // 浮遊モード中は通常ジェスチャ判定を止める (上下の浮遊操作で LUMOS/NOX が誤発火しないよう)
-  if (!detector::is_levitating()) detector::check(ax, ay, az);
-  detector::poll_wingardium(ax, ay, az);  // 上向き保持で浮遊モード → ピッチ連続送信
+  det.update_gravity(ax, ay, az);   // 重力推定はモードに関係なく継続 (復帰時に即 ready)
+  // 手動操作モード中はジェスチャ判定を全停止 (B ボタン操作だけで魔法を出す)
+  if (!ctrl::manual_mode) {
+    // 浮遊モード中は通常ジェスチャ判定を止める (上下の浮遊操作で LUMOS/NOX が誤発火しないよう)
+    if (!det.is_levitating()) det.check(ax, ay, az);
+    det.poll_wingardium(ax, ay, az);  // 上向き保持で浮遊モード → ピッチ連続送信
+  }
   ble::poll_stop();
-  wled::poll_button();            // A ボタンで LED フィードバック ON/OFF
-  wled::update(detector::ready);
+  ctrl::poll();                   // B ボタン: 長押し=モード切替 / 一瞬押し=LED toggle or LUMOS/NOX
+  wled::update(det.ready);
   pm::poll();                     // 30s 静止で deep sleep (wake=Button A)
 
   // Serial コマンド処理 (行単位)

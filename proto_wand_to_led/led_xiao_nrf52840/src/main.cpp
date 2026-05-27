@@ -145,6 +145,12 @@ uint32_t blue_next_ms   = 0;
 uint32_t blue_off_at_ms = 0;
 bool     blue_is_on     = false;
 bool     lumos_mode     = false;  // LUMOS で true (全 LED 持続)、NOX で false
+// --- Expecto Patronum: 光の波動が外へ広がるアニメ (3s、点滅を繰り返す) ---
+bool     patronum_active = false; // 守護霊アニメ実行中
+uint32_t patronum_end_ms = 0;     // アニメ終了時刻
+uint32_t patronum_tick_ms= 0;     // 次ステップ時刻
+int      patronum_k      = 0;     // 点灯している外部 LED 本数 (0=波の合間)
+constexpr uint32_t PATRONUM_TICK_MS = 70;  // 1 ステップ (波の進む速さ)
 
 // 外部 LED は nrf_gpio_* で直接駆動 (絶対 GPIO 番号、Arduino ピンマップを介さない)
 void ext_write(bool on) {
@@ -174,8 +180,24 @@ void init_pins() {
 void red_on_for(uint32_t duration_ms) {
   digitalWrite(LED_RED, LOW);
   ext_write(true);
-  red_is_on     = true;
-  red_off_at_ms = millis() + duration_ms;
+  red_is_on       = true;
+  patronum_active = false;
+  red_off_at_ms   = millis() + duration_ms;
+}
+
+// Expecto Patronum: 「光の波動が外へ広がる」アニメを duration_ms 実行 (非ブロッキング)。
+//   poll() が PATRONUM_TICK_MS ごとに外部 LED を 0→1→2…本と増やして点灯 (波の拡散) し、
+//   上限に達したら全消灯→再拡散を繰り返す。内蔵 青/緑 も波に同期して点滅。
+//   INCENDIO(赤点灯) と見た目で区別。
+void patronum_start(uint32_t duration_ms) {
+  patronum_active = true;
+  patronum_end_ms = millis() + duration_ms;
+  patronum_tick_ms= millis();
+  patronum_k      = 0;
+  lumos_mode      = false;
+  red_is_on       = false;
+  red_off_at_ms   = 0;
+  blue_is_on      = true;               // アニメ中はハートビート抑止
 }
 
 void red_off_now() {
@@ -203,16 +225,47 @@ void all_off() {
   digitalWrite(LED_GREEN, HIGH);
   digitalWrite(LED_BLUE,  HIGH);
   ext_write(false);
-  lumos_mode    = false;
-  red_is_on     = false;
-  red_off_at_ms = 0;
-  blue_is_on    = false;
-  blue_next_ms  = millis() + BLUE_HEARTBEAT_PERIOD_MS;
+  lumos_mode      = false;
+  patronum_active = false;
+  red_is_on       = false;
+  red_off_at_ms   = 0;
+  blue_is_on      = false;
+  blue_next_ms    = millis() + BLUE_HEARTBEAT_PERIOD_MS;
 }
 
 // loop() から定期 poll: 時限消灯 + ハートビート (LUMOS 中は抑止)
 void poll() {
   uint32_t now = millis();
+
+  // Expecto Patronum: 光の波動アニメ (最優先、3s 点滅しながら外へ拡散)
+  if (patronum_active) {
+    if ((int32_t)(now - patronum_end_ms) >= 0) {
+      digitalWrite(LED_RED, HIGH); digitalWrite(LED_GREEN, HIGH); digitalWrite(LED_BLUE, HIGH);
+      ext_write(false);
+      patronum_active = false;
+      blue_is_on      = false;
+      blue_next_ms    = now + BLUE_HEARTBEAT_PERIOD_MS;  // ハートビート再開
+      Serial.println("[LED] EXPECTO PATRONUM done");
+      return;
+    }
+    if ((int32_t)(now - patronum_tick_ms) >= 0) {
+      patronum_tick_ms = now + PATRONUM_TICK_MS;
+      int n = cfg::current.pin_count;
+      if (n < 1) n = 1;
+      patronum_k++;
+      if (patronum_k > n) patronum_k = 0;             // 0 = 波の合間 (全消灯)
+      // 外部 LED: 内側(pins[0])から外側へ点灯本数を増やす = 波が広がる
+      for (int i = 0; i < cfg::current.pin_count; i++) {
+        if (i < patronum_k) nrf_gpio_pin_set((uint32_t)cfg::current.pins[i]);
+        else                nrf_gpio_pin_clear((uint32_t)cfg::current.pins[i]);
+      }
+      // 内蔵: 波に同期して青点滅、最大拡散の瞬間だけ緑も足して明るくフラッシュ
+      digitalWrite(LED_BLUE,  (patronum_k > 0)  ? LOW : HIGH);
+      digitalWrite(LED_GREEN, (patronum_k >= n) ? LOW : HIGH);
+    }
+    return;  // アニメ中は他の LED 制御をしない
+  }
+
   if (lumos_mode) return;
 
   if (red_is_on && red_off_at_ms != 0 && (int32_t)(now - red_off_at_ms) >= 0) {
@@ -254,7 +307,7 @@ void handle_trigger(uint8_t seq, uint8_t trigger_id, uint8_t strength,
 
   switch (trigger_id) {
     case wand_beacon::TRIG_SHAKE:
-      Serial.println("=> RED+EXT ON 5s (SHAKE)");
+      Serial.println("=> RED+EXT ON 250ms (SHAKE = 魔法失敗の一瞬点灯)");
       led::red_on_for(wand_beacon::LED_DURATION_SHAKE_MS);
       break;
     case wand_beacon::TRIG_LUMOS:
@@ -272,6 +325,10 @@ void handle_trigger(uint8_t seq, uint8_t trigger_id, uint8_t strength,
     case wand_beacon::TRIG_AGUAMENTI:
       Serial.println("=> RED+EXT ON 5s (AGUAMENTI)");
       led::red_on_for(wand_beacon::LED_DURATION_AGUAMENTI_MS);
+      break;
+    case wand_beacon::TRIG_EXPECTO_PATRONUM:
+      Serial.println("=> WAVE pulse 3s (EXPECTO PATRONUM)");
+      led::patronum_start(wand_beacon::LED_DURATION_PATRONUM_MS);
       break;
     default:
       Serial.println("=> unknown trigger, ignored");

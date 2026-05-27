@@ -53,7 +53,7 @@ constexpr uint8_t WINGARDIUM_PITCH_MID = 128;  // 水平に対応する strength
 constexpr uint32_t LED_DURATION_SHAKE_MS     = 250;   // SHAKE=魔法失敗 → 一瞬だけ点灯
 constexpr uint32_t LED_DURATION_INCENDIO_MS  = 3000;  // 横振り → オレンジ風 3 秒
 constexpr uint32_t LED_DURATION_AGUAMENTI_MS = 5000;  // 下流し → 青風 5 秒
-constexpr uint32_t LED_DURATION_PATRONUM_MS  = 6000;  // Expecto Patronum 前突き → 明るい守護霊 6 秒
+constexpr uint32_t LED_DURATION_PATRONUM_MS  = 3000;  // Expecto Patronum 前突き → 光の波動アニメ 3 秒 (点滅しながら外へ拡散)
 // LUMOS は時限ではなく all_on() で永続点灯 (NOX まで)。NOX は all_off() で即時消灯。
 // → LED_DURATION_LUMOS_MS は不要 (受信側で時限制御しないため定義しない)
 
