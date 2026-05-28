@@ -1,7 +1,11 @@
-# proto_mag-let-wand_to_candle
+# proto_light-wand_to_candle
 
 魔法の杖 → ろうそく「光が移る」演出の **ろうそく(受信)側** プロトタイプ。
 **XIAO nRF52840 が杖(ADMGLW)の可視光をフォトトランジスタで検出し、ゆらぎ点灯を自己保持** する。
+
+> ℹ️ 旧名 `proto_mag-let-wand_to_candle` から改称。wake トリガは**磁気ではなく光(フォトTR)**で、
+> 名前の "mag" が実装と不一致だったため `light`(光式)に統一した。
+> (システム全体では磁石は「杖を起こす」用途。ろうそくの wake は杖の可視光検出。)
 
 > 📄 **全体の検討資料・部品比較・価格・電池寿命は [../magic_wand_candle_system_gpt.md](../magic_wand_candle_system_gpt.md) を参照。**
 > 本フォルダはその「本命=XIAO nRF52840・光学式」を実装に落とした最小プロト。

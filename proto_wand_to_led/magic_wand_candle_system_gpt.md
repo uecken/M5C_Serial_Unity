@@ -133,7 +133,7 @@
 
 ---
 
-## 7. ★最速完成プラン → 実装済み（手元の XIAO nRF52840, `proto_mag-let-wand_to_candle/`）
+## 7. ★最速完成プラン → 実装済み（手元の XIAO nRF52840, `proto_light-wand_to_candle/`）
 
 **考え方**: §5 の通り直列LEDは増幅/しきい値/ラッチが無くて失敗。XIAO nRF52840 ならそれらを全部 MCU 側で実現でき、
 アナログのコンパレータ/D-FF/MOSFETラッチが不要。**手元の XIAO ＋ フォトTR ＋ LED ＋ 抵抗**だけで動く。**実装済み**。
@@ -160,7 +160,7 @@
 5. **「移し替え」**: ろうそく内蔵磁石で杖 ADMGLW を OFF（ろうそくは光検出時に点灯済み, §3）
 
 ### 実装ステータス（2026-05-24）
-- `proto_mag-let-wand_to_candle/`（PlatformIO, board `seeed-xiao-afruitnrf52-nrf52840`）
+- `proto_light-wand_to_candle/`（PlatformIO, board `seeed-xiao-afruitnrf52-nrf52840`）
 - 2 env: **`seeed_xiao_nrf52840`**(簡易=USBで D2/光をポーリング観測, System OFF しない) /
   **`seeed_xiao_nrf52840_lowpower`**(本番=D2 wake + System OFF)。**両env ビルド成功・XIAO へ書込み確認済**。
 - 切替マクロ: `LOWPOWER_SYSTEMOFF`(0/1), `USE_FLICKER`(0=solid HIGH / 1=PWMゆらぎ), 点灯時間 `AUTO_OFF_MS`。

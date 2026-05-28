@@ -1,6 +1,6 @@
 # BUILD — 他PCで git clone → XIAO に書き込む手順
 
-`proto_mag-let-wand_to_candle`（ろうそく受信機 FW）を、別PCでクローンしてビルド・書き込みする手順。
+`proto_light-wand_to_candle`（ろうそく受信機 FW、旧 `proto_mag-let-wand_to_candle`）を、別PCでクローンしてビルド・書き込みする手順。
 **XIAO nRF52840 / ESP32-C3 / ESP32-C6** に同一コードで対応（`#ifdef` でプラットフォーム分岐）。
 
 > 環境は **PlatformIO**。設計・配線・部品比較は [README.md](README.md) と [../magic_wand_candle_system_gpt.md](../magic_wand_candle_system_gpt.md)。
@@ -22,7 +22,7 @@
 
 ```bash
 git clone <このリポジトリ>            # 例: git clone https://github.com/uecken/M5C_Serial_Unity.git
-cd M5C_Serial_Unity/proto_wand_to_led/proto_mag-let-wand_to_candle
+cd M5C_Serial_Unity/proto_wand_to_led/proto_light-wand_to_candle
 ```
 
 ## 3. ビルド対象（env 一覧）

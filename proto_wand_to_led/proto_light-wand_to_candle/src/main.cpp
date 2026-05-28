@@ -1,4 +1,4 @@
-// proto_wand_to_led / proto_mag-let-wand_to_candle / src/main.cpp
+// proto_wand_to_led / proto_light-wand_to_candle / src/main.cpp  (旧 proto_mag-let-wand_to_candle)
 // ろうそく(受信側): フォトTRで「杖 ADMGLW の可視光」を検出 → wake → D0/D1 を HIGH で LED 点灯
 //   → 30秒(今は)で自動消灯 → deep sleep(nRF=System OFF / ESP32=esp_deep_sleep) に戻り再武装。
 //
