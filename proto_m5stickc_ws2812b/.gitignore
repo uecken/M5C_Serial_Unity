@@ -1,0 +1,10 @@
+# PlatformIO build artifacts
+.pio/
+*.pio/
+# PlatformIO local config
+.pioenvs/
+.piolibdeps/
+.vscode/
+# Python (MicroPython script cache from host py_compile)
+__pycache__/
+*.pyc
